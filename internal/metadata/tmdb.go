@@ -1,0 +1,375 @@
+// Package metadata enriches scanned titles with movie/TV metadata from TMDb.
+// It only runs for real library items, never for the built-in demo entries.
+package metadata
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"nuvio/internal/model"
+)
+
+// Enricher resolves TMDb matches sequentially to stay within the public API
+// rate limits. A nil or empty APIKey makes it a no-op.
+type Enricher struct {
+	APIKey    string
+	Language  string
+	BaseURL   string
+	ImageBase string
+	HTTP      *http.Client
+
+	mu          sync.Mutex
+	genres      map[string]map[int]string
+	disabled    bool
+	disabledWhy string
+}
+
+// New creates an enricher. language defaults to zh-CN.
+func New(apiKey, language string) *Enricher {
+	if language == "" {
+		language = "zh-CN"
+	}
+	return &Enricher{
+		APIKey:    strings.TrimSpace(apiKey),
+		Language:  language,
+		BaseURL:   "https://api.themoviedb.org/3",
+		ImageBase: "https://image.tmdb.org/t/p",
+		HTTP:      &http.Client{Timeout: 15 * time.Second},
+		genres:    map[string]map[int]string{},
+	}
+}
+
+type searchResult struct {
+	ID            int     `json:"id"`
+	Title         string  `json:"title"`
+	Name          string  `json:"name"`
+	OriginalTitle string  `json:"original_title"`
+	OriginalName  string  `json:"original_name"`
+	Overview      string  `json:"overview"`
+	PosterPath    string  `json:"poster_path"`
+	BackdropPath  string  `json:"backdrop_path"`
+	ReleaseDate   string  `json:"release_date"`
+	FirstAirDate  string  `json:"first_air_date"`
+	VoteAverage   float64 `json:"vote_average"`
+	Popularity    float64 `json:"popularity"`
+	GenreIDs      []int   `json:"genre_ids"`
+}
+
+type searchResponse struct {
+	Results []searchResult `json:"results"`
+}
+
+// Enrich fills metadata for movies and series, then copies series artwork down
+// to seasons and episodes that have no artwork of their own.
+func (e *Enricher) Enrich(ctx context.Context, items []*model.Item) error {
+	if e == nil || e.APIKey == "" || len(items) == 0 {
+		return nil
+	}
+	var firstErr error
+	failures := 0
+	for _, it := range items {
+		if it == nil || it.Demo {
+			continue
+		}
+		if it.Type != model.TypeMovie && it.Type != model.TypeSeries {
+			continue
+		}
+		if it.TMDBID > 0 && it.PosterURL != "" && it.MetadataLanguage == e.Language {
+			continue
+		}
+		if e.isDisabled() {
+			break
+		}
+		res, err := e.lookup(ctx, it)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			failures++
+			if e.isDisabled() || failures >= 3 {
+				e.disable("repeated request failures")
+				break
+			}
+			continue
+		}
+		failures = 0
+		if res == nil {
+			continue
+		}
+		e.apply(ctx, it, *res)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(90 * time.Millisecond):
+		}
+	}
+	e.inheritSeriesArt(items)
+	return firstErr
+}
+
+func (e *Enricher) isDisabled() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.disabled
+}
+
+func (e *Enricher) disable(reason string) {
+	e.mu.Lock()
+	e.disabled = true
+	e.disabledWhy = reason
+	e.mu.Unlock()
+	log.Printf("TMDb metadata disabled: %s", reason)
+}
+
+func (e *Enricher) lookup(ctx context.Context, it *model.Item) (*searchResult, error) {
+	kind := "movie"
+	year := it.Year
+	if it.Type == model.TypeSeries {
+		kind = "tv"
+	}
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("language", e.Language)
+	q.Set("query", it.Name)
+	q.Set("include_adult", "false")
+	if year > 0 {
+		if kind == "movie" {
+			q.Set("year", fmt.Sprintf("%d", year))
+		} else {
+			q.Set("first_air_date_year", fmt.Sprintf("%d", year))
+		}
+	}
+	path := "/search/" + kind
+	var out searchResponse
+	if err := e.getJSON(ctx, path+"?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	// A year in the filename can be wrong. Retry once without it before giving up.
+	if len(out.Results) == 0 && year > 0 {
+		q.Del("year")
+		q.Del("first_air_date_year")
+		if err := e.getJSON(ctx, path+"?"+q.Encode(), &out); err != nil {
+			return nil, err
+		}
+	}
+	best, bestScore := -1, 0
+	for i, r := range out.Results {
+		score := matchScore(it.Name, it.Year, r)
+		if score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	if best < 0 || bestScore < 4 {
+		return nil, nil
+	}
+	return &out.Results[best], nil
+}
+
+func matchScore(query string, year int, r searchResult) int {
+	qn := normalizeTitle(query)
+	if qn == "" {
+		return 0
+	}
+	best := 0
+	for _, candidate := range []string{r.Title, r.Name, r.OriginalTitle, r.OriginalName} {
+		cn := normalizeTitle(candidate)
+		if cn == "" {
+			continue
+		}
+		switch {
+		case cn == qn:
+			best = max(best, 6)
+		case strings.Contains(cn, qn) || strings.Contains(qn, cn):
+			best = max(best, 3)
+		}
+	}
+	resultYear := yearOf(r.ReleaseDate, r.FirstAirDate)
+	if year > 0 && resultYear > 0 {
+		switch {
+		case year == resultYear:
+			best += 3
+		case abs(year-resultYear) == 1:
+			best++
+		}
+	}
+	return best
+}
+
+func normalizeTitle(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func yearOf(values ...string) int {
+	for _, v := range values {
+		if len(v) >= 4 {
+			y := 0
+			for i := 0; i < 4; i++ {
+				if v[i] < '0' || v[i] > '9' {
+					y = 0
+					break
+				}
+				y = y*10 + int(v[i]-'0')
+			}
+			if y > 1800 {
+				return y
+			}
+		}
+	}
+	return 0
+}
+
+func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
+	it.TMDBID = r.ID
+	it.MetadataSource = "tmdb"
+	it.MetadataLanguage = e.Language
+	if r.Overview != "" {
+		it.Overview = r.Overview
+	}
+	if y := yearOf(r.ReleaseDate, r.FirstAirDate); y > 0 {
+		it.Year = y
+		if it.PremiereDate == "" {
+			it.PremiereDate = fmt.Sprintf("%d-01-01T00:00:00.0000000Z", y)
+		}
+	}
+	if r.VoteAverage > 0 {
+		it.Rating = r.VoteAverage
+	}
+	if names := e.genreNames(ctx, kindOfItem(it), r.GenreIDs); len(names) > 0 {
+		it.Genres = names
+	}
+	if r.PosterPath != "" {
+		it.PosterURL = e.ImageBase + "/w780" + r.PosterPath
+	}
+	if r.BackdropPath != "" {
+		it.BackdropURL = e.ImageBase + "/w1280" + r.BackdropPath
+	}
+}
+
+func kindOfItem(it *model.Item) string {
+	if it.Type == model.TypeSeries {
+		return "tv"
+	}
+	return "movie"
+}
+
+func (e *Enricher) genreNames(ctx context.Context, kind string, ids []int) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	names := e.genreMap(ctx, kind)
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if name, ok := names[id]; ok && name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func (e *Enricher) genreMap(ctx context.Context, kind string) map[int]string {
+	e.mu.Lock()
+	if m, ok := e.genres[kind]; ok {
+		e.mu.Unlock()
+		return m
+	}
+	e.mu.Unlock()
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("language", e.Language)
+	var out struct {
+		Genres []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"genres"`
+	}
+	if err := e.getJSON(ctx, "/genre/"+kind+"/list?"+q.Encode(), &out); err != nil {
+		return nil
+	}
+	m := make(map[int]string, len(out.Genres))
+	for _, g := range out.Genres {
+		m[g.ID] = g.Name
+	}
+	e.mu.Lock()
+	e.genres[kind] = m
+	e.mu.Unlock()
+	return m
+}
+
+func (e *Enricher) getJSON(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(e.BaseURL, "/")+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := e.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		e.disable("invalid or unauthorized API key")
+		return fmt.Errorf("TMDb HTTP %d", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("TMDb HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *Enricher) inheritSeriesArt(items []*model.Item) {
+	series := map[string]*model.Item{}
+	for _, it := range items {
+		if it != nil && it.Type == model.TypeSeries {
+			series[it.ID] = it
+		}
+	}
+	for _, it := range items {
+		if it == nil || it.SeriesID == "" {
+			continue
+		}
+		s := series[it.SeriesID]
+		if s == nil {
+			continue
+		}
+		if it.PosterPath == "" && it.PosterURL == "" {
+			it.PosterURL = s.PosterURL
+		}
+		if it.BackdropPath == "" && it.BackdropURL == "" {
+			it.BackdropURL = s.BackdropURL
+		}
+		if len(it.Genres) == 0 {
+			it.Genres = s.Genres
+		}
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

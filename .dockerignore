@@ -1,0 +1,25 @@
+# VCS / CI
+.git
+.github
+.gitignore
+
+# Runtime data
+data
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# Local build artifacts (rebuilt inside the image)
+nuvio
+nuvio-*
+web/dist
+web/ui/node_modules
+dist
+
+# Docs & tooling
+README.md
+Makefile
+.vscode
+.idea
+.DS_Store

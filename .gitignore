@@ -1,0 +1,19 @@
+# Runtime data
+/data/
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# Build artifacts
+/nuvio*
+/web/dist/
+/web/ui/node_modules/
+dist/
+
+# Local tooling
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
