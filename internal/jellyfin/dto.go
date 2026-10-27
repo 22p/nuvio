@@ -488,6 +488,24 @@ func (a *API) buildUserData(it *model.Item, userID string) *userItemData {
 	return out
 }
 
+// viewItem is a synthetic catalog entry for a library view. Jellyfin clients
+// treat CollectionFolders as regular items for details and artwork, so both
+// endpoints resolve them through this helper.
+func viewItem(id, name string) *model.Item {
+	return &model.Item{
+		ID: id, Type: "CollectionFolder", Name: name, SortName: name,
+		ArtSeed: "view:" + id, LibraryID: id,
+	}
+}
+
+// rootViewItem is the virtual root ("My Media") shown above the libraries.
+func rootViewItem(name string) *model.Item {
+	return &model.Item{
+		ID: rootItemID, Type: "CollectionFolder", Name: name, SortName: name,
+		ArtSeed: "view:" + rootItemID,
+	}
+}
+
 func buildViewDTO(lib *model.Library, count int, serverID, userID string) itemDTO {
 	collection := lib.Type
 	if collection == model.LibraryMixed {
@@ -506,7 +524,7 @@ func buildViewDTO(lib *model.Library, count int, serverID, userID string) itemDT
 		CollectionType:          collection,
 		ChildCount:              count,
 		RecursiveItemCount:      count,
-		ImageTags:               map[string]string{},
+		ImageTags:               map[string]string{"Primary": imageTag(viewItem(lib.ID, lib.Name), "Primary")},
 		BackdropImageTags:       []string{},
 		ParentBackdropImageTags: []string{},
 		UserData:                &userItemData{Key: lib.ID},

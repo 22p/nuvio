@@ -196,31 +196,29 @@ func normalizeIDs(ids []string) []string {
 }
 
 func (a *API) tokenFromRequest(r *http.Request) string {
-	if v := r.Header.Get("X-Emby-Token"); v != "" {
-		return v
-	}
-	if v := r.Header.Get("X-MediaBrowser-Token"); v != "" {
-		return v
+	for _, name := range []string{"X-Emby-Token", "X-MediaBrowser-Token"} {
+		if v := r.Header.Get(name); v != "" {
+			return v
+		}
 	}
 	q := r.URL.Query()
-	if v := q.Get("api_key"); v != "" {
-		return v
+	for _, name := range []string{"api_key", "ApiKey", "X-Emby-Token", "AccessToken"} {
+		if v := q.Get(name); v != "" {
+			return v
+		}
 	}
-	if v := q.Get("ApiKey"); v != "" {
-		return v
-	}
-	h := r.Header.Get("Authorization")
-	if h != "" {
+	// Native clients authenticate with an Authorization-style header that
+	// carries "Token=..." (MediaBrowser scheme), not only a bearer token.
+	for _, name := range []string{"X-Emby-Authorization", "Authorization"} {
+		h := r.Header.Get(name)
+		if h == "" {
+			continue
+		}
 		if strings.HasPrefix(strings.ToLower(h), "bearer ") {
 			return strings.TrimSpace(h[7:])
 		}
-		if i := strings.Index(strings.ToLower(h), "token="); i >= 0 {
-			v := h[i+6:]
-			v = strings.TrimPrefix(v, `"`)
-			if j := strings.IndexAny(v, `",`); j >= 0 {
-				v = v[:j]
-			}
-			return strings.TrimSpace(strings.Trim(v, `"`))
+		if v := mediaBrowserParam(h, "Token"); v != "" {
+			return v
 		}
 	}
 	return ""
@@ -289,13 +287,20 @@ func canSeeItem(u *model.User, it *model.Item) bool {
 // rootItemID is a stable, UUID-shaped id for the virtual root item.
 const rootItemID = "00000000000000000000000000000001"
 
-func (a *API) handleRoot(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, itemDTO{
-		Name: "Nuvio", ServerId: a.Store.ServerID(), Id: rootItemID, Type: "CollectionFolder",
-		IsFolder: true, ImageTags: map[string]string{}, BackdropImageTags: []string{},
-		ParentBackdropImageTags: []string{}, PlayAccess: "Full", LocationType: "FileSystem",
+func (a *API) rootDTO() itemDTO {
+	it := rootViewItem(a.Store.Settings().ServerName)
+	return itemDTO{
+		Name: it.Name, ServerId: a.Store.ServerID(), Id: rootItemID, SortName: it.SortName,
+		Type: "CollectionFolder", IsFolder: true,
+		ImageTags: map[string]string{"Primary": imageTag(it, "Primary")},
+		BackdropImageTags: []string{}, ParentBackdropImageTags: []string{},
+		PlayAccess: "Full", LocationType: "Virtual",
 		UserData: &userItemData{Key: rootItemID},
-	})
+	}
+}
+
+func (a *API) handleRoot(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, a.rootDTO())
 }
 
 func (a *API) handlePublicInfo(w http.ResponseWriter, r *http.Request) {
@@ -769,13 +774,33 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id := r.PathValue("itemId")
-	it, ok := a.Catalog.Get(normalizeID(id))
-	if !ok || !canSeeItem(u, it) {
-		writeError(w, 404, "Item does not exist")
+	id := normalizeID(r.PathValue("itemId"))
+	if it, ok := a.Catalog.Get(id); ok {
+		if !canSeeItem(u, it) {
+			writeError(w, 404, "Item does not exist")
+			return
+		}
+		writeJSON(w, 200, a.buildItem(it, u.ID, true, a.tokenFromRequest(r)))
 		return
 	}
-	writeJSON(w, 200, a.buildItem(it, u.ID, true, a.tokenFromRequest(r)))
+	// Native clients address library views and the virtual root as items, both
+	// for details and for artwork. Resolve them instead of returning 404.
+	if id == rootItemID {
+		writeJSON(w, 200, a.rootDTO())
+		return
+	}
+	for _, v := range a.Catalog.Views() {
+		if v.Library.ID != id {
+			continue
+		}
+		if !canSeeLibrary(u, v.Library.ID) {
+			writeError(w, 404, "Item does not exist")
+			return
+		}
+		writeJSON(w, 200, buildViewDTO(v.Library, v.ItemCount, a.Store.ServerID(), u.ID))
+		return
+	}
+	writeError(w, 404, "Item does not exist")
 }
 
 func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
@@ -857,7 +882,7 @@ func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var eps []*model.Item
 	if seasonID := r.URL.Query().Get("seasonId"); seasonID != "" {
-		eps = a.Catalog.Children(seasonID)
+		eps = a.Catalog.Children(normalizeID(seasonID))
 	} else {
 		eps, _ = a.Catalog.Query(catalog.Query{ParentID: seriesID, Recursive: true, Types: []string{model.TypeEpisode}, Limit: 1000}, nil)
 	}

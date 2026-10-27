@@ -14,15 +14,37 @@ import (
 
 	"nuvio/internal/art"
 	"nuvio/internal/hls"
+	"nuvio/internal/model"
 )
 
+// imageItem resolves both real catalog items and the virtual entries clients
+// address with the same endpoint: libraries and the root folder.
+func (a *API) imageItem(rawID string) (*model.Item, bool) {
+	id := normalizeID(rawID)
+	if it, ok := a.Catalog.Get(id); ok {
+		return it, true
+	}
+	if id == rootItemID {
+		return rootViewItem(a.Store.Settings().ServerName), true
+	}
+	for _, v := range a.Catalog.Views() {
+		if v.Library.ID == id {
+			return viewItem(v.Library.ID, v.Library.Name), true
+		}
+	}
+	return nil, false
+}
+
 func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	// Jellyfin clients load artwork through plain <img>/URL requests that carry
+	// no credentials, so images are served anonymously like the reference
+	// server. A token, when present, still enforces library permissions.
+	it, ok := a.imageItem(r.PathValue("itemId"))
 	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
-	if !ok || !canSeeItem(u, it) {
+	if u, ok := a.userFromRequest(r); ok && !canSeeItem(u, it) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
