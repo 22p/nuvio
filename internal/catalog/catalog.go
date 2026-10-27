@@ -167,8 +167,8 @@ type Query struct {
 	Desc         bool
 	Start        int
 	Limit        int
-	Genre        string
-	Year         int
+	Genres       []string
+	Years        []int
 	ExcludeTypes []string
 	IDs          []string
 	IsFolder     *bool
@@ -209,11 +209,16 @@ func (c *Catalog) Query(q Query, keep func(*model.Item) bool) ([]*model.Item, in
 		if q.Search != "" && !matchSearch(it, q.Search) {
 			continue
 		}
-		if q.Genre != "" {
+		if len(q.Genres) > 0 {
 			found := false
-			for _, g := range it.Genres {
-				if strings.EqualFold(g, q.Genre) {
-					found = true
+			for _, want := range q.Genres {
+				for _, g := range it.Genres {
+					if strings.EqualFold(g, want) {
+						found = true
+						break
+					}
+				}
+				if found {
 					break
 				}
 			}
@@ -221,8 +226,17 @@ func (c *Catalog) Query(q Query, keep func(*model.Item) bool) ([]*model.Item, in
 				continue
 			}
 		}
-		if q.Year > 0 && it.Year != q.Year {
-			continue
+		if len(q.Years) > 0 {
+			found := false
+			for _, year := range q.Years {
+				if it.Year == year {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
 		}
 		if keep != nil && !keep(it) {
 			continue
@@ -335,31 +349,6 @@ func sortItems(items []*model.Item, sortBy string, desc bool) {
 		}
 		return less(i, j)
 	})
-}
-
-// Latest returns recently added movies/episodes for a library.
-func (c *Catalog) Latest(libID string, limit int) []*model.Item {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	out := []*model.Item{}
-	for _, it := range c.items {
-		if it.LibraryID != libID {
-			continue
-		}
-		if it.Type == model.TypeMovie || it.Type == model.TypeEpisode {
-			out = append(out, it)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].AddedAt.Equal(out[j].AddedAt) {
-			return out[i].ID < out[j].ID
-		}
-		return out[i].AddedAt.After(out[j].AddedAt)
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
 }
 
 // All returns every item (used by admin statistics).

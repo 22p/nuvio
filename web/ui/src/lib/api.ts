@@ -118,13 +118,15 @@ export const logoutServer = () => api<void>('/api/app/logout', { method: 'POST' 
 export const getMe = () => api<import('./types').JFUser>('/Users/Me')
 
 export const getViews = (userId: string) =>
-  api<QueryResult<JFItem>>(`/Users/${userId}/Views`)
+  api<QueryResult<JFItem>>(`/UserViews?userId=${encodeURIComponent(userId)}`)
 
 export const getResume = (userId: string, limit = 14) =>
-  api<QueryResult<JFItem>>(`/Users/${userId}/Items/Resume?limit=${limit}`)
+  api<QueryResult<JFItem>>(`/UserItems/Resume?userId=${encodeURIComponent(userId)}&limit=${limit}`)
 
 export const getLatest = (userId: string, parentId: string, limit = 18) =>
-  api<JFItem[]>(`/Users/${userId}/Items/Latest?parentId=${parentId}&limit=${limit}`)
+  api<JFItem[]>(
+    `/Items/Latest?userId=${encodeURIComponent(userId)}&parentId=${parentId}&limit=${limit}`,
+  )
 
 export const getNextUp = (userId: string, limit = 14, seriesId?: string) =>
   api<QueryResult<JFItem>>(
@@ -139,11 +141,12 @@ export function getItems(
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== '') q.set(k, String(v))
   }
-  return api<QueryResult<JFItem>>(`/Users/${userId}/Items?${q.toString()}`)
+  q.set('userId', userId)
+  return api<QueryResult<JFItem>>(`/Items?${q.toString()}`)
 }
 
 export const getItem = (userId: string, itemId: string) =>
-  api<JFItem>(`/Users/${userId}/Items/${itemId}`)
+  api<JFItem>(`/Items/${itemId}?userId=${encodeURIComponent(userId)}`)
 
 export const getSeasons = (userId: string, seriesId: string) =>
   api<QueryResult<JFItem>>(`/Shows/${seriesId}/Seasons?userId=${userId}`)
@@ -164,14 +167,19 @@ export function searchItems(userId: string, term: string): Promise<QueryResult<J
     limit: '60',
     fields: 'Overview',
   })
-  return api<QueryResult<JFItem>>(`/Users/${userId}/Items?${q.toString()}`)
+  q.set('userId', userId)
+  return api<QueryResult<JFItem>>(`/Items?${q.toString()}`)
 }
 
 export const setPlayed = (userId: string, itemId: string, played: boolean) =>
-  api<UserData>(`/Users/${userId}/PlayedItems/${itemId}`, { method: played ? 'POST' : 'DELETE' })
+  api<UserData>(`/UserPlayedItems/${itemId}?userId=${encodeURIComponent(userId)}`, {
+    method: played ? 'POST' : 'DELETE',
+  })
 
 export const setFavorite = (userId: string, itemId: string, fav: boolean) =>
-  api<UserData>(`/Users/${userId}/FavoriteItems/${itemId}`, { method: fav ? 'POST' : 'DELETE' })
+  api<UserData>(`/UserFavoriteItems/${itemId}?userId=${encodeURIComponent(userId)}`, {
+    method: fav ? 'POST' : 'DELETE',
+  })
 
 export interface PlaybackOptions {
   startTicks?: number

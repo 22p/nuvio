@@ -66,6 +66,7 @@ type playbackRequest struct {
 type playbackInfoResponse struct {
 	MediaSources  []mediaSourceDTO `json:"MediaSources"`
 	PlaySessionId string           `json:"PlaySessionId"`
+	ErrorCode     string           `json:"ErrorCode,omitempty"`
 }
 
 func (a *API) registerMedia(mux *http.ServeMux) {
@@ -78,7 +79,7 @@ func (a *API) registerMedia(mux *http.ServeMux) {
 		mux.HandleFunc("GET "+prefix+"/{itemId}/master.m3u8", a.handleMaster)
 		mux.HandleFunc("GET "+prefix+"/{itemId}/hls/{sessionId}/{file}", a.handleHLSFile)
 		mux.HandleFunc("GET "+prefix+"/{itemId}/{mediaSourceId}/Subtitles/{index}/{file}", a.handleSubtitle)
-		mux.HandleFunc("GET "+prefix+"/{itemId}/Subtitles/{index}/{file}", a.handleSubtitle)
+		mux.HandleFunc("GET "+prefix+"/{itemId}/{mediaSourceId}/Subtitles/{index}/{start}/{file}", a.handleSubtitle)
 	}
 	mux.HandleFunc("GET /Items/{itemId}/Images/{imageType}", a.handleImage)
 	mux.HandleFunc("GET /Items/{itemId}/Images/{imageType}/{imageIndex}", a.handleImage)
@@ -98,17 +99,13 @@ func boolOr(p *bool, def bool) bool {
 }
 
 func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
 	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
-		return
-	}
-	if it.Media == nil {
-		writeError(w, 400, "This item has no media source")
 		return
 	}
 	req := playbackRequest{}
@@ -132,12 +129,25 @@ func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 			req.SubtitleStreamIndex = &v
 		}
 	}
+	if req.MediaSourceId == "" {
+		req.MediaSourceId = qp.Get("mediaSourceId")
+	}
 	if req.UserId == "" {
 		req.UserId = u.ID
 	}
 	psid := req.PlaySessionId
 	if psid == "" {
 		psid = randomHex(12)
+	}
+	if it.Media == nil {
+		writeJSON(w, 200, playbackInfoResponse{
+			MediaSources: []mediaSourceDTO{}, PlaySessionId: psid, ErrorCode: "NoCompatibleStream",
+		})
+		return
+	}
+	if id := normalizeID(req.MediaSourceId); id != "" && id != a.mediaSourceID(it) && id != it.ID {
+		writeError(w, 404, "Media source not found")
+		return
 	}
 	src := a.buildMediaSource(it, a.tokenFromRequest(r), &req, psid, u)
 	writeJSON(w, 200, playbackInfoResponse{MediaSources: []mediaSourceDTO{src}, PlaySessionId: psid})
@@ -677,10 +687,60 @@ func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitle unavailable", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	format := strings.ToLower(strings.TrimPrefix(r.PathValue("file"), "Stream."))
+	contentType := "text/vtt; charset=utf-8"
+	switch format {
+	case "vtt", "":
+	case "srt":
+		data = vttToSRT(data)
+		contentType = "application/x-subrip; charset=utf-8"
+	default:
+		http.Error(w, "unsupported subtitle format", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "public, max-age=600")
 	_, _ = w.Write(data)
+}
+
+// vttToSRT converts the WebVTT produced by the subtitle pipeline into SubRip.
+func vttToSRT(data []byte) []byte {
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	if strings.HasPrefix(text, "WEBVTT") {
+		if i := strings.Index(text, "\n\n"); i >= 0 {
+			text = text[i+2:]
+		} else {
+			text = ""
+		}
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var b strings.Builder
+	n := 0
+	for _, block := range strings.Split(text, "\n\n") {
+		lines := strings.Split(block, "\n")
+		idx := -1
+		for i, line := range lines {
+			if strings.Contains(line, "-->") {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			continue
+		}
+		n++
+		fmt.Fprintf(&b, "%d\n%s\n", n, strings.ReplaceAll(lines[idx], ".", ","))
+		for _, line := range lines[idx+1:] {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteByte('\n')
+	}
+	return []byte(b.String())
 }
 
 func (a *API) extractSubtitle(r *http.Request, it *model.Item, sub model.Subtitle) ([]byte, error) {

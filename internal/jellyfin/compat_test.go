@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"nuvio/internal/catalog"
 	"nuvio/internal/demo"
@@ -46,7 +48,7 @@ func TestLibraryItemDetails(t *testing.T) {
 	a, h := newTestAPI(t)
 	u, tok := testUser(t, a)
 
-	req := httptest.NewRequest("GET", "/Users/"+u.ID+"/Items/"+demo.MovieLibraryID, nil)
+	req := httptest.NewRequest("GET", "/Items/"+demo.MovieLibraryID+"?userId="+u.ID, nil)
 	req.Header.Set("X-Emby-Token", tok)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -118,5 +120,217 @@ func TestImagesRespectTokenPermissions(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 404 {
 		t.Fatalf("hidden library image status = %d", rec.Code)
+	}
+}
+
+func doJSON(t *testing.T, h http.Handler, method, path, token, body string) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	var r *http.Request
+	if body != "" {
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+	} else {
+		r = httptest.NewRequest(method, path, nil)
+	}
+	if token != "" {
+		r.Header.Set("X-Emby-Token", token)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec, out
+}
+
+func TestLatestAPIRoutes(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	rec, _ := doJSON(t, h, "GET", "/UserViews?userId="+u.ID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("UserViews = %d", rec.Code)
+	}
+
+	rec, data := doJSON(t, h, "GET", "/Items?userId="+u.ID, tok, "")
+	if rec.Code != 200 || int(data["TotalRecordCount"].(float64)) == 0 {
+		t.Fatalf("Items = %d %v", rec.Code, data["TotalRecordCount"])
+	}
+
+	rec, _ = doJSON(t, h, "GET", "/Items/Latest?userId="+u.ID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("Items/Latest = %d", rec.Code)
+	}
+
+	rec, _ = doJSON(t, h, "GET", "/UserItems/Resume?userId="+u.ID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("UserItems/Resume = %d", rec.Code)
+	}
+
+	// The legacy user scoped routes are intentionally gone.
+	rec, _ = doJSON(t, h, "GET", "/Users/"+u.ID+"/Items", tok, "")
+	if rec.Code != 404 {
+		t.Fatalf("legacy /Users/{id}/Items = %d, want 404", rec.Code)
+	}
+}
+
+func TestItemsFiltersAndUserData(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	rec, data := doJSON(t, h, "GET", "/Items?userId="+u.ID, tok, "")
+	total := int(data["TotalRecordCount"].(float64))
+	if rec.Code != 200 || total == 0 {
+		t.Fatalf("Items = %d %v", rec.Code, data["TotalRecordCount"])
+	}
+	rec, data = doJSON(t, h, "GET", "/Items?userId="+u.ID+"&genres=%E7%A7%91%E5%B9%BB", tok, "")
+	if got := int(data["TotalRecordCount"].(float64)); rec.Code != 200 || got == 0 || got >= total {
+		t.Fatalf("genres filter = %d (all %d)", got, total)
+	}
+	rec, data = doJSON(t, h, "GET", "/Items?userId="+u.ID+"&years=2024", tok, "")
+	if int(data["TotalRecordCount"].(float64)) == 0 {
+		t.Fatal("years filter returned nothing")
+	}
+
+	movie := demo.Items()[0].ID
+	rec, data = doJSON(t, h, "POST", "/UserFavoriteItems/"+movie+"?userId="+u.ID, tok, "")
+	if rec.Code != 200 || data["IsFavorite"] != true || data["ItemId"] != movie {
+		t.Fatalf("favorite response = %d %v", rec.Code, data)
+	}
+	rec, data = doJSON(t, h, "GET", "/Items?userId="+u.ID+"&isFavorite=true", tok, "")
+	if int(data["TotalRecordCount"].(float64)) != 1 {
+		t.Fatalf("isFavorite total = %v", data["TotalRecordCount"])
+	}
+
+	rec, _ = doJSON(t, h, "POST", "/UserItems/"+movie+"/UserData?userId="+u.ID, tok, `{"PlaybackPositionTicks":50000000}`)
+	if rec.Code != 200 {
+		t.Fatalf("UserData POST = %d", rec.Code)
+	}
+	rec, data = doJSON(t, h, "GET", "/UserItems/"+movie+"/UserData?userId="+u.ID, tok, "")
+	if rec.Code != 200 || int64(data["PlaybackPositionTicks"].(float64)) != 50000000 || data["ItemId"] != movie {
+		t.Fatalf("UserData GET = %d %v", rec.Code, data)
+	}
+
+	rec, data = doJSON(t, h, "POST", "/UserPlayedItems/"+movie+"?userId="+u.ID, tok, "")
+	if rec.Code != 200 || data["Played"] != true {
+		t.Fatalf("UserPlayedItems = %d %v", rec.Code, data["Played"])
+	}
+}
+
+func TestLatestGrouping(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	req := httptest.NewRequest("GET", "/Items/Latest?userId="+u.ID+"&parentId="+demo.ShowLibraryID, nil)
+	req.Header.Set("X-Emby-Token", tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var list []itemDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 4 {
+		t.Fatalf("grouped latest = %d items, want 4 series", len(list))
+	}
+	for _, it := range list {
+		if it.Type != model.TypeSeries {
+			t.Fatalf("grouped latest returned %s", it.Type)
+		}
+	}
+
+	req = httptest.NewRequest("GET", "/Items/Latest?userId="+u.ID+"&parentId="+demo.ShowLibraryID+"&groupItems=false&limit=5", nil)
+	req.Header.Set("X-Emby-Token", tok)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	hasEpisode := false
+	for _, it := range list {
+		if it.Type == model.TypeEpisode {
+			hasEpisode = true
+		}
+	}
+	if !hasEpisode {
+		t.Fatal("ungrouped latest returned no episodes")
+	}
+}
+
+func TestSearchHintsShapeAndValidation(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	rec, _ := doJSON(t, h, "GET", "/Search/Hints", tok, "")
+	if rec.Code != 400 {
+		t.Fatalf("missing searchTerm = %d, want 400", rec.Code)
+	}
+	req := httptest.NewRequest("GET", "/Search/Hints?searchTerm=%E4%BF%A1%E5%8F%B7&limit=1&userId="+u.ID, nil)
+	req.Header.Set("X-Emby-Token", tok)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var body struct {
+		SearchHints      []map[string]any `json:"SearchHints"`
+		TotalRecordCount int              `json:"TotalRecordCount"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.SearchHints) != 1 {
+		t.Fatalf("hints = %d, want 1", len(body.SearchHints))
+	}
+	if body.SearchHints[0]["PrimaryImageTag"] == nil {
+		t.Fatal("hint is missing PrimaryImageTag")
+	}
+	if _, ok := body.SearchHints[0]["ImageTags"]; ok {
+		t.Fatal("hint still returns non-spec ImageTags")
+	}
+}
+
+func TestGenresPersonsAndDisplayPreferences(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	now := time.Now().UTC()
+	a.Catalog.Replace(demo.Libraries(), []*model.Item{{
+		ID: "custom-movie", Type: model.TypeMovie, Name: "Custom", SortName: "Custom",
+		LibraryID: demo.MovieLibraryID, ParentID: demo.MovieLibraryID, AddedAt: now,
+		Genres: []string{"Drama"}, People: []model.Person{{Name: "Alice", Type: "Actor"}},
+	}})
+
+	rec, data := doJSON(t, h, "GET", "/Genres?userId="+u.ID, tok, "")
+	if rec.Code != 200 || int(data["TotalRecordCount"].(float64)) != 1 {
+		t.Fatalf("genres = %d %v", rec.Code, data["TotalRecordCount"])
+	}
+	rec, data = doJSON(t, h, "GET", "/Persons?userId="+u.ID, tok, "")
+	if rec.Code != 200 || int(data["TotalRecordCount"].(float64)) != 1 {
+		t.Fatalf("persons = %d %v", rec.Code, data["TotalRecordCount"])
+	}
+	list, _ := data["Items"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("persons items = %v", data["Items"])
+	}
+	person, _ := list[0].(map[string]any)
+	if person["Name"] != "Alice" || person["Type"] != "Person" || len(person["Id"].(string)) != 32 {
+		t.Fatalf("person = %v", person)
+	}
+	rec, data = doJSON(t, h, "GET", "/Items/"+personID("Alice")+"?userId="+u.ID, tok, "")
+	if rec.Code != 200 || data["Type"] != "Person" || data["Name"] != "Alice" {
+		t.Fatalf("person details = %d %v", rec.Code, data)
+	}
+
+	rec, data = doJSON(t, h, "GET", "/DisplayPreferences/p1?userId="+u.ID+"&client=test", tok, "")
+	if rec.Code != 200 || data["Client"] != "test" {
+		t.Fatalf("default prefs = %d %v", rec.Code, data)
+	}
+	rec, _ = doJSON(t, h, "POST", "/DisplayPreferences/p1?userId="+u.ID+"&client=test", tok, `{"SortBy":"DateCreated","ShowSidebar":false}`)
+	if rec.Code != 204 {
+		t.Fatalf("save prefs = %d", rec.Code)
+	}
+	rec, data = doJSON(t, h, "GET", "/DisplayPreferences/p1?userId="+u.ID+"&client=test", tok, "")
+	if rec.Code != 200 || data["SortBy"] != "DateCreated" || data["ShowSidebar"] != false {
+		t.Fatalf("saved prefs = %d %v", rec.Code, data)
+	}
+	rec, _ = doJSON(t, h, "GET", "/DisplayPreferences/p1?userId="+u.ID, tok, "")
+	if rec.Code != 400 {
+		t.Fatalf("missing client = %d, want 400", rec.Code)
 	}
 }

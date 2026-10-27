@@ -241,8 +241,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/scan", s.handleTriggerScan)
 	mux.HandleFunc("PUT /api/admin/settings", s.handleSettings)
 
-	for _, prefix := range []string{"/Users/", "/Items/", "/Videos/", "/videos/", "/Sessions/",
-		"/System/", "/Shows/", "/Search/", "/Branding/", "/DisplayPreferences/", "/UserViews", "/Audio/", "/api/"} {
+	for _, prefix := range []string{"/Users/", "/UserItems/", "/UserPlayedItems/", "/UserFavoriteItems/",
+		"/Items", "/Items/", "/Videos/", "/videos/", "/Sessions/", "/System/", "/Shows/", "/Search/", "/Branding/",
+		"/DisplayPreferences/", "/UserViews", "/Genres", "/Persons", "/Audio/", "/api/"} {
 		mux.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"endpoint not implemented"}`, http.StatusNotFound)
 		})

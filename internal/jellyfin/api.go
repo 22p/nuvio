@@ -25,7 +25,7 @@ import (
 )
 
 // Version is Nuvio's own version.
-const Version = "1.0.5"
+const Version = "1.1.0"
 
 // ApiVersion is the Jellyfin server version we advertise. Native clients gate
 // features on this string.
@@ -124,48 +124,39 @@ func (a *API) FFprobe() string {
 func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /System/Info/Public", a.handlePublicInfo)
 	mux.HandleFunc("GET /System/Info", a.handleSystemInfo)
-	mux.HandleFunc("GET /System/Configuration", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{})
-	})
+	mux.HandleFunc("GET /System/Configuration", a.handleSystemConfiguration)
 	mux.HandleFunc("GET /Branding/Configuration", a.handleBranding)
 	mux.HandleFunc("POST /Users/AuthenticateByName", a.handleAuthenticate)
 	mux.HandleFunc("GET /Users/Public", a.handlePublicUsers)
 	mux.HandleFunc("GET /Users/Me", a.handleMe)
 	mux.HandleFunc("GET /Users/{userId}", a.handleUser)
-	mux.HandleFunc("GET /Users/{userId}/Views", a.handleViews)
-	mux.HandleFunc("GET /UserViews", a.handleUserViews)
-	mux.HandleFunc("GET /Users/{userId}/Items", a.handleItems)
-	mux.HandleFunc("GET /Users/{userId}/Items/Resume", a.handleResume)
-	mux.HandleFunc("GET /Users/{userId}/Items/Latest", a.handleLatest)
-	mux.HandleFunc("GET /Users/{userId}/Items/{itemId}", a.handleItem)
+	mux.HandleFunc("GET /UserViews", a.handleViews)
+	mux.HandleFunc("GET /Items", a.handleItems)
+	mux.HandleFunc("GET /Items/Latest", a.handleLatest)
 	mux.HandleFunc("GET /Items/{itemId}", a.handleItem)
-	mux.HandleFunc("GET /Items", a.handleItemsRoot)
+	mux.HandleFunc("GET /UserItems/Resume", a.handleResume)
+	mux.HandleFunc("GET /UserItems/{itemId}/UserData", a.handleUserData)
+	mux.HandleFunc("POST /UserItems/{itemId}/UserData", a.handleUserData)
 	mux.HandleFunc("GET /Items/Suggestions", a.handleSuggestions)
 	mux.HandleFunc("GET /Items/{itemId}/Similar", a.handleSimilar)
 	mux.HandleFunc("GET /Shows/{seriesId}/Seasons", a.handleSeasons)
 	mux.HandleFunc("GET /Shows/{seriesId}/Episodes", a.handleEpisodes)
 	mux.HandleFunc("GET /Shows/NextUp", a.handleNextUp)
 	mux.HandleFunc("GET /Search/Hints", a.handleSearchHints)
-	mux.HandleFunc("POST /Users/{userId}/PlayedItems/{itemId}", a.handlePlayed(true))
-	mux.HandleFunc("DELETE /Users/{userId}/PlayedItems/{itemId}", a.handlePlayed(false))
-	mux.HandleFunc("POST /Users/{userId}/FavoriteItems/{itemId}", a.handleFavorite(true))
-	mux.HandleFunc("DELETE /Users/{userId}/FavoriteItems/{itemId}", a.handleFavorite(false))
+	mux.HandleFunc("POST /UserPlayedItems/{itemId}", a.handlePlayed(true))
+	mux.HandleFunc("DELETE /UserPlayedItems/{itemId}", a.handlePlayed(false))
+	mux.HandleFunc("POST /UserFavoriteItems/{itemId}", a.handleFavorite(true))
+	mux.HandleFunc("DELETE /UserFavoriteItems/{itemId}", a.handleFavorite(false))
 	mux.HandleFunc("POST /Sessions/Playing", a.handlePlaying)
 	mux.HandleFunc("POST /Sessions/Playing/Progress", a.handlePlaying)
 	mux.HandleFunc("POST /Sessions/Playing/Stopped", a.handleStopped)
 	mux.HandleFunc("POST /Sessions/Capabilities/Full", a.handleCapabilities)
-	mux.HandleFunc("POST /Sessions/Playing/Ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
-	mux.HandleFunc("POST /Users/{userId}/PlayingItems/{itemId}", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
-	mux.HandleFunc("DELETE /Users/{userId}/PlayingItems/{itemId}", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
+	mux.HandleFunc("POST /Sessions/Playing/Ping", a.handlePing)
 	mux.HandleFunc("GET /Items/Root", a.handleRoot)
-	mux.HandleFunc("GET /Genres", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
-	})
-	mux.HandleFunc("GET /Persons", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
-	})
+	mux.HandleFunc("GET /Genres", a.handleGenres)
+	mux.HandleFunc("GET /Persons", a.handlePersons)
 	mux.HandleFunc("GET /DisplayPreferences/{id}", a.handleDisplayPreferences)
-	mux.HandleFunc("POST /DisplayPreferences/{id}", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
+	mux.HandleFunc("POST /DisplayPreferences/{id}", a.handleDisplayPreferences)
 
 	a.registerMedia(mux)
 }
@@ -317,12 +308,16 @@ func (a *API) handlePublicInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireUser(w, r); !ok {
+		return
+	}
 	s := a.Store.Settings()
 	writeJSON(w, 200, map[string]any{
 		"ServerName":                 s.ServerName,
 		"Version":                    ApiVersion,
 		"ProductName":                "Jellyfin Server",
 		"Id":                         a.Store.ServerID(),
+		"LocalAddress":               "",
 		"OperatingSystem":            systemOS(),
 		"OperatingSystemDisplayName": systemOS(),
 		"SystemArchitecture":         systemArchitecture(),
@@ -330,7 +325,6 @@ func (a *API) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		"PackageName":                "",
 		"HasUpdateAvailable":         false,
 		"StartupWizardCompleted":     a.Store.SetupComplete(),
-		"SystemUpdateLevel":          "Release",
 		"HasPendingRestart":          false,
 		"IsShuttingDown":             false,
 		"SupportsLibraryMonitor":     false,
@@ -595,15 +589,7 @@ func (a *API) handleUser(w http.ResponseWriter, r *http.Request) {
 // Views -------------------------------------------------------------------
 
 func (a *API) handleViews(w http.ResponseWriter, r *http.Request) {
-	a.viewsResponse(w, r, r.PathValue("userId"))
-}
-
-func (a *API) handleUserViews(w http.ResponseWriter, r *http.Request) {
-	a.viewsResponse(w, r, r.URL.Query().Get("userId"))
-}
-
-func (a *API) viewsResponse(w http.ResponseWriter, r *http.Request, pathUser string) {
-	u, ok := a.resolveUser(w, r, pathUser)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
@@ -635,6 +621,16 @@ func splitList(s string) []string {
 	return out
 }
 
+func intList(s string) []int {
+	out := []int{}
+	for _, p := range splitList(s) {
+		if v, err := strconv.Atoi(p); err == nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func boolParam(r *http.Request, name string) (bool, bool) {
 	v := r.URL.Query().Get(name)
 	if v == "" {
@@ -647,55 +643,147 @@ func boolParam(r *http.Request, name string) (bool, bool) {
 	return b, true
 }
 
-func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, []string) {
+type itemQueryOptions struct {
+	filters    []string
+	isFavorite *bool
+	isPlayed   *bool
+	mediaTypes []string
+	excludeIDs map[string]bool
+	genreIDs   []string
+	personIDs  []string
+	person     string
+	userData   bool
+	images     bool
+	totalCount bool
+}
+
+func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, itemQueryOptions) {
+	v := r.URL.Query()
 	q := catalog.Query{
-		ParentID: normalizeID(r.URL.Query().Get("parentId")),
-		Search:   r.URL.Query().Get("searchTerm"),
-		SortBy:   r.URL.Query().Get("sortBy"),
-		Desc:     strings.EqualFold(r.URL.Query().Get("sortOrder"), "Descending"),
-		Start:    hls.ParseInt(r.URL.Query().Get("startIndex"), 0),
-		Limit:    hls.ParseInt(r.URL.Query().Get("limit"), 100),
-		IDs:      normalizeIDs(splitList(r.URL.Query().Get("ids"))),
+		ParentID: normalizeID(v.Get("parentId")),
+		Search:   v.Get("searchTerm"),
+		Start:    hls.ParseInt(v.Get("startIndex"), 0),
+		Limit:    hls.ParseInt(v.Get("limit"), 0),
+		IDs:      normalizeIDs(splitList(v.Get("ids"))),
 	}
-	q.Types = splitList(r.URL.Query().Get("includeItemTypes"))
-	q.ExcludeTypes = splitList(r.URL.Query().Get("excludeItemTypes"))
-	if v := strings.Split(q.SortBy, ","); len(v) > 0 {
-		q.SortBy = strings.TrimSpace(v[0])
+	if sortBy := splitList(v.Get("sortBy")); len(sortBy) > 0 {
+		q.SortBy = sortBy[0]
+	}
+	if sortOrder := splitList(v.Get("sortOrder")); len(sortOrder) > 0 {
+		q.Desc = strings.EqualFold(sortOrder[0], "Descending")
+	}
+	q.Types = splitList(v.Get("includeItemTypes"))
+	q.ExcludeTypes = splitList(v.Get("excludeItemTypes"))
+	q.Genres = splitList(v.Get("genres"))
+	if len(q.Genres) == 0 {
+		q.Genres = splitList(v.Get("genre"))
+	}
+	q.Years = intList(v.Get("years"))
+	if len(q.Years) == 0 {
+		q.Years = intList(v.Get("year"))
 	}
 	q.Recursive, _ = boolParam(r, "recursive")
 	if f, ok := boolParam(r, "isFolder"); ok {
 		q.IsFolder = &f
 	}
-	q.Genre = r.URL.Query().Get("genre")
-	q.Year = hls.ParseInt(r.URL.Query().Get("year"), 0)
 	if q.Search != "" {
 		q.Recursive = true
 		if len(q.Types) == 0 {
 			q.Types = []string{model.TypeMovie, model.TypeSeries, model.TypeEpisode}
 		}
 	}
-	filters := splitList(r.URL.Query().Get("filters"))
-	return q, filters
+	opts := itemQueryOptions{
+		filters:    splitList(v.Get("filters")),
+		mediaTypes: splitList(v.Get("mediaTypes")),
+		genreIDs:   normalizeIDs(splitList(v.Get("genreIds"))),
+		personIDs:  normalizeIDs(splitList(v.Get("personIds"))),
+		person:     v.Get("person"),
+		userData:   true,
+		images:     true,
+		totalCount: true,
+	}
+	if b, ok := boolParam(r, "isFavorite"); ok {
+		opts.isFavorite = &b
+	}
+	if b, ok := boolParam(r, "isPlayed"); ok {
+		opts.isPlayed = &b
+	}
+	if b, ok := boolParam(r, "enableUserData"); ok {
+		opts.userData = b
+	}
+	if b, ok := boolParam(r, "enableImages"); ok {
+		opts.images = b
+	}
+	if b, ok := boolParam(r, "enableTotalRecordCount"); ok {
+		opts.totalCount = b
+	}
+	if ids := normalizeIDs(splitList(v.Get("excludeItemIds"))); len(ids) > 0 {
+		opts.excludeIDs = make(map[string]bool, len(ids))
+		for _, id := range ids {
+			opts.excludeIDs[id] = true
+		}
+	}
+	return q, opts
+}
+
+func matchesGenreIDs(it *model.Item, ids []string) bool {
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[strings.ToLower(id)] = true
+	}
+	for _, g := range it.Genres {
+		if want[strings.ToLower(genreID(g))] {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesPersonIDs(it *model.Item, ids []string) bool {
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[strings.ToLower(id)] = true
+	}
+	for _, p := range it.People {
+		if want[strings.ToLower(personID(p.Name))] {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesPersonName(it *model.Item, name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, p := range it.People {
+		if strings.Contains(strings.ToLower(p.Name), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func mediaTypeMatches(it *model.Item, mediaTypes []string) bool {
+	for _, mt := range mediaTypes {
+		switch strings.ToLower(mt) {
+		case "video":
+			if it.Type == model.TypeMovie || it.Type == model.TypeEpisode {
+				return true
+			}
+		case "":
+			return true
+		}
+	}
+	return false
 }
 
 func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
-	a.itemsResponse(w, r, r.PathValue("userId"))
-}
-
-// handleItemsRoot implements the newer /Items?userId= endpoint used by the
-// Jellyfin SDK. Without an exact route Go redirects /Items to /Items/ (404).
-func (a *API) handleItemsRoot(w http.ResponseWriter, r *http.Request) {
-	a.itemsResponse(w, r, r.URL.Query().Get("userId"))
-}
-
-func (a *API) itemsResponse(w http.ResponseWriter, r *http.Request, pathUser string) {
-	u, ok := a.resolveUser(w, r, pathUser)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
-	q, filters := a.parseItemsQuery(r)
+	q, opts := a.parseItemsQuery(r)
 	if len(q.Types) == 0 && q.ParentID == "" {
-		q.Types = []string{model.TypeMovie, model.TypeSeries, model.TypeEpisode}
+		q.Types = []string{model.TypeMovie, model.TypeSeries, model.TypeSeason, model.TypeEpisode}
 	}
 	playedIDs := a.Store.PlayedIDs(u.ID)
 	favIDs := a.Store.FavoriteIDs(u.ID)
@@ -704,7 +792,28 @@ func (a *API) itemsResponse(w http.ResponseWriter, r *http.Request, pathUser str
 		if !canSeeItem(u, it) {
 			return false
 		}
-		for _, f := range filters {
+		if opts.excludeIDs[it.ID] {
+			return false
+		}
+		if opts.isFavorite != nil && favIDs[it.ID] != *opts.isFavorite {
+			return false
+		}
+		if opts.isPlayed != nil && playedIDs[it.ID] != *opts.isPlayed {
+			return false
+		}
+		if len(opts.mediaTypes) > 0 && !mediaTypeMatches(it, opts.mediaTypes) {
+			return false
+		}
+		if len(opts.genreIDs) > 0 && !matchesGenreIDs(it, opts.genreIDs) {
+			return false
+		}
+		if len(opts.personIDs) > 0 && !matchesPersonIDs(it, opts.personIDs) {
+			return false
+		}
+		if opts.person != "" && !matchesPersonName(it, opts.person) {
+			return false
+		}
+		for _, f := range opts.filters {
 			switch strings.ToLower(f) {
 			case "isplayed":
 				if !playedIDs[it.ID] {
@@ -729,7 +838,19 @@ func (a *API) itemsResponse(w http.ResponseWriter, r *http.Request, pathUser str
 	items, total := a.Catalog.Query(q, keep)
 	out := make([]itemDTO, 0, len(items))
 	for _, it := range items {
-		out = append(out, a.buildItem(it, u.ID, false, ""))
+		dto := a.buildItem(it, u.ID, false, "")
+		if !opts.userData {
+			dto.UserData = nil
+		}
+		if !opts.images {
+			dto.ImageTags = map[string]string{}
+			dto.BackdropImageTags = []string{}
+			dto.ParentBackdropImageTags = []string{}
+		}
+		out = append(out, dto)
+	}
+	if !opts.totalCount {
+		total = 0
 	}
 	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: total, StartIndex: q.Start})
 }
@@ -737,6 +858,10 @@ func (a *API) itemsResponse(w http.ResponseWriter, r *http.Request, pathUser str
 func (a *API) handleSuggestions(w http.ResponseWriter, r *http.Request) {
 	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
+		return
+	}
+	if mediaTypes := splitList(r.URL.Query().Get("mediaType")); len(mediaTypes) > 0 && !containsFold(mediaTypes, "Video") {
+		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
 		return
 	}
 	start := hls.ParseInt(r.URL.Query().Get("startIndex"), 0)
@@ -769,25 +894,55 @@ func (a *API) handleSuggestions(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		out = append(out, a.buildItem(it, u.ID, false, ""))
 	}
+	if b, ok := boolParam(r, "enableTotalRecordCount"); !ok || !b {
+		total = 0
+	}
 	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: total, StartIndex: start})
 }
 
+func containsFold(list []string, want string) bool {
+	for _, v := range list {
+		if strings.EqualFold(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.PathValue("userId"))
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
+	v := r.URL.Query()
+	parent := normalizeID(v.Get("parentId"))
+	types := splitList(v.Get("includeItemTypes"))
+	excludeTypes := splitList(v.Get("excludeItemTypes"))
+	mediaTypes := splitList(v.Get("mediaTypes"))
+	search := strings.ToLower(v.Get("searchTerm"))
 	resume := a.Store.Resumable(u.ID)
 	list := make([]*model.Item, 0, len(resume))
 	for id, p := range resume {
 		it, ok := a.Catalog.Get(normalizeID(id))
-		if !ok || p.PositionTicks == 0 {
-			continue
-		}
-		if !canSeeItem(u, it) {
+		if !ok || p.PositionTicks == 0 || !canSeeItem(u, it) {
 			continue
 		}
 		if it.Type != model.TypeMovie && it.Type != model.TypeEpisode {
+			continue
+		}
+		if len(types) > 0 && !containsFold(types, it.Type) {
+			continue
+		}
+		if containsFold(excludeTypes, it.Type) {
+			continue
+		}
+		if len(mediaTypes) > 0 && !mediaTypeMatches(it, mediaTypes) {
+			continue
+		}
+		if search != "" && !strings.Contains(strings.ToLower(it.Name), search) {
+			continue
+		}
+		if parent != "" && it.LibraryID != parent && it.ParentID != parent && it.SeriesID != parent && it.SeasonID != parent {
 			continue
 		}
 		list = append(list, it)
@@ -795,8 +950,8 @@ func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(list, func(i, j int) bool {
 		return resume[list[i].ID].LastPlayed.After(resume[list[j].ID].LastPlayed)
 	})
-	start := hls.ParseInt(r.URL.Query().Get("startIndex"), 0)
-	limit := hls.ParseInt(r.URL.Query().Get("limit"), 20)
+	start := hls.ParseInt(v.Get("startIndex"), 0)
+	limit := hls.ParseInt(v.Get("limit"), 20)
 	total := len(list)
 	if start > total {
 		start = total
@@ -809,47 +964,89 @@ func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 	for _, it := range list[start:end] {
 		out = append(out, a.buildItem(it, u.ID, false, ""))
 	}
+	if b, ok := boolParam(r, "enableTotalRecordCount"); ok && !b {
+		total = 0
+	}
 	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: total, StartIndex: start})
 }
 
 func (a *API) handleLatest(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.PathValue("userId"))
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
-	parent := normalizeID(r.URL.Query().Get("parentId"))
-	limit := hls.ParseInt(r.URL.Query().Get("limit"), 20)
-	var items []*model.Item
+	v := r.URL.Query()
+	parent := normalizeID(v.Get("parentId"))
+	limit := hls.ParseInt(v.Get("limit"), 20)
+	types := splitList(v.Get("includeItemTypes"))
+	group := true
+	if b, ok := boolParam(r, "groupItems"); ok {
+		group = b
+	}
+	var played *bool
+	if b, ok := boolParam(r, "isPlayed"); ok {
+		played = &b
+	}
+	var candidates []*model.Item
 	if parent != "" {
-		if p, ok := a.Catalog.Get(normalizeID(parent)); ok && !canSeeItem(u, p) {
+		if p, ok := a.Catalog.Get(parent); ok {
+			if !canSeeItem(u, p) {
+				writeJSON(w, 200, []itemDTO{})
+				return
+			}
+		} else if !canSeeLibrary(u, parent) {
 			writeJSON(w, 200, []itemDTO{})
 			return
 		}
-		items = a.Catalog.Latest(normalizeID(parent), limit)
+		candidates, _ = a.Catalog.Query(catalog.Query{ParentID: parent, Recursive: true}, nil)
 	} else {
-		for _, v := range a.Catalog.Views() {
-			if !canSeeLibrary(u, v.Library.ID) {
+		candidates = a.Catalog.All()
+	}
+	if len(types) == 0 {
+		types = []string{model.TypeMovie, model.TypeSeries, model.TypeEpisode}
+	}
+	groupEpisodes := group && (len(v.Get("includeItemTypes")) == 0 || containsFold(types, model.TypeSeries))
+	playedIDs := a.Store.PlayedIDs(u.ID)
+	seen := map[string]bool{}
+	items := make([]*model.Item, 0, len(candidates))
+	for _, it := range candidates {
+		if !canSeeItem(u, it) || !containsFold(types, it.Type) {
+			continue
+		}
+		if played != nil && playedIDs[it.ID] != *played {
+			continue
+		}
+		if groupEpisodes && it.Type == model.TypeEpisode && it.SeriesID != "" {
+			series, ok := a.Catalog.Get(it.SeriesID)
+			if !ok || !canSeeItem(u, series) {
 				continue
 			}
-			items = append(items, a.Catalog.Latest(v.Library.ID, limit)...)
+			it = series
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].AddedAt.After(items[j].AddedAt) })
-		if len(items) > limit {
-			items = items[:limit]
+		if seen[it.ID] {
+			continue
 		}
+		seen[it.ID] = true
+		items = append(items, it)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].AddedAt.Equal(items[j].AddedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].AddedAt.After(items[j].AddedAt)
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
 	}
 	out := make([]itemDTO, 0, len(items))
 	for _, it := range items {
-		if !canSeeItem(u, it) {
-			continue
-		}
 		out = append(out, a.buildItem(it, u.ID, false, ""))
 	}
 	writeJSON(w, 200, out)
 }
 
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
@@ -879,11 +1076,15 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, buildViewDTO(v.Library, v.ItemCount, a.Store.ServerID(), u.ID))
 		return
 	}
+	if it, ok := a.virtualItem(id); ok {
+		writeJSON(w, 200, a.buildItem(it, u.ID, false, a.tokenFromRequest(r)))
+		return
+	}
 	writeError(w, 404, "Item does not exist")
 }
 
 func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
@@ -891,6 +1092,10 @@ func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
 	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
 		return
+	}
+	limit := hls.ParseInt(r.URL.Query().Get("limit"), 12)
+	if limit <= 0 {
+		limit = 12
 	}
 	all, _ := a.Catalog.Query(catalog.Query{ParentID: it.LibraryID, Recursive: true, Limit: 500}, nil)
 	genre := map[string]bool{}
@@ -917,8 +1122,8 @@ func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.SliceStable(list, func(i, j int) bool { return list[i].score > list[j].score })
-	if len(list) > 12 {
-		list = list[:12]
+	if len(list) > limit {
+		list = list[:limit]
 	}
 	out := make([]itemDTO, 0, len(list))
 	for _, s := range list {
@@ -930,13 +1135,14 @@ func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
 // Shows -------------------------------------------------------------------
 
 func (a *API) handleSeasons(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
 	seriesID := normalizeID(r.PathValue("seriesId"))
-	if series, ok := a.Catalog.Get(normalizeID(seriesID)); ok && !canSeeItem(u, series) {
-		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
+	series, ok := a.Catalog.Get(seriesID)
+	if !ok || !canSeeItem(u, series) {
+		writeError(w, 404, "Series not found")
 		return
 	}
 	children := a.Catalog.Children(seriesID)
@@ -950,54 +1156,89 @@ func (a *API) handleSeasons(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
 	seriesID := normalizeID(r.PathValue("seriesId"))
-	if series, ok := a.Catalog.Get(normalizeID(seriesID)); ok && !canSeeItem(u, series) {
-		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
+	series, ok := a.Catalog.Get(seriesID)
+	if !ok || !canSeeItem(u, series) {
+		writeError(w, 404, "Series not found")
 		return
 	}
+	v := r.URL.Query()
+	seasonID := normalizeID(v.Get("seasonId"))
+	seasonNumber := hls.ParseInt(v.Get("season"), -1)
 	var eps []*model.Item
-	if seasonID := r.URL.Query().Get("seasonId"); seasonID != "" {
-		eps = a.Catalog.Children(normalizeID(seasonID))
+	if seasonID != "" {
+		eps = a.Catalog.Children(seasonID)
 	} else {
-		eps, _ = a.Catalog.Query(catalog.Query{ParentID: seriesID, Recursive: true, Types: []string{model.TypeEpisode}, Limit: 1000}, nil)
+		eps, _ = a.Catalog.Query(catalog.Query{ParentID: seriesID, Recursive: true, Types: []string{model.TypeEpisode}}, nil)
 	}
+	sortBy := strings.ToLower(v.Get("sortBy"))
+	sortOrder := strings.ToLower(v.Get("sortOrder"))
 	sort.SliceStable(eps, func(i, j int) bool {
-		if eps[i].SeasonNumber != eps[j].SeasonNumber {
-			return eps[i].SeasonNumber < eps[j].SeasonNumber
+		var before bool
+		switch sortBy {
+		case "datecreated", "datelastcontentadded", "premieredate":
+			before = eps[i].AddedAt.Before(eps[j].AddedAt)
+		case "sortname":
+			before = strings.ToLower(eps[i].SortName) < strings.ToLower(eps[j].SortName)
+		default:
+			if eps[i].SeasonNumber != eps[j].SeasonNumber {
+				before = eps[i].SeasonNumber < eps[j].SeasonNumber
+			} else {
+				before = eps[i].EpisodeNumber < eps[j].EpisodeNumber
+			}
 		}
-		return eps[i].EpisodeNumber < eps[j].EpisodeNumber
+		if sortOrder == "descending" {
+			return !before
+		}
+		return before
 	})
-	out := make([]itemDTO, 0, len(eps))
+	filtered := make([]itemDTO, 0, len(eps))
 	for _, it := range eps {
-		if it.Type == model.TypeEpisode {
-			out = append(out, a.buildItem(it, u.ID, false, ""))
+		if it.Type != model.TypeEpisode {
+			continue
 		}
+		if seasonNumber >= 0 && it.SeasonNumber != seasonNumber {
+			continue
+		}
+		filtered = append(filtered, a.buildItem(it, u.ID, false, ""))
 	}
-	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: len(out), StartIndex: 0})
+	start := hls.ParseInt(v.Get("startIndex"), 0)
+	limit := hls.ParseInt(v.Get("limit"), 0)
+	total := len(filtered)
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	writeJSON(w, 200, queryResult{Items: filtered[start:end], TotalRecordCount: total, StartIndex: start})
 }
 
 func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
-	seriesID := normalizeID(r.URL.Query().Get("seriesId"))
-	limit := hls.ParseInt(r.URL.Query().Get("limit"), 24)
+	v := r.URL.Query()
+	seriesID := normalizeID(v.Get("seriesId"))
+	limit := hls.ParseInt(v.Get("limit"), 24)
+	start := hls.ParseInt(v.Get("startIndex"), 0)
 	var seriesList []*model.Item
 	if seriesID != "" {
-		if it, ok := a.Catalog.Get(normalizeID(seriesID)); ok && it.Type == model.TypeSeries && canSeeItem(u, it) {
+		if it, ok := a.Catalog.Get(seriesID); ok && it.Type == model.TypeSeries && canSeeItem(u, it) {
 			seriesList = append(seriesList, it)
 		}
 	} else {
-		for _, v := range a.Catalog.Views() {
-			if !canSeeLibrary(u, v.Library.ID) {
+		for _, lib := range a.Catalog.Views() {
+			if !canSeeLibrary(u, lib.Library.ID) {
 				continue
 			}
-			for _, it := range a.Catalog.Children(v.Library.ID) {
+			for _, it := range a.Catalog.Children(lib.Library.ID) {
 				if it.Type == model.TypeSeries {
 					seriesList = append(seriesList, it)
 				}
@@ -1006,7 +1247,7 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 	}
 	var out []*model.Item
 	for _, series := range seriesList {
-		eps, _ := a.Catalog.Query(catalog.Query{ParentID: series.ID, Recursive: true, Types: []string{model.TypeEpisode}, Limit: 500}, nil)
+		eps, _ := a.Catalog.Query(catalog.Query{ParentID: series.ID, Recursive: true, Types: []string{model.TypeEpisode}}, nil)
 		sort.SliceStable(eps, func(i, j int) bool {
 			if eps[i].SeasonNumber != eps[j].SeasonNumber {
 				return eps[i].SeasonNumber < eps[j].SeasonNumber
@@ -1015,8 +1256,13 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 		})
 		last := -1
 		for i, ep := range eps {
-			if a.Store.GetUserData(u.ID, ep.ID).Played {
+			ud := a.Store.GetUserData(u.ID, ep.ID)
+			if ud.Played {
 				last = i
+			}
+			if ud.PositionTicks > 0 && !ud.Played {
+				last = i - 1
+				break
 			}
 		}
 		idx := last + 1
@@ -1028,40 +1274,59 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AddedAt.After(out[j].AddedAt) })
-	if len(out) > limit {
-		out = out[:limit]
+	total := len(out)
+	if start > total {
+		start = total
 	}
-	items := make([]itemDTO, 0, len(out))
-	for _, it := range out {
+	end := start + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	items := make([]itemDTO, 0, end-start)
+	for _, it := range out[start:end] {
 		items = append(items, a.buildItem(it, u.ID, false, ""))
 	}
-	writeJSON(w, 200, queryResult{Items: items, TotalRecordCount: len(items), StartIndex: 0})
+	writeJSON(w, 200, queryResult{Items: items, TotalRecordCount: total, StartIndex: start})
 }
 
 func (a *API) handleSearchHints(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 	if !ok {
 		return
 	}
-	q := catalog.Query{Search: r.URL.Query().Get("searchTerm"), Recursive: true,
-		Types: []string{model.TypeMovie, model.TypeSeries, model.TypeEpisode}, Limit: 30}
-	if q.Search == "" {
-		writeJSON(w, 200, map[string]any{"SearchHints": []any{}, "TotalRecordCount": 0})
+	v := r.URL.Query()
+	term := strings.TrimSpace(v.Get("searchTerm"))
+	if term == "" {
+		writeError(w, 400, "searchTerm is required")
 		return
+	}
+	types := splitList(v.Get("includeItemTypes"))
+	if len(types) == 0 {
+		types = []string{model.TypeMovie, model.TypeSeries, model.TypeEpisode}
+	}
+	start := hls.ParseInt(v.Get("startIndex"), 0)
+	limit := hls.ParseInt(v.Get("limit"), 30)
+	q := catalog.Query{
+		Search:    term,
+		Recursive: true,
+		Types:     types,
+		Start:     start,
+		Limit:     limit,
+		ParentID:  normalizeID(v.Get("parentId")),
 	}
 	items, total := a.Catalog.Query(q, func(it *model.Item) bool { return canSeeItem(u, it) })
 	hints := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		h := map[string]any{
-			"ItemId":         it.ID,
-			"Id":             it.ID,
-			"Name":           it.Name,
-			"Type":           it.Type,
-			"MediaType":      mediaTypeOf(it),
-			"ProductionYear": it.Year,
-			"RunTimeTicks":   it.RuntimeTicks,
-			"SeriesName":     it.SeriesName,
-			"ImageTags":      map[string]string{"Primary": imageTag(it, "Primary")},
+			"ItemId":          it.ID,
+			"Id":              it.ID,
+			"Name":            it.Name,
+			"Type":            it.Type,
+			"MediaType":       mediaTypeOf(it),
+			"ProductionYear":  it.Year,
+			"RunTimeTicks":    it.RuntimeTicks,
+			"SeriesName":      it.SeriesName,
+			"PrimaryImageTag": imageTag(it, "Primary"),
 		}
 		if it.Type == model.TypeEpisode {
 			h["IndexNumber"] = it.EpisodeNumber
@@ -1083,7 +1348,7 @@ func mediaTypeOf(it *model.Item) string {
 
 func (a *API) handlePlayed(played bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := a.resolveUser(w, r, r.PathValue("userId"))
+		u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 		if !ok {
 			return
 		}
@@ -1119,7 +1384,7 @@ func (a *API) itemAndEpisodes(it *model.Item) []string {
 
 func (a *API) handleFavorite(fav bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := a.resolveUser(w, r, r.PathValue("userId"))
+		u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
 		if !ok {
 			return
 		}
@@ -1131,6 +1396,42 @@ func (a *API) handleFavorite(fav bool) http.HandlerFunc {
 		a.Store.SetFavorite(u.ID, it.ID, fav)
 		writeJSON(w, 200, a.buildUserData(it, u.ID))
 	}
+}
+
+func (a *API) handleUserData(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	if !ok {
+		return
+	}
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
+	if !ok || !canSeeItem(u, it) {
+		writeError(w, 404, "Item does not exist")
+		return
+	}
+	if r.Method == http.MethodPost {
+		var body struct {
+			Played                *bool      `json:"Played"`
+			IsFavorite            *bool      `json:"IsFavorite"`
+			PlaybackPositionTicks *int64     `json:"PlaybackPositionTicks"`
+			PlayCount             *int       `json:"PlayCount"`
+			LastPlayedDate        *time.Time `json:"LastPlayedDate"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			writeError(w, 400, "Invalid request format")
+			return
+		}
+		if body.IsFavorite != nil {
+			a.Store.SetFavorite(u.ID, it.ID, *body.IsFavorite)
+		}
+		if body.Played != nil {
+			a.Store.SetPlayed(u.ID, it.ID, *body.Played)
+		}
+		if body.PlaybackPositionTicks != nil {
+			played := body.Played != nil && *body.Played
+			a.Store.SetProgress(u.ID, it.ID, *body.PlaybackPositionTicks, played)
+		}
+	}
+	writeJSON(w, 200, a.buildUserData(it, u.ID))
 }
 
 // Playback progress -------------------------------------------------------
@@ -1202,20 +1503,12 @@ func (a *API) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-func (a *API) handleDisplayPreferences(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{
-		"Id":                 r.PathValue("id"),
-		"SortBy":             "SortName",
-		"SortOrder":          "Ascending",
-		"RememberIndexing":   false,
-		"PrimaryImageHeight": 250,
-		"PrimaryImageWidth":  250,
-		"ScrollDirection":    "Horizontal",
-		"ShowBackdrop":       true,
-		"RememberSorting":    true,
-		"ShowSidebar":        true,
-		"CustomPrefs":        map[string]string{},
-	})
+func (a *API) handlePing(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("playSessionId") == "" {
+		writeError(w, 400, "playSessionId is required")
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func randomHex(n int) string {

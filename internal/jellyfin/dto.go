@@ -161,6 +161,7 @@ func buildUserDTO(u *model.User, serverID, serverName string) userDTO {
 // Item DTO ----------------------------------------------------------------
 
 type userItemData struct {
+	ItemId                string     `json:"ItemId"`
 	PlaybackPositionTicks int64      `json:"PlaybackPositionTicks"`
 	PlayCount             int        `json:"PlayCount"`
 	IsFavorite            bool       `json:"IsFavorite"`
@@ -172,52 +173,55 @@ type userItemData struct {
 }
 
 type itemDTO struct {
-	Name                    string            `json:"Name"`
-	ServerId                string            `json:"ServerId"`
-	Id                      string            `json:"Id"`
-	DateCreated             string            `json:"DateCreated"`
-	Container               string            `json:"Container,omitempty"`
-	SortName                string            `json:"SortName"`
-	PremiereDate            string            `json:"PremiereDate,omitempty"`
-	ProductionYear          int               `json:"ProductionYear,omitempty"`
-	IndexNumber             *int              `json:"IndexNumber"`
-	ParentIndexNumber       *int              `json:"ParentIndexNumber"`
-	IsFolder                bool              `json:"IsFolder"`
-	ParentId                string            `json:"ParentId,omitempty"`
-	Type                    string            `json:"Type"`
-	CollectionType          string            `json:"CollectionType,omitempty"`
-	Overview                string            `json:"Overview,omitempty"`
-	Taglines                []string          `json:"Taglines,omitempty"`
-	Genres                  []string          `json:"Genres,omitempty"`
-	CommunityRating         float64           `json:"CommunityRating,omitempty"`
-	OfficialRating          string            `json:"OfficialRating,omitempty"`
-	RunTimeTicks            int64             `json:"RunTimeTicks,omitempty"`
-	Size                    int64             `json:"Size,omitempty"`
-	Path                    string            `json:"Path,omitempty"`
-	FileName                string            `json:"FileName,omitempty"`
-	MediaType               string            `json:"MediaType,omitempty"`
-	VideoType               string            `json:"VideoType,omitempty"`
-	PlayAccess              string            `json:"PlayAccess"`
-	CanDownload             bool              `json:"CanDownload"`
-	CanDelete               bool              `json:"CanDelete"`
-	ChildCount              int               `json:"ChildCount,omitempty"`
-	RecursiveItemCount      int               `json:"RecursiveItemCount,omitempty"`
-	SeriesId                string            `json:"SeriesId,omitempty"`
-	SeriesName              string            `json:"SeriesName,omitempty"`
-	SeasonId                string            `json:"SeasonId,omitempty"`
-	SeasonName              string            `json:"SeasonName,omitempty"`
-	ImageTags               map[string]string `json:"ImageTags"`
-	BackdropImageTags       []string          `json:"BackdropImageTags"`
-	ParentBackdropImageTags []string          `json:"ParentBackdropImageTags"`
-	PrimaryImageAspectRatio float64           `json:"PrimaryImageAspectRatio,omitempty"`
-	UserData                *userItemData     `json:"UserData"`
-	MediaSources            []mediaSourceDTO  `json:"MediaSources,omitempty"`
-	LocationType            string            `json:"LocationType"`
-	IsHD                    bool              `json:"IsHD"`
-	MediaStreams            []mediaStreamDTO  `json:"MediaStreams,omitempty"`
-	Chapters                []any             `json:"Chapters,omitempty"`
-	People                  []personDTO       `json:"People,omitempty"`
-	Studios                 []any             `json:"Studios,omitempty"`
+	Name                     string            `json:"Name"`
+	ServerId                 string            `json:"ServerId"`
+	Id                       string            `json:"Id"`
+	DateCreated              string            `json:"DateCreated"`
+	Container                string            `json:"Container,omitempty"`
+	SortName                 string            `json:"SortName"`
+	PremiereDate             string            `json:"PremiereDate,omitempty"`
+	ProductionYear           int               `json:"ProductionYear,omitempty"`
+	IndexNumber              *int              `json:"IndexNumber"`
+	ParentIndexNumber        *int              `json:"ParentIndexNumber"`
+	IsFolder                 bool              `json:"IsFolder"`
+	ParentId                 string            `json:"ParentId,omitempty"`
+	Type                     string            `json:"Type"`
+	CollectionType           string            `json:"CollectionType,omitempty"`
+	Overview                 string            `json:"Overview,omitempty"`
+	Taglines                 []string          `json:"Taglines,omitempty"`
+	Genres                   []string          `json:"Genres,omitempty"`
+	CommunityRating          float64           `json:"CommunityRating,omitempty"`
+	OfficialRating           string            `json:"OfficialRating,omitempty"`
+	RunTimeTicks             int64             `json:"RunTimeTicks,omitempty"`
+	Size                     int64             `json:"Size,omitempty"`
+	Path                     string            `json:"Path,omitempty"`
+	FileName                 string            `json:"FileName,omitempty"`
+	MediaType                string            `json:"MediaType,omitempty"`
+	VideoType                string            `json:"VideoType,omitempty"`
+	PlayAccess               string            `json:"PlayAccess"`
+	CanDownload              bool              `json:"CanDownload"`
+	CanDelete                bool              `json:"CanDelete"`
+	ChildCount               int               `json:"ChildCount,omitempty"`
+	RecursiveItemCount       int               `json:"RecursiveItemCount,omitempty"`
+	SeriesId                 string            `json:"SeriesId,omitempty"`
+	SeriesName               string            `json:"SeriesName,omitempty"`
+	SeriesPrimaryImageTag    string            `json:"SeriesPrimaryImageTag,omitempty"`
+	ParentPrimaryImageItemId string            `json:"ParentPrimaryImageItemId,omitempty"`
+	ParentBackdropItemId     string            `json:"ParentBackdropItemId,omitempty"`
+	SeasonId                 string            `json:"SeasonId,omitempty"`
+	SeasonName               string            `json:"SeasonName,omitempty"`
+	ImageTags                map[string]string `json:"ImageTags"`
+	BackdropImageTags        []string          `json:"BackdropImageTags"`
+	ParentBackdropImageTags  []string          `json:"ParentBackdropImageTags"`
+	PrimaryImageAspectRatio  float64           `json:"PrimaryImageAspectRatio,omitempty"`
+	UserData                 *userItemData     `json:"UserData"`
+	MediaSources             []mediaSourceDTO  `json:"MediaSources,omitempty"`
+	LocationType             string            `json:"LocationType"`
+	IsHD                     bool              `json:"IsHD"`
+	MediaStreams             []mediaStreamDTO  `json:"MediaStreams,omitempty"`
+	Chapters                 []any             `json:"Chapters,omitempty"`
+	People                   []personDTO       `json:"People,omitempty"`
+	Studios                  []any             `json:"Studios,omitempty"`
 }
 
 // personDTO mirrors Jellyfin's BaseItemPerson. ImageUrl is an extra field used
@@ -335,7 +339,7 @@ func imageTag(it *model.Item, kind string) string {
 
 func personID(name string) string {
 	sum := md5.Sum([]byte("person:" + strings.ToLower(strings.TrimSpace(name))))
-	return hex.EncodeToString(sum[:])[:16]
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token string) itemDTO {
@@ -376,9 +380,13 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 	if it.Demo {
 		dto.LocationType = "Virtual"
 	}
-	if it.PosterPath != "" || it.Type == model.TypeMovie || it.Type == model.TypeSeries || it.Type == model.TypeSeason || it.Type == model.TypeEpisode {
+	if it.PosterPath != "" || it.PosterURL != "" || it.Type == model.TypeMovie || it.Type == model.TypeSeries ||
+		it.Type == model.TypeSeason || it.Type == model.TypeEpisode || it.Type == "Person" || it.Type == "Genre" {
 		dto.ImageTags["Primary"] = imageTag(it, "Primary")
-		dto.PrimaryImageAspectRatio = 0.6667
+		dto.PrimaryImageAspectRatio = 1
+		if it.Type == model.TypeMovie || it.Type == model.TypeSeries || it.Type == model.TypeSeason || it.Type == model.TypeEpisode || it.Type == "Genre" {
+			dto.PrimaryImageAspectRatio = 0.6667
+		}
 	}
 	if it.BackdropPath != "" || it.Type == model.TypeMovie || it.Type == model.TypeSeries {
 		dto.BackdropImageTags = append(dto.BackdropImageTags, imageTag(it, "Backdrop"))
@@ -388,6 +396,18 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 	}
 	if it.ThumbPath != "" {
 		dto.ImageTags["Thumb"] = imageTag(it, "Thumb")
+	}
+	// Seasons and episodes inherit the series artwork so native clients can
+	// fall back to it when the episode has no dedicated image.
+	if it.SeriesID != "" && (it.Type == model.TypeSeason || it.Type == model.TypeEpisode) {
+		if series, ok := a.Catalog.Get(it.SeriesID); ok {
+			dto.SeriesPrimaryImageTag = imageTag(series, "Primary")
+			dto.ParentPrimaryImageItemId = series.ID
+			dto.ParentBackdropItemId = series.ID
+			if series.BackdropPath != "" || series.Type == model.TypeSeries {
+				dto.ParentBackdropImageTags = append(dto.ParentBackdropImageTags, imageTag(series, "Backdrop"))
+			}
+		}
 	}
 	if includeMedia && len(it.People) > 0 {
 		dto.People = make([]personDTO, 0, len(it.People))
@@ -445,6 +465,7 @@ func (a *API) buildUserData(it *model.Item, userID string) *userItemData {
 	}
 	ud := a.Store.GetUserData(userID, it.ID)
 	out := &userItemData{
+		ItemId:                it.ID,
 		PlaybackPositionTicks: ud.PositionTicks,
 		PlayCount:             ud.PlayCount,
 		IsFavorite:            ud.Favorite,

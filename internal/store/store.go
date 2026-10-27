@@ -93,6 +93,14 @@ CREATE TABLE IF NOT EXISTS user_items (
 	PRIMARY KEY (user_id, item_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_items_resume ON user_items(user_id, played, position_ticks);
+CREATE TABLE IF NOT EXISTS display_preferences (
+	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	client TEXT NOT NULL,
+	key TEXT NOT NULL,
+	data TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (user_id, client, key)
+);
 `
 
 // Open opens (or creates) nuvio.db below dir.
@@ -708,6 +716,34 @@ func (s *Store) RevokeSession(userID, id string) bool {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0
+}
+
+// DisplayPreferences returns the stored display preferences for a user,
+// client and preference key.
+func (s *Store) DisplayPreferences(userID, client, key string) (map[string]any, bool) {
+	var raw string
+	err := s.db.QueryRow(`SELECT data FROM display_preferences
+		WHERE user_id = ? AND client = ? AND key = ?`, userID, client, key).Scan(&raw)
+	if err != nil {
+		return nil, false
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// SaveDisplayPreferences replaces the stored display preferences.
+func (s *Store) SaveDisplayPreferences(userID, client, key string, data map[string]any) {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	_, _ = s.db.Exec(`INSERT INTO display_preferences(user_id, client, key, data, updated_at)
+		VALUES(?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, client, key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+		userID, client, key, string(raw), time.Now().UTC().Format(time.RFC3339Nano))
 }
 
 // Libraries returns the configured libraries.

@@ -17,22 +17,14 @@ import (
 	"nuvio/internal/model"
 )
 
-// imageItem resolves both real catalog items and the virtual entries clients
-// address with the same endpoint: libraries and the root folder.
+// imageItem resolves catalog items and synthetic entries (libraries, root,
+// genres, people) that clients address with the same endpoint.
 func (a *API) imageItem(rawID string) (*model.Item, bool) {
 	id := normalizeID(rawID)
 	if it, ok := a.Catalog.Get(id); ok {
 		return it, true
 	}
-	if id == rootItemID {
-		return rootViewItem(a.Store.Settings().ServerName), true
-	}
-	for _, v := range a.Catalog.Views() {
-		if v.Library.ID == id {
-			return viewItem(v.Library.ID, v.Library.Name), true
-		}
-	}
-	return nil, false
+	return a.virtualItem(id)
 }
 
 func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +62,12 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		widescreen = true
 	default:
 		http.Error(w, "unsupported image type", http.StatusNotFound)
+		return
+	}
+	// Nuvio stores a single image per type, so any index above zero does not
+	// exist.
+	if hls.ParseInt(r.PathValue("imageIndex"), 0) > 0 {
+		http.Error(w, "image not found", http.StatusNotFound)
 		return
 	}
 	etag := `"` + imageTag(it, kind) + `"`
@@ -114,23 +112,42 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	width := hls.ParseInt(r.URL.Query().Get("maxWidth"), 0)
-	if width == 0 {
-		width = hls.ParseInt(r.URL.Query().Get("width"), 0)
+	maxWidth := hls.ParseInt(r.URL.Query().Get("maxWidth"), 0)
+	if maxWidth == 0 {
+		maxWidth = hls.ParseInt(r.URL.Query().Get("width"), 0)
 	}
-	if width <= 0 {
-		if widescreen {
-			width = 1600
+	maxHeight := hls.ParseInt(r.URL.Query().Get("maxHeight"), 0)
+	if maxHeight == 0 {
+		maxHeight = hls.ParseInt(r.URL.Query().Get("height"), 0)
+	}
+	baseW, baseH, width := 2, 3, 600
+	if widescreen {
+		baseW, baseH, width = 16, 9, 1600
+	}
+	height := width * baseH / baseW
+	switch {
+	case maxWidth > 0 && maxHeight > 0:
+		if maxWidth*baseH < maxHeight*baseW {
+			width, height = maxWidth, maxWidth*baseH/baseW
 		} else {
-			width = 600
+			width, height = maxHeight*baseW/baseH, maxHeight
 		}
+	case maxWidth > 0:
+		width, height = maxWidth, maxWidth*baseH/baseW
+	case maxHeight > 0:
+		width, height = maxHeight*baseW/baseH, maxHeight
 	}
 	if width > 2000 {
 		width = 2000
 	}
-	height := width * 3 / 2
-	if widescreen {
-		height = width * 9 / 16
+	if height > 3000 {
+		height = 3000
+	}
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
 	}
 	seed := it.ArtSeed
 	if seed == "" {

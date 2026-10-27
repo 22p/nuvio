@@ -9,7 +9,7 @@
 - **现代 Web 界面**：桌面与移动端响应式布局，首页推荐、继续观看、接下来、片库、收藏、搜索、剧集详情、播放器、设置。收藏页集中展示所有已收藏的电影与剧集。
 - **多语言界面**：English、简体中文、繁體中文、日本語、한국어。英文为源语言，所有文案通过 `t()` 查表；可在「设置 → 界面语言」或登录页切换，浏览器语言会自动作为初始值（`zh-Hant` / `zh-TW` 自动使用繁體中文）。
 - **英文优先的服务端**：API 错误、扫描日志、演示库名称、语言名称等响应一律使用英文原文，前端词典直接以这些英文 key 翻译，无需在客户端做中文替换。
-- **Jellyfin 兼容接口**：登录、用户视图、媒体库浏览、搜索、详情、图片、`PlaybackInfo`、直连串流（HTTP Range）、HLS 转码、外挂字幕、播放进度上报、已看/收藏。
+- **Jellyfin 兼容接口**：按 Jellyfin 12.4.0 接口实现登录、用户视图（`/UserViews`）、媒体库浏览（`/Items`）、最近添加（`/Items/Latest`）、继续观看（`/UserItems/Resume`）、搜索、详情、图片、`PlaybackInfo`、直连串流（HTTP Range）、HLS 转码、外挂字幕、播放进度上报、已看/收藏（`/UserPlayedItems`、`/UserFavoriteItems`）、`/Genres`、`/Persons` 与显示偏好持久化。
 - **媒体扫描**：电影目录、剧集 `Show/Season 01/S01E01`、扁平目录、电影/剧集混合库；从文件名解析标题与年份。读取同目录下的 `movie.nfo` / `剧集名.nfo`（标题、简介、评分、分级、类型、演员）以及 `folder.jpg`、`backdrop.jpg`、`landscape.jpg`、`logo.png`，本地元数据与图片优先于在线数据。扫描结果写入 SQLite，重启后直接读取，不会重复扫描。
 - **在线元数据（可选）**：填写 TMDb API Key 后，重新扫描会补全海报、背景图、简介、评分、类型与演员表；剧集海报和演员会继承给季和单集，图片经服务器代理并缓存到磁盘。
 - **字幕**：自动发现同名字幕 `.srt` / `.vtt` / `.ass` / `.ssa`，统一转换为 WebVTT；ffmpeg 可提取内嵌字幕；支持语言、字号、颜色、背景、描边等偏好。
@@ -80,13 +80,15 @@ http://<服务器地址>:8096
 | --- | --- |
 | 系统 | `/System/Info/Public`、`/System/Info`、`/Branding/Configuration` |
 | 认证 | `/Users/AuthenticateByName`、`/Users/Me`、`/Users/Public`、`/Users/{id}` |
-| 浏览 | `/Users/{id}/Views`、`/UserViews`、`/Users/{id}/Items`、`Latest`、`Resume`、`/Items/{id}`、`/Items/{id}/Similar` |
+| 浏览 | `/UserViews`、`/Items`、`/Items/Latest`、`/UserItems/Resume`、`/Items/{id}`、`/Items/{id}/Similar`、`/Genres`、`/Persons` |
 | 剧集 | `/Shows/{id}/Seasons`、`/Shows/{id}/Episodes`、`/Shows/NextUp` |
 | 播放 | `/Items/{id}/PlaybackInfo`、`/Videos/{id}/stream`、`/Videos/{id}/master.m3u8`、HLS 分片、字幕 |
 | 进度 | `/Sessions/Playing`、`/Sessions/Playing/Progress`、`/Sessions/Playing/Stopped`、`/Sessions/Capabilities/Full` |
-| 用户数据 | `/Users/{id}/PlayedItems/{itemId}`、`/Users/{id}/FavoriteItems/{itemId}` |
+| 用户数据 | `/UserPlayedItems/{itemId}`、`/UserFavoriteItems/{itemId}`、`/UserItems/{itemId}/UserData` |
 
-**未实现**：插件、Live TV、音乐库、Quick Connect、远程控制/投屏、硬件加速专用参数。如果你的客户端依赖其中某项，会得到 404 或空结果，但登录、浏览和视频播放不依赖它们。
+接口按 Jellyfin **12.4.0** 的路由组织，不再保留 10.x 的 `/Users/{id}/Items`、`/Users/{id}/PlayedItems` 等旧路径；旧版客户端请使用 v1.0.x。当前 Web 客户端已同步使用新路径。
+
+**未实现**：插件、Live TV、音乐库、Quick Connect、远程控制/投屏、部分高级筛选参数（如 `studioIds`、`tags`、`officialRatings`）。如果你的客户端依赖其中某项，会得到 404 或空结果，但登录、浏览和视频播放不依赖它们。
 
 ## 媒体目录约定
 
