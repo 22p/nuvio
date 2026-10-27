@@ -4,13 +4,14 @@ import { Link } from 'react-router-dom'
 import { getLatest, getNextUp, getResume } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import type { JFItem } from '../lib/types'
-import { useViews } from '../components/Layout'
+import { useViews, useViewsLoading } from '../components/Layout'
 import { EmptyState, Hero, MediaRow, RowSkeleton } from '../components/Media'
 import { IconLayers, IconSettings } from '../components/Icons'
 
 export function HomePage() {
   const { session, isAdmin, config } = useAuth()
   const views = useViews()
+  const viewsLoading = useViewsLoading()
   const [resume, setResume] = useState<JFItem[]>([])
   const [nextUp, setNextUp] = useState<JFItem[]>([])
   const [latestByView, setLatestByView] = useState<Record<string, JFItem[]>>({})
@@ -19,7 +20,7 @@ export function HomePage() {
 
   useEffect(() => {
     if (!session || views.length === 0) {
-      if (!views.length) setLoading(false)
+      if (!viewsLoading) setLoading(false)
       return
     }
     let alive = true
@@ -53,7 +54,7 @@ export function HomePage() {
     return () => {
       alive = false
     }
-  }, [session, views])
+  }, [session, views, viewsLoading])
 
   const moviesView = views.find((v) => v.CollectionType === 'movies')
   const showsView = views.find((v) => v.CollectionType === 'tvshows')
@@ -70,16 +71,10 @@ export function HomePage() {
       .slice(0, 5)
   }, [latestByView, latestMovies])
 
+  if (viewsLoading) return <HomeSkeleton />
+
   if (!views.length) {
-    if (config?.scanning) {
-      return (
-        <div className="home page-pad">
-          <div className="hero-skeleton skeleton" />
-          <RowSkeleton />
-          <RowSkeleton />
-        </div>
-      )
-    }
+    if (config?.scanning) return <HomeSkeleton />
     return (
       <div className="page-pad">
         <EmptyState
@@ -104,11 +99,7 @@ export function HomePage() {
     <div className="home">
       {error && <div className="inline-error">{t(error)}</div>}
       {loading && !featured.length ? (
-        <div className="page-pad">
-          <div className="hero-skeleton skeleton" />
-          <RowSkeleton />
-          <RowSkeleton />
-        </div>
+        <HomeSkeleton />
       ) : (
         <>
           <Hero items={featured} />
@@ -155,6 +146,16 @@ export function HomePage() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+function HomeSkeleton() {
+  return (
+    <div className="page-pad">
+      <div className="hero-skeleton skeleton" />
+      <RowSkeleton />
+      <RowSkeleton />
     </div>
   )
 }

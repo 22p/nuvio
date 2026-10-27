@@ -26,7 +26,7 @@ const Version = "1.0.0"
 
 // ApiVersion is the Jellyfin server version we advertise. Native clients gate
 // features on this string.
-const ApiVersion = "10.10.7"
+const ApiVersion = "12.2.0"
 
 // API holds the shared server dependencies.
 type API struct {

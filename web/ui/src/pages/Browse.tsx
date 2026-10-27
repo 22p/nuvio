@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { Link } from 'react-router-dom'
-import { useViews } from '../components/Layout'
+import { useViews, useViewsLoading } from '../components/Layout'
 import { EmptyState } from '../components/Media'
 import { IconChevronRight, IconGrid, IconLayers, IconPlus } from '../components/Icons'
 import { useAuth } from '../lib/auth'
@@ -20,6 +20,7 @@ function typeLabel(type: string): string {
 
 export function BrowsePage() {
   const views = useViews()
+  const viewsLoading = useViewsLoading()
   const { isAdmin } = useAuth()
 
   return (
@@ -29,11 +30,19 @@ export function BrowsePage() {
           <div className="eyebrow">
             <IconLayers size={16} />{' '}{t("Media libraries")}</div>
           <h1>{t("Library")}</h1>
-          <p className="muted">{views.length}{' '}{t("libraries")}</p>
+          <p className="muted">
+            {viewsLoading ? t("Loading…") : <>{views.length}{' '}{t("libraries")}</>}
+          </p>
         </div>
       </div>
 
-      {!views.length ? (
+      {viewsLoading ? (
+        <div className="library-grid">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="library-card skeleton" />
+          ))}
+        </div>
+      ) : !views.length ? (
         <EmptyState title={t("No libraries yet")} description={t("Your movies and series will appear here when the scan finishes.")} />
       ) : (
         <div className="library-grid">

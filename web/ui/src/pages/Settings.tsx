@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   addLibrary,
   changePassword,
@@ -72,7 +72,6 @@ export function SettingsPage() {
           <a href="#subtitles">{t("Subtitles")}</a>
           <a href="#account">{t("Account")}</a>
           {isAdmin && <a href="#server">{t("Server")}</a>}
-          {isAdmin && <Link to="/users">{t("Users")}</Link>}
           <a href="#about">{t("About")}</a>
         </aside>
 
@@ -263,7 +262,7 @@ export function SettingsPage() {
               </div>
               <div>
                 <span>{t("Jellyfin API")}</span>
-                <strong>{config?.apiVersion || '10.10.7'}</strong>
+                <strong>{config?.apiVersion || '12.2.0'}</strong>
               </div>
               <div>
                 <span>{t("Service name")}</span>

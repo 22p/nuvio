@@ -16,8 +16,11 @@ import {
   IconUsers,
 } from './Icons'
 
-const ViewsContext = createContext<JFItem[]>([])
-export const useViews = () => useContext(ViewsContext)
+type ViewsState = { views: JFItem[]; loading: boolean }
+
+const ViewsContext = createContext<ViewsState>({ views: [], loading: true })
+export const useViews = () => useContext(ViewsContext).views
+export const useViewsLoading = () => useContext(ViewsContext).loading
 
 export function Logo({ size = 30 }: { size?: number }) {
   return (
@@ -46,6 +49,7 @@ export function AppShell() {
   const { session } = useAuth()
   const location = useLocation()
   const [views, setViews] = useState<JFItem[]>([])
+  const [viewsLoading, setViewsLoading] = useState(true)
 
   useEffect(() => {
     if (!session) return
@@ -57,6 +61,7 @@ export function AppShell() {
         const res = await getViews(session.user.Id)
         if (!alive) return
         setViews(res.Items || [])
+        setViewsLoading(false)
         const status = await getScanStatus().catch(() => null)
         if (status?.scanning) {
           attempts = 0
@@ -65,7 +70,12 @@ export function AppShell() {
           timer = window.setTimeout(load, 2500)
         }
       } catch {
-        if (alive && attempts++ < 20) timer = window.setTimeout(load, 4000)
+        if (!alive) return
+        if (attempts++ < 20) {
+          timer = window.setTimeout(load, 4000)
+        } else {
+          setViewsLoading(false)
+        }
       }
     }
     load()
@@ -76,7 +86,7 @@ export function AppShell() {
   }, [session, location.pathname])
 
   return (
-    <ViewsContext.Provider value={views}>
+    <ViewsContext.Provider value={{ views, loading: viewsLoading }}>
       <div className="app-shell">
         <Header views={views} />
         <main className="page">
