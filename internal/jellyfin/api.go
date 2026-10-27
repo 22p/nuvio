@@ -24,7 +24,7 @@ import (
 )
 
 // Version is Nuvio's own version.
-const Version = "1.0.0"
+const Version = "1.0.5"
 
 // ApiVersion is the Jellyfin server version we advertise. Native clients gate
 // features on this string.
@@ -138,6 +138,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /Users/{userId}/Items/Latest", a.handleLatest)
 	mux.HandleFunc("GET /Users/{userId}/Items/{itemId}", a.handleItem)
 	mux.HandleFunc("GET /Items/{itemId}", a.handleItem)
+	mux.HandleFunc("GET /Items", a.handleItemsRoot)
+	mux.HandleFunc("GET /Items/Suggestions", a.handleSuggestions)
 	mux.HandleFunc("GET /Items/{itemId}/Similar", a.handleSimilar)
 	mux.HandleFunc("GET /Shows/{seriesId}/Seasons", a.handleSeasons)
 	mux.HandleFunc("GET /Shows/{seriesId}/Episodes", a.handleEpisodes)
@@ -175,6 +177,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
+}
+
+// normalizeID accepts both Jellyfin's hyphenated GUIDs and Nuvio's compact
+// hex ids. Clients serialize UUIDs with dashes, while storage uses md5 hex.
+func normalizeID(id string) string {
+	return strings.ReplaceAll(strings.TrimSpace(id), "-", "")
+}
+
+func normalizeIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id = normalizeID(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (a *API) tokenFromRequest(r *http.Request) string {
@@ -232,6 +250,7 @@ func (a *API) resolveUser(w http.ResponseWriter, r *http.Request, pathID string)
 	if !ok {
 		return nil, false
 	}
+	pathID = normalizeID(pathID)
 	if pathID == "" || pathID == u.ID {
 		return u, true
 	}
@@ -369,6 +388,19 @@ func (a *API) handlePublicUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+func mediaBrowserParam(header, name string) string {
+	idx := strings.Index(strings.ToLower(header), strings.ToLower(name)+"=")
+	if idx < 0 {
+		return ""
+	}
+	s := strings.TrimSpace(header[idx+len(name)+1:])
+	s = strings.TrimPrefix(s, `"`)
+	if j := strings.IndexAny(s, `",`); j >= 0 {
+		s = s[:j]
+	}
+	return strings.TrimSpace(strings.Trim(s, `"`))
+}
+
 func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"Username"`
@@ -394,11 +426,25 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
+	auth := r.Header.Get("Authorization")
+	client := r.Header.Get("X-Emby-Client")
+	if client == "" {
+		client = mediaBrowserParam(auth, "Client")
+	}
+	deviceName := r.Header.Get("X-Emby-Device-Name")
+	if deviceName == "" {
+		deviceName = mediaBrowserParam(auth, "Device")
+	}
+	deviceID := r.Header.Get("X-Emby-Device-Id")
+	if deviceID == "" {
+		deviceID = mediaBrowserParam(auth, "DeviceId")
+	}
+	clientVersion := r.Header.Get("X-Emby-Client-Version")
+	if clientVersion == "" {
+		clientVersion = mediaBrowserParam(auth, "Version")
+	}
 	log.Printf("Login: user=%q client=%q device=%q version=%q",
-		u.Name,
-		r.Header.Get("X-Emby-Client"),
-		r.Header.Get("X-Emby-Device-Name"),
-		r.Header.Get("X-Emby-Client-Version"),
+		u.Name, client, deviceName, clientVersion,
 	)
 	writeJSON(w, 200, map[string]any{
 		"User":        buildUserDTO(u, a.Store.ServerID(), a.Store.Settings().ServerName),
@@ -408,11 +454,11 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 			"Id":                    randomHex(12),
 			"UserId":                u.ID,
 			"UserName":              u.Name,
-			"DeviceId":              r.Header.Get("X-Emby-Device-Id"),
-			"DeviceName":            r.Header.Get("X-Emby-Device-Name"),
+			"DeviceId":              deviceID,
+			"DeviceName":            deviceName,
 			"DeviceType":            "",
-			"Client":                r.Header.Get("X-Emby-Client"),
-			"ApplicationVersion":    r.Header.Get("X-Emby-Client-Version"),
+			"Client":                client,
+			"ApplicationVersion":    clientVersion,
 			"ServerId":              a.Store.ServerID(),
 			"RemoteEndPoint":        r.RemoteAddr,
 			"LastActivityDate":      now.Format("2006-01-02T15:04:05.0000000Z"),
@@ -519,13 +565,13 @@ func boolParam(r *http.Request, name string) (bool, bool) {
 
 func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, []string) {
 	q := catalog.Query{
-		ParentID: r.URL.Query().Get("parentId"),
+		ParentID: normalizeID(r.URL.Query().Get("parentId")),
 		Search:   r.URL.Query().Get("searchTerm"),
 		SortBy:   r.URL.Query().Get("sortBy"),
 		Desc:     strings.EqualFold(r.URL.Query().Get("sortOrder"), "Descending"),
 		Start:    hls.ParseInt(r.URL.Query().Get("startIndex"), 0),
 		Limit:    hls.ParseInt(r.URL.Query().Get("limit"), 100),
-		IDs:      splitList(r.URL.Query().Get("ids")),
+		IDs:      normalizeIDs(splitList(r.URL.Query().Get("ids"))),
 	}
 	q.Types = splitList(r.URL.Query().Get("includeItemTypes"))
 	q.ExcludeTypes = splitList(r.URL.Query().Get("excludeItemTypes"))
@@ -549,7 +595,17 @@ func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, []string) {
 }
 
 func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.PathValue("userId"))
+	a.itemsResponse(w, r, r.PathValue("userId"))
+}
+
+// handleItemsRoot implements the newer /Items?userId= endpoint used by the
+// Jellyfin SDK. Without an exact route Go redirects /Items to /Items/ (404).
+func (a *API) handleItemsRoot(w http.ResponseWriter, r *http.Request) {
+	a.itemsResponse(w, r, r.URL.Query().Get("userId"))
+}
+
+func (a *API) itemsResponse(w http.ResponseWriter, r *http.Request, pathUser string) {
+	u, ok := a.resolveUser(w, r, pathUser)
 	if !ok {
 		return
 	}
@@ -594,6 +650,44 @@ func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: total, StartIndex: q.Start})
 }
 
+func (a *API) handleSuggestions(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	if !ok {
+		return
+	}
+	start := hls.ParseInt(r.URL.Query().Get("startIndex"), 0)
+	limit := hls.ParseInt(r.URL.Query().Get("limit"), 6)
+	if limit <= 0 {
+		limit = 6
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	types := splitList(r.URL.Query().Get("type"))
+	if len(types) == 0 {
+		types = splitList(r.URL.Query().Get("includeItemTypes"))
+	}
+	if len(types) == 0 {
+		types = []string{model.TypeMovie, model.TypeSeries}
+	}
+	q := catalog.Query{
+		Types:     types,
+		Recursive: true,
+		Start:     start,
+		Limit:     limit,
+		SortBy:    "CommunityRating",
+		Desc:      true,
+	}
+	items, total := a.Catalog.Query(q, func(it *model.Item) bool {
+		return canSeeItem(u, it)
+	})
+	out := make([]itemDTO, 0, len(items))
+	for _, it := range items {
+		out = append(out, a.buildItem(it, u.ID, false, ""))
+	}
+	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: total, StartIndex: start})
+}
+
 func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 	u, ok := a.resolveUser(w, r, r.PathValue("userId"))
 	if !ok {
@@ -602,7 +696,7 @@ func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 	resume := a.Store.Resumable(u.ID)
 	list := make([]*model.Item, 0, len(resume))
 	for id, p := range resume {
-		it, ok := a.Catalog.Get(id)
+		it, ok := a.Catalog.Get(normalizeID(id))
 		if !ok || p.PositionTicks == 0 {
 			continue
 		}
@@ -639,15 +733,15 @@ func (a *API) handleLatest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	parent := r.URL.Query().Get("parentId")
+	parent := normalizeID(r.URL.Query().Get("parentId"))
 	limit := hls.ParseInt(r.URL.Query().Get("limit"), 20)
 	var items []*model.Item
 	if parent != "" {
-		if p, ok := a.Catalog.Get(parent); ok && !canSeeItem(u, p) {
+		if p, ok := a.Catalog.Get(normalizeID(parent)); ok && !canSeeItem(u, p) {
 			writeJSON(w, 200, []itemDTO{})
 			return
 		}
-		items = a.Catalog.Latest(parent, limit)
+		items = a.Catalog.Latest(normalizeID(parent), limit)
 	} else {
 		for _, v := range a.Catalog.Views() {
 			if !canSeeLibrary(u, v.Library.ID) {
@@ -676,7 +770,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("itemId")
-	it, ok := a.Catalog.Get(id)
+	it, ok := a.Catalog.Get(normalizeID(id))
 	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
 		return
@@ -689,7 +783,7 @@ func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	it, ok := a.Catalog.Get(r.PathValue("itemId"))
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
 		return
@@ -736,8 +830,8 @@ func (a *API) handleSeasons(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	seriesID := r.PathValue("seriesId")
-	if series, ok := a.Catalog.Get(seriesID); ok && !canSeeItem(u, series) {
+	seriesID := normalizeID(r.PathValue("seriesId"))
+	if series, ok := a.Catalog.Get(normalizeID(seriesID)); ok && !canSeeItem(u, series) {
 		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
 		return
 	}
@@ -756,8 +850,8 @@ func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	seriesID := r.PathValue("seriesId")
-	if series, ok := a.Catalog.Get(seriesID); ok && !canSeeItem(u, series) {
+	seriesID := normalizeID(r.PathValue("seriesId"))
+	if series, ok := a.Catalog.Get(normalizeID(seriesID)); ok && !canSeeItem(u, series) {
 		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
 		return
 	}
@@ -787,11 +881,11 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	seriesID := r.URL.Query().Get("seriesId")
+	seriesID := normalizeID(r.URL.Query().Get("seriesId"))
 	limit := hls.ParseInt(r.URL.Query().Get("limit"), 24)
 	var seriesList []*model.Item
 	if seriesID != "" {
-		if it, ok := a.Catalog.Get(seriesID); ok && it.Type == model.TypeSeries && canSeeItem(u, it) {
+		if it, ok := a.Catalog.Get(normalizeID(seriesID)); ok && it.Type == model.TypeSeries && canSeeItem(u, it) {
 			seriesList = append(seriesList, it)
 		}
 	} else {
@@ -889,7 +983,7 @@ func (a *API) handlePlayed(played bool) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		it, ok := a.Catalog.Get(r.PathValue("itemId"))
+		it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 		if !ok || !canSeeItem(u, it) {
 			writeError(w, 404, "Item does not exist")
 			return
@@ -925,7 +1019,7 @@ func (a *API) handleFavorite(fav bool) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		it, ok := a.Catalog.Get(r.PathValue("itemId"))
+		it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 		if !ok || !canSeeItem(u, it) {
 			writeError(w, 404, "Item does not exist")
 			return
@@ -985,7 +1079,7 @@ func (a *API) applyProgress(userID string, rep playbackReport) {
 	if rep.ItemId == "" {
 		return
 	}
-	it, ok := a.Catalog.Get(rep.ItemId)
+	it, ok := a.Catalog.Get(normalizeID(rep.ItemId))
 	if !ok {
 		return
 	}

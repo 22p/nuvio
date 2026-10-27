@@ -21,7 +21,7 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	it, ok := a.Catalog.Get(r.PathValue("itemId"))
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || !canSeeItem(u, it) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

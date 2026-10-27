@@ -36,7 +36,7 @@ import {
   IconVolume,
 } from '../components/Icons'
 
-type Menu = 'subs' | 'audio' | 'quality' | 'settings' | null
+type Menu = 'subs' | 'audio' | 'quality' | 'speed' | 'settings' | null
 type Mode = 'direct' | 'hls'
 
 interface PlaybackStats {
@@ -102,6 +102,8 @@ const QUALITIES = [
   { value: 20, label: '20 Mbps' },
   { value: 40, label: '40 Mbps' },
 ]
+
+const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 function langMatch(code?: string, pref?: string): boolean {
   if (!code || !pref) return false
@@ -173,6 +175,10 @@ export function PlayerPage() {
   const [reload, setReload] = useState(0)
   const [audioIndex, setAudioIndex] = useState(1)
   const [subChoice, setSubChoice] = useState<'auto' | 'off' | number>('auto')
+  const [rate, setRate] = useState(() => {
+    const stored = Number(localStorage.getItem('nuvio.rate') || 1)
+    return RATES.includes(stored) ? stored : 1
+  })
   const [menu, setMenu] = useState<Menu>(null)
   const [playing, setPlaying] = useState(false)
   const [current, setCurrent] = useState(0)
@@ -533,6 +539,13 @@ export function PlayerPage() {
     localStorage.setItem('nuvio.volume', String(volume))
   }, [volume, muted, item?.Id])
 
+  // Playback rate persistence and re-application after source switches.
+  useEffect(() => {
+    const video = videoRef.current
+    if (video) video.playbackRate = rate
+    localStorage.setItem('nuvio.rate', String(rate))
+  }, [rate, source])
+
   // Live playback statistics for the info panel.
   useEffect(() => {
     if (menu !== 'settings') return
@@ -781,6 +794,14 @@ export function PlayerPage() {
     setPlaybackLoading(true)
     setMenu(null)
     setReload((n) => n + 1)
+  }
+
+  const changeRate = (value: number) => {
+    setRate(value)
+    const video = videoRef.current
+    if (video) video.playbackRate = value
+    setMenu(null)
+    wake()
   }
 
   const changeAudio = (index: number) => {
@@ -1119,6 +1140,13 @@ export function PlayerPage() {
               <span className="quality-label">{prefs.maxBitrateMbps ? `${prefs.maxBitrateMbps}M` : t("Auto")}</span>
             </button>
             <button
+              className={`control-button ${menu === 'speed' ? 'is-active' : ''}`}
+              onClick={() => setMenu(menu === 'speed' ? null : 'speed')}
+              aria-label={t("Playback rate")}
+            >
+              <span className="quality-label">{rate}×</span>
+            </button>
+            <button
               className={`control-button ${menu === 'settings' ? 'is-active' : ''}`}
               onClick={() => setMenu(menu === 'settings' ? null : 'settings')}
               aria-label={t("Playback settings")}
@@ -1231,6 +1259,27 @@ export function PlayerPage() {
                 {q.value === 0 && <em>{t("Direct play at source quality")}</em>}
               </span>
               {prefs.maxBitrateMbps === q.value && <IconCheck size={16} />}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {menu === 'speed' && (
+        <div className="player-menu speed-menu">
+          <div className="menu-head">
+            <span>{t("Playback rate")}</span>
+            <button className="menu-close" onClick={() => setMenu(null)} aria-label={t("Close")}>
+              <IconClose size={16} />
+            </button>
+          </div>
+          {RATES.map((value) => (
+            <button
+              key={value}
+              className={`menu-option ${rate === value ? 'active' : ''}`}
+              onClick={() => changeRate(value)}
+            >
+              <span>{value}×</span>
+              {rate === value && <IconCheck size={16} />}
             </button>
           ))}
         </div>

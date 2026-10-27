@@ -102,7 +102,7 @@ func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	it, ok := a.Catalog.Get(r.PathValue("itemId"))
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
 		return
@@ -467,7 +467,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	it, ok := a.Catalog.Get(r.PathValue("itemId"))
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
 		return
@@ -489,7 +489,7 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	it, ok := a.Catalog.Get(r.PathValue("itemId"))
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
 		return
@@ -581,7 +581,7 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
-	itemID := r.PathValue("itemId")
+	itemID := normalizeID(r.PathValue("itemId"))
 	sid := r.PathValue("sessionId")
 	file := r.PathValue("file")
 	sess, ok := a.HLS.Get(sid)
@@ -641,7 +641,7 @@ func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	it, ok := a.Catalog.Get(r.PathValue("itemId"))
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || it.Media == nil || !canSeeItem(u, it) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
