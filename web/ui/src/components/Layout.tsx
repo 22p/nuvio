@@ -8,6 +8,7 @@ import type { JFItem } from '../lib/types'
 import { useAuth } from '../lib/auth'
 import {
   IconGrid,
+  IconHeart,
   IconHome,
   IconLogout,
   IconSearch,
@@ -136,6 +137,7 @@ function Header({ views }: { views: JFItem[] }) {
         <nav className="desktop-nav">
           <NavLink to="/" end>{t("Home")}</NavLink>
           <NavLink to="/browse">{t("Library")}</NavLink>
+          <NavLink to="/favorites">{t("Favorites")}</NavLink>
           {movies && <NavLink to={`/library/${movies.Id}`}>{t("Movies")}</NavLink>}
           {shows && <NavLink to={`/library/${shows.Id}`}>{t("Series")}</NavLink>}
           <NavLink to="/search">{t("Search")}</NavLink>
@@ -164,6 +166,8 @@ function Header({ views }: { views: JFItem[] }) {
                 </div>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); navigate('/settings') }}>
                   <IconSettings size={18} />{' '}{t("Settings")}</button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); navigate('/favorites') }}>
+                  <IconHeart size={18} />{' '}{t("Favorites")}</button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); navigate('/settings#account') }}>
                   <IconUser size={18} />{' '}{t("Account")}</button>
                 {isAdmin && (
@@ -185,6 +189,7 @@ function MobileNav() {
   const items = [
     { to: '/', label: t("Home"), icon: <IconHome size={21} />, end: true },
     { to: '/browse', label: t("Library"), icon: <IconGrid size={21} /> },
+    { to: '/favorites', label: t("Favorites"), icon: <IconHeart size={21} /> },
     { to: '/search', label: t("Search"), icon: <IconSearch size={21} /> },
     { to: '/settings', label: t("Profile"), icon: <IconSettings size={21} /> },
   ]

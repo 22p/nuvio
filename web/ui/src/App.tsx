@@ -5,6 +5,7 @@ import { useAuth } from './lib/auth'
 import { AppShell, Logo } from './components/Layout'
 import { HomePage } from './pages/Home'
 import { BrowsePage } from './pages/Browse'
+import { FavoritesPage } from './pages/Favorites'
 import { LibraryPage } from './pages/Library'
 import { DetailPage } from './pages/Detail'
 import { SearchPage } from './pages/Search'
@@ -39,6 +40,7 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route path="/" element={<HomePage />} />
         <Route path="/browse" element={<BrowsePage />} />
+        <Route path="/favorites" element={<FavoritesPage />} />
         <Route path="/library/:id" element={<LibraryPage />} />
         <Route path="/item/:id" element={<DetailPage />} />
         <Route path="/search" element={<SearchPage />} />

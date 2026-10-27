@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -88,7 +90,7 @@ func TestAuthTokensAndPersistence(t *testing.T) {
 	if found, ok := s.FindUser(u.ID); !ok || !found.HasPassword {
 		t.Fatal("looked-up user should report a password")
 	}
-	tok, err := s.IssueToken(u.ID)
+	tok, err := s.IssueToken(u.ID, SessionMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +257,7 @@ func TestUserPolicyAndDeletion(t *testing.T) {
 	if len(got.AllowedLibraries) != 2 || got.AllowTranscode || !got.AllowRemux {
 		t.Fatalf("policy not persisted: %+v", got)
 	}
-	tok, err := s.IssueToken(u.ID)
+	tok, err := s.IssueToken(u.ID, SessionMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,5 +321,118 @@ func TestRemuxSettingDefaultsForLegacyDatabase(t *testing.T) {
 	defer again.Close()
 	if again.Settings().RemuxEnabled {
 		t.Fatal("explicitly disabled remuxing was re-enabled on restart")
+	}
+}
+
+func TestDeviceSessions(t *testing.T) {
+	s, err := Open(t.TempDir(), "Nuvio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	u, err := s.CreateUser("alice", "secret", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.IssueToken(u.ID, SessionMeta{
+		DeviceName: "Linux · Chrome", Client: "Nuvio Web", Version: "1.0.0", Address: "193.32.150.107",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.IssueToken(u.ID, SessionMeta{
+		DeviceName: "Android · Chrome", Client: "Jellyfin", Address: "45.147.50.199",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list := s.Sessions(u.ID, first)
+	if len(list) != 2 {
+		t.Fatalf("Sessions = %d, want 2", len(list))
+	}
+	if !list[0].Current || list[0].DeviceName != "Linux · Chrome" {
+		t.Fatalf("current session should come first: %+v", list[0])
+	}
+	var other Session
+	for _, sess := range list {
+		if !sess.Current {
+			other = sess
+		}
+	}
+	if other.ID == "" || other.DeviceName != "Android · Chrome" || other.Address != "45.147.50.199" {
+		t.Fatalf("unexpected second session: %+v", other)
+	}
+
+	if s.RevokeSession("not-alice", other.ID) {
+		t.Fatal("revoked a session belonging to another user")
+	}
+	if !s.RevokeSession(u.ID, other.ID) {
+		t.Fatal("RevokeSession failed")
+	}
+	if _, ok := s.UserByToken(second); ok {
+		t.Fatal("revoked token still authenticates")
+	}
+	if _, ok := s.UserByToken(first); !ok {
+		t.Fatal("current token was revoked")
+	}
+	if n := len(s.Sessions(u.ID, first)); n != 1 {
+		t.Fatalf("Sessions after revoke = %d, want 1", n)
+	}
+}
+
+func TestTokenSessionMigration(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, "Nuvio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateUser("alice", "secret", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := s.IssueToken(u.ID, SessionMeta{DeviceName: "Linux · Chrome", Client: "Nuvio Web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recreate the pre-session tokens table shape.
+	db, err := sql.Open("sqlite", filepath.Join(dir, "nuvio.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, col := range []string{"device_id", "device_name", "client", "client_version", "remote_address", "last_seen"} {
+		if _, err := db.Exec("ALTER TABLE tokens DROP COLUMN " + col); err != nil {
+			db.Close()
+			t.Fatalf("drop %s: %v", col, err)
+		}
+	}
+	db.Close()
+
+	reopened, err := Open(dir, "Nuvio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, ok := reopened.UserByToken(tok); !ok {
+		t.Fatal("legacy token no longer authenticates")
+	}
+	list := reopened.Sessions(u.ID, tok)
+	if len(list) != 1 {
+		t.Fatalf("Sessions = %d, want 1", len(list))
+	}
+	if list[0].DeviceName != "" {
+		t.Fatalf("legacy session unexpectedly has a device name: %+v", list[0])
+	}
+	if list[0].LastSeen.IsZero() {
+		t.Fatal("legacy session has no last-seen timestamp")
+	}
+	reopened.DescribeToken(tok, SessionMeta{DeviceName: "Linux · Chrome", Client: "Nuvio Web"})
+	list = reopened.Sessions(u.ID, tok)
+	if list[0].DeviceName != "Linux · Chrome" || list[0].Client != "Nuvio Web" {
+		t.Fatalf("DescribeToken did not fill metadata: %+v", list[0])
 	}
 }

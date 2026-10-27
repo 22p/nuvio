@@ -5,16 +5,19 @@ import {
   changePassword,
   getAdminOverview,
   getScanStatus,
+  getSessions,
   removeLibrary,
+  revokeSession,
   saveServerSettings,
   triggerScan,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { usePrefs } from '../lib/prefs'
-import type { AdminOverview } from '../lib/types'
+import type { AdminOverview, DeviceSession } from '../lib/types'
 import { Spinner } from '../components/Media'
 import { Switch } from '../components/Controls'
 import { languages, t, useI18n, type Lang } from '../lib/i18n'
+import { initials, relativeTime } from '../lib/format'
 import {
   IconInfo,
   IconRefresh,
@@ -71,6 +74,7 @@ export function SettingsPage() {
           <a href="#playback">{t("Play")}</a>
           <a href="#subtitles">{t("Subtitles")}</a>
           <a href="#account">{t("Account")}</a>
+          <a href="#sessions">{t("Devices")}</a>
           {isAdmin && <a href="#server">{t("Server")}</a>}
           <a href="#about">{t("About")}</a>
         </aside>
@@ -246,6 +250,14 @@ export function SettingsPage() {
             <ChangePassword />
           </section>
 
+          <section id="sessions" className="settings-card">
+            <header>
+              <h2>{t("Devices")}</h2>
+              <p>{t("Devices signed in to your account. Revoking one requires signing in again on that device.")}</p>
+            </header>
+            <DeviceList />
+          </section>
+
           {isAdmin && (
             <AdminSection onConfigChange={refreshConfig} />
           )}
@@ -380,6 +392,81 @@ function ChangePassword() {
       {msg && <div className="form-ok">{msg}</div>}
       <button className="btn btn-ghost btn-sm" disabled={busy}>{t("Update password")}</button>
     </form>
+  )
+}
+
+function DeviceList() {
+  const { signOut } = useAuth()
+  const [devices, setDevices] = useState<DeviceSession[]>([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    getSessions()
+      .then((list) => {
+        if (alive) setDevices(list || [])
+      })
+      .catch((err) => {
+        if (alive) setError(err instanceof Error ? err.message : t("Could not load devices"))
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const revoke = async (device: DeviceSession) => {
+    if (!window.confirm(t("Revoke this device? It will need to sign in again."))) return
+    setBusy(device.id)
+    setError('')
+    try {
+      await revokeSession(device.id)
+      setDevices((prev) => prev.filter((d) => d.id !== device.id))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("Could not revoke this device"))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (loading) return <Spinner label={t("Loading devices…")} />
+
+  const label = (device: DeviceSession) => device.deviceName || device.client || t("Unknown device")
+
+  return (
+    <div className="device-list">
+      {error && <div className="inline-error">{t(error)}</div>}
+      {!devices.length && !error && <div className="setting-hint">{t("No devices found.")}</div>}
+      {devices.map((device) => (
+        <div className="device-row" key={device.id}>
+          <div className="device-avatar">{initials(label(device))}</div>
+          <div className="device-main">
+            <div className="device-name">
+              {label(device)}
+              {device.current && <span className="tag">{t("Current device")}</span>}
+            </div>
+            {(device.client || device.version) && (
+              <div className="device-meta">{[device.client, device.version].filter(Boolean).join(' · ')}</div>
+            )}
+            <div className="device-meta">
+              {device.address ? `${device.address} · ` : ''}
+              {t("Last active {0}", { 0: relativeTime(device.lastSeen) })}
+            </div>
+          </div>
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={busy === device.id}
+            onClick={() => (device.current ? signOut() : revoke(device))}
+          >
+            {device.current ? t("Sign out") : t("Revoke")}
+          </button>
+        </div>
+      ))}
+    </div>
   )
 }
 

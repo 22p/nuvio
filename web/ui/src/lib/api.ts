@@ -3,6 +3,7 @@ import type {
   AdminUser,
   AppConfig,
   AuthResult,
+  DeviceSession,
   JFItem,
   PlaybackInfo,
   QueryResult,
@@ -40,8 +41,31 @@ export function deviceId(): string {
   return id
 }
 
+// deviceLabel describes this browser to the server, e.g. "Linux · Chrome".
+// It is what the device manager shows for this sign-in.
+export function deviceLabel(): string {
+  const ua = navigator.userAgent
+  let os = ''
+  if (/Android/i.test(ua)) os = 'Android'
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS'
+  else if (/Windows/i.test(ua)) os = 'Windows'
+  else if (/CrOS/i.test(ua)) os = 'ChromeOS'
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS'
+  else if (/Linux/i.test(ua)) os = 'Linux'
+
+  let browser = ''
+  if (/Edg\//.test(ua)) browser = 'Edge'
+  else if (/OPR\//.test(ua)) browser = 'Opera'
+  else if (/Firefox\//.test(ua)) browser = 'Firefox'
+  else if (/CriOS\//.test(ua)) browser = 'Chrome'
+  else if (/Chrome\//.test(ua)) browser = 'Chrome'
+  else if (/Safari\//.test(ua)) browser = 'Safari'
+
+  return [os, browser].filter(Boolean).join(' · ') || 'Browser'
+}
+
 function authHeader(): string {
-  return `MediaBrowser Client="Nuvio Web", Device="Browser", DeviceId="${deviceId()}", Version="1.0.0"`
+  return `MediaBrowser Client="Nuvio Web", Device="${deviceLabel()}", DeviceId="${deviceId()}", Version="1.0.0"`
 }
 
 export async function api<T>(path: string, init: RequestInit = {}, token = getToken()): Promise<T> {
@@ -235,6 +259,9 @@ export function imageUrl(id: string, kind: 'Primary' | 'Backdrop' | 'Thumb' | 'L
 }
 
 export const getScanStatus = () => api<ScanStatus>('/api/app/scan')
+export const getSessions = () => api<DeviceSession[]>('/api/app/sessions')
+export const revokeSession = (id: string) =>
+  api<void>(`/api/app/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getAdminOverview = () => api<AdminOverview>('/api/admin/overview')
 export const triggerScan = () => api<{ scanning: boolean }>('/api/admin/scan', { method: 'POST' })
 

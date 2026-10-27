@@ -85,6 +85,21 @@ export function formatDate(value?: string): string {
   return d.toLocaleDateString(locale, { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
+// relativeTime renders a compact "last active" label for device sessions.
+export function relativeTime(value?: string): string {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const minutes = Math.floor(Math.max(0, Date.now() - d.getTime()) / 60_000)
+  if (minutes < 1) return t("just now")
+  if (minutes < 60) return t("{0} min ago", { 0: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t("{0} hr ago", { 0: hours })
+  const days = Math.floor(hours / 24)
+  if (days < 7) return t("{0} d ago", { 0: days })
+  return formatDate(value)
+}
+
 export function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
 }

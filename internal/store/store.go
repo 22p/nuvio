@@ -62,7 +62,13 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS tokens (
 	token TEXT PRIMARY KEY,
 	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-	created_at TEXT NOT NULL
+	created_at TEXT NOT NULL,
+	device_id TEXT NOT NULL DEFAULT '',
+	device_name TEXT NOT NULL DEFAULT '',
+	client TEXT NOT NULL DEFAULT '',
+	client_version TEXT NOT NULL DEFAULT '',
+	remote_address TEXT NOT NULL DEFAULT '',
+	last_seen TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS libraries (
 	id TEXT PRIMARY KEY,
@@ -133,6 +139,23 @@ func Open(dir, defaultServerName string) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("migrate users.%s: %w", col.name, err)
 		}
+	}
+	for _, col := range []struct{ name, ddl string }{
+		{"device_id", "TEXT NOT NULL DEFAULT ''"},
+		{"device_name", "TEXT NOT NULL DEFAULT ''"},
+		{"client", "TEXT NOT NULL DEFAULT ''"},
+		{"client_version", "TEXT NOT NULL DEFAULT ''"},
+		{"remote_address", "TEXT NOT NULL DEFAULT ''"},
+		{"last_seen", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumn(db, "tokens", col.name, col.ddl); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate tokens.%s: %w", col.name, err)
+		}
+	}
+	if _, err := db.Exec("UPDATE tokens SET last_seen = created_at WHERE last_seen = ''"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate tokens.last_seen: %w", err)
 	}
 	if err := migrateLibraryIDs(db); err != nil {
 		db.Close()
@@ -532,12 +555,46 @@ func (s *Store) Authenticate(name, password string) (*model.User, bool) {
 	return &u, true
 }
 
+// SessionMeta describes the client that opened a token. All fields are
+// optional; missing values are simply not displayed in the device list.
+type SessionMeta struct {
+	DeviceID   string
+	DeviceName string
+	Client     string
+	Version    string
+	Address    string
+}
+
+// Session is a signed-in device belonging to an account.
+type Session struct {
+	ID         string    `json:"id"`
+	DeviceName string    `json:"deviceName"`
+	Client     string    `json:"client"`
+	Version    string    `json:"version"`
+	Address    string    `json:"address"`
+	CreatedAt  time.Time `json:"createdAt"`
+	LastSeen   time.Time `json:"lastSeen"`
+	Current    bool      `json:"current"`
+}
+
+// sessionID is an opaque, stable handle for a token. The token itself never
+// leaves the server.
+func sessionID(token string) string {
+	sum := sha256.Sum256([]byte("session:" + token))
+	return hex.EncodeToString(sum[:8])
+}
+
+// tokenTouchInterval throttles last-seen writes on the hot authentication path.
+const tokenTouchInterval = 45 * time.Second
+
 // IssueToken mints a persistent access token for a user.
-func (s *Store) IssueToken(userID string) (string, error) {
+func (s *Store) IssueToken(userID string, meta SessionMeta) (string, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for i := 0; i < 3; i++ {
 		tok := randomHex(24)
-		_, err := s.db.Exec("INSERT INTO tokens(token, user_id, created_at) VALUES(?, ?, ?)",
-			tok, userID, time.Now().UTC().Format(time.RFC3339Nano))
+		_, err := s.db.Exec(`INSERT INTO tokens(token, user_id, created_at, device_id, device_name, client, client_version, remote_address, last_seen)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			tok, userID, now, meta.DeviceID, meta.DeviceName, meta.Client, meta.Version, meta.Address, now)
 		if err == nil {
 			return tok, nil
 		}
@@ -551,13 +608,17 @@ func (s *Store) UserByToken(token string) (*model.User, bool) {
 		return nil, false
 	}
 	var u model.User
-	var created, libs string
+	var created, libs, seen string
 	var admin int
-	err := s.db.QueryRow(`SELECT u.id, u.name, u.is_admin, u.created_at, u.password_hash <> '', u.allowed_libraries, u.allow_transcode, u.allow_remux
+	err := s.db.QueryRow(`SELECT u.id, u.name, u.is_admin, u.created_at, u.password_hash <> '', u.allowed_libraries, u.allow_transcode, u.allow_remux, t.last_seen
 		FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.token = ?`, token).
-		Scan(&u.ID, &u.Name, &admin, &created, &u.HasPassword, &libs, &u.AllowTranscode, &u.AllowRemux)
+		Scan(&u.ID, &u.Name, &admin, &created, &u.HasPassword, &libs, &u.AllowTranscode, &u.AllowRemux, &seen)
 	if err != nil {
 		return nil, false
+	}
+	if lastSeen, err := time.Parse(time.RFC3339Nano, seen); err != nil || time.Since(lastSeen) > tokenTouchInterval {
+		_, _ = s.db.Exec("UPDATE tokens SET last_seen = ? WHERE token = ?",
+			time.Now().UTC().Format(time.RFC3339Nano), token)
 	}
 	u.AllowedLibraries = decodeLibraries(libs)
 	u.IsAdmin = admin == 1
@@ -568,6 +629,85 @@ func (s *Store) UserByToken(token string) (*model.User, bool) {
 // RevokeToken invalidates a token.
 func (s *Store) RevokeToken(token string) {
 	_, _ = s.db.Exec("DELETE FROM tokens WHERE token = ?", token)
+}
+
+// Sessions lists the devices signed in to an account. The token supplied with
+// the current request is marked so the UI can keep it apart from the rest.
+func (s *Store) Sessions(userID, currentToken string) []Session {
+	rows, err := s.db.Query(`SELECT token, created_at, last_seen, device_name, client, client_version, remote_address
+		FROM tokens WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []Session{}
+	for rows.Next() {
+		var token, created, seen string
+		var sess Session
+		if err := rows.Scan(&token, &created, &seen, &sess.DeviceName, &sess.Client, &sess.Version, &sess.Address); err != nil {
+			continue
+		}
+		sess.ID = sessionID(token)
+		sess.Current = currentToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(currentToken)) == 1
+		sess.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		sess.LastSeen, _ = time.Parse(time.RFC3339Nano, seen)
+		if sess.LastSeen.IsZero() {
+			sess.LastSeen = sess.CreatedAt
+		}
+		out = append(out, sess)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Current != out[j].Current {
+			return out[i].Current
+		}
+		return out[i].LastSeen.After(out[j].LastSeen)
+	})
+	return out
+}
+
+// DescribeToken fills in missing device metadata for tokens minted before
+// session tracking existed. Existing values are never overwritten.
+func (s *Store) DescribeToken(token string, meta SessionMeta) {
+	if token == "" {
+		return
+	}
+	_, _ = s.db.Exec(`UPDATE tokens SET
+		device_name = CASE WHEN device_name = '' THEN ? ELSE device_name END,
+		client = CASE WHEN client = '' THEN ? ELSE client END,
+		remote_address = CASE WHEN remote_address = '' THEN ? ELSE remote_address END
+		WHERE token = ?`, meta.DeviceName, meta.Client, meta.Address, token)
+}
+
+// RevokeSession invalidates one of a user's tokens by its opaque session id.
+func (s *Store) RevokeSession(userID, id string) bool {
+	if id == "" {
+		return false
+	}
+	rows, err := s.db.Query("SELECT token FROM tokens WHERE user_id = ?", userID)
+	if err != nil {
+		return false
+	}
+	target := ""
+	for rows.Next() {
+		var token string
+		if rows.Scan(&token) != nil {
+			continue
+		}
+		if sessionID(token) == id {
+			target = token
+			break
+		}
+	}
+	rows.Close()
+	if target == "" {
+		return false
+	}
+	res, err := s.db.Exec("DELETE FROM tokens WHERE token = ? AND user_id = ?", target, userID)
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
 }
 
 // Libraries returns the configured libraries.

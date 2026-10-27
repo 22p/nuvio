@@ -229,6 +229,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/app/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/app/scan", s.handleScanStatus)
 	mux.HandleFunc("POST /api/app/password", s.handlePassword)
+	mux.HandleFunc("GET /api/app/sessions", s.handleSessions)
+	mux.HandleFunc("DELETE /api/app/sessions/{id}", s.handleRevokeSession)
 	mux.HandleFunc("GET /api/admin/overview", s.handleAdminOverview)
 	mux.HandleFunc("GET /api/admin/users", s.handleAdminUsers)
 	mux.HandleFunc("POST /api/admin/users", s.handleAdminCreateUser)
@@ -484,7 +486,11 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.Catalog.SetViews(s.Store.Libraries())
-	token, err := s.Store.IssueToken(u.ID)
+	token, err := s.Store.IssueToken(u.ID, store.SessionMeta{
+		DeviceName: jellyfin.DeviceLabel(r),
+		Client:     "Nuvio Web",
+		Address:    jellyfin.ClientAddress(r),
+	})
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"error": "Could not create a session"})
 		return
@@ -542,6 +548,45 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Store.SetPassword(u.ID, body.New); err != nil {
 		writeJSON(w, 500, map[string]any{"error": "Update failed"})
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// Sessions API -----------------------------------------------------------
+
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.API.UserFromRequest(r)
+	if !ok {
+		writeJSON(w, 401, map[string]any{"error": "Not signed in"})
+		return
+	}
+	sessions := s.Store.Sessions(u.ID, tokenOf(r))
+	for _, sess := range sessions {
+		if sess.Current && sess.DeviceName == "" {
+			s.Store.DescribeToken(tokenOf(r), store.SessionMeta{
+				DeviceName: jellyfin.DeviceLabel(r),
+				Client:     "Nuvio Web",
+				Address:    jellyfin.ClientAddress(r),
+			})
+			sessions = s.Store.Sessions(u.ID, tokenOf(r))
+			break
+		}
+	}
+	if sessions == nil {
+		sessions = []store.Session{}
+	}
+	writeJSON(w, 200, sessions)
+}
+
+func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.API.UserFromRequest(r)
+	if !ok {
+		writeJSON(w, 401, map[string]any{"error": "Not signed in"})
+		return
+	}
+	if !s.Store.RevokeSession(u.ID, r.PathValue("id")) {
+		writeJSON(w, 404, map[string]any{"error": "Device not found"})
 		return
 	}
 	w.WriteHeader(204)

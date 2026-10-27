@@ -64,6 +64,14 @@ export function IconStar({ size = 16, className }: IconProps) {
   )
 }
 
+export function IconHeart({ size = 20, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M12 20s-7.5-4.6-7.5-9.7A4.3 4.3 0 0 1 12 6.8a4.3 4.3 0 0 1 7.5 3.5C19.5 15.4 12 20 12 20Z" />
+    </svg>
+  )
+}
+
 export function IconChevronLeft({ size = 24, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>

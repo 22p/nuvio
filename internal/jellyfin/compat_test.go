@@ -33,7 +33,7 @@ func testUser(t *testing.T, a *API) (*model.User, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, err := a.Store.IssueToken(u.ID)
+	tok, err := a.Store.IssueToken(u.ID, store.SessionMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestImagesRespectTokenPermissions(t *testing.T) {
 	if err := a.Store.UpdateUserPolicy(u.ID, []string{demo.MovieLibraryID}, true, true); err != nil {
 		t.Fatal(err)
 	}
-	tok, err := a.Store.IssueToken(u.ID)
+	tok, err := a.Store.IssueToken(u.ID, store.SessionMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}

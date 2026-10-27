@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"runtime"
 	"sort"
@@ -292,7 +293,7 @@ func (a *API) rootDTO() itemDTO {
 	return itemDTO{
 		Name: it.Name, ServerId: a.Store.ServerID(), Id: rootItemID, SortName: it.SortName,
 		Type: "CollectionFolder", IsFolder: true,
-		ImageTags: map[string]string{"Primary": imageTag(it, "Primary")},
+		ImageTags:         map[string]string{"Primary": imageTag(it, "Primary")},
 		BackdropImageTags: []string{}, ParentBackdropImageTags: []string{},
 		PlayAccess: "Full", LocationType: "Virtual",
 		UserData: &userItemData{Key: rootItemID},
@@ -406,6 +407,72 @@ func mediaBrowserParam(header, name string) string {
 	return strings.TrimSpace(strings.Trim(s, `"`))
 }
 
+// ClientAddress returns the caller's IP, honoring the headers set by a reverse
+// proxy in front of the server.
+func ClientAddress(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			xff = xff[:i]
+		}
+		if v := strings.TrimSpace(xff); v != "" {
+			return v
+		}
+	}
+	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+		return v
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// DeviceLabel derives a readable device name from the user agent, for clients
+// that do not send X-Emby-Device-Name. The format matches the web UI's
+// "Linux · Chrome" style.
+func DeviceLabel(r *http.Request) string {
+	ua := r.UserAgent()
+	osName := ""
+	switch {
+	case strings.Contains(ua, "Android"):
+		osName = "Android"
+	case strings.Contains(ua, "iPhone"), strings.Contains(ua, "iPad"), strings.Contains(ua, "iPod"):
+		osName = "iOS"
+	case strings.Contains(ua, "Windows"):
+		osName = "Windows"
+	case strings.Contains(ua, "CrOS"):
+		osName = "ChromeOS"
+	case strings.Contains(ua, "Mac OS X"), strings.Contains(ua, "Macintosh"):
+		osName = "macOS"
+	case strings.Contains(ua, "Linux"):
+		osName = "Linux"
+	}
+	browser := ""
+	switch {
+	case strings.Contains(ua, "Edg/"):
+		browser = "Edge"
+	case strings.Contains(ua, "OPR/"):
+		browser = "Opera"
+	case strings.Contains(ua, "Firefox/"):
+		browser = "Firefox"
+	case strings.Contains(ua, "CriOS/"):
+		browser = "Chrome"
+	case strings.Contains(ua, "Chrome/"):
+		browser = "Chrome"
+	case strings.Contains(ua, "Safari/"):
+		browser = "Safari"
+	}
+	switch {
+	case osName != "" && browser != "":
+		return osName + " · " + browser
+	case browser != "":
+		return browser
+	case osName != "":
+		return osName
+	}
+	return "Browser"
+}
+
 func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"Username"`
@@ -425,13 +492,11 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "Invalid username or password")
 		return
 	}
-	token, err := a.Store.IssueToken(u.ID)
-	if err != nil {
-		writeError(w, 500, "Could not create a session")
-		return
-	}
 	now := time.Now().UTC()
-	auth := r.Header.Get("Authorization")
+	auth := r.Header.Get("X-Emby-Authorization")
+	if auth == "" {
+		auth = r.Header.Get("Authorization")
+	}
 	client := r.Header.Get("X-Emby-Client")
 	if client == "" {
 		client = mediaBrowserParam(auth, "Client")
@@ -447,6 +512,20 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 	clientVersion := r.Header.Get("X-Emby-Client-Version")
 	if clientVersion == "" {
 		clientVersion = mediaBrowserParam(auth, "Version")
+	}
+	if deviceName == "" {
+		deviceName = DeviceLabel(r)
+	}
+	token, err := a.Store.IssueToken(u.ID, store.SessionMeta{
+		DeviceID:   deviceID,
+		DeviceName: deviceName,
+		Client:     client,
+		Version:    clientVersion,
+		Address:    ClientAddress(r),
+	})
+	if err != nil {
+		writeError(w, 500, "Could not create a session")
+		return
 	}
 	log.Printf("Login: user=%q client=%q device=%q version=%q",
 		u.Name, client, deviceName, clientVersion,

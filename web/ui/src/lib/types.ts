@@ -156,6 +156,17 @@ export interface AdminUser {
   createdAt: string
 }
 
+export interface DeviceSession {
+  id: string
+  deviceName: string
+  client: string
+  version: string
+  address: string
+  createdAt: string
+  lastSeen: string
+  current: boolean
+}
+
 export interface AdminOverview {
   serverName: string
   version: string
