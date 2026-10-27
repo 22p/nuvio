@@ -574,6 +574,10 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	for i := range sessions {
+		sessions[i].DeviceName = jellyfin.DecodeClientText(sessions[i].DeviceName)
+		sessions[i].Client = jellyfin.DecodeClientText(sessions[i].Client)
+	}
 	if sessions == nil {
 		sessions = []store.Session{}
 	}

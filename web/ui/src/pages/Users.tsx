@@ -54,7 +54,7 @@ export function UsersPage() {
   }
 
   return (
-    <div className="page-pad settings-page">
+    <div className="page-pad settings-page users-page">
       <div className="page-heading">
         <div>
           <div className="eyebrow">{t("Server")}</div>

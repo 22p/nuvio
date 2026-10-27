@@ -1866,6 +1866,11 @@ select option:disabled {
   margin: 0 auto;
   padding-bottom: 36px;
 }
+.users-page > .settings-card {
+  width: min(1116px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+}
 .settings-layout {
   display: grid;
   grid-template-columns: 170px minmax(0, 900px);

@@ -429,3 +429,34 @@ func TestQueryParameterCasing(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginDecodesPercentEncodedDeviceName(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, _ := testUser(t, a)
+
+	req := httptest.NewRequest("POST", "/Users/AuthenticateByName", strings.NewReader(`{"Username":"alice","Pw":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Emby-Authorization",
+		`MediaBrowser Client="Filebar", Device="%E7%9C%9F%E6%88%91GT6", DeviceId="filebar-1", Version="1.4.13"`)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("login = %d", rec.Code)
+	}
+	var body struct {
+		AccessToken string `json:"AccessToken"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	sessions := a.Store.Sessions(u.ID, body.AccessToken)
+	var name string
+	for _, s := range sessions {
+		if s.Current {
+			name = s.DeviceName
+		}
+	}
+	if name != "真我GT6" {
+		t.Fatalf("device name = %q, want 真我GT6", name)
+	}
+}

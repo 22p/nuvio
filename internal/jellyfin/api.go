@@ -462,6 +462,18 @@ func ClientAddress(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// DecodeClientText reverses the percent-encoding some clients apply to
+// user-visible strings such as their device name ("真我GT6" arrives encoded).
+func DecodeClientText(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	if v, err := url.PathUnescape(s); err == nil && v != "" {
+		return v
+	}
+	return s
+}
+
 // DeviceLabel derives a readable device name from the user agent, for clients
 // that do not send X-Emby-Device-Name. The format matches the web UI's
 // "Linux · Chrome" style.
@@ -551,6 +563,8 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 	if deviceName == "" {
 		deviceName = DeviceLabel(r)
 	}
+	client = DecodeClientText(client)
+	deviceName = DecodeClientText(deviceName)
 	token, err := a.Store.IssueToken(u.ID, store.SessionMeta{
 		DeviceID:   deviceID,
 		DeviceName: deviceName,
