@@ -175,7 +175,7 @@ func DefaultServerSettings(name string) ServerSettings {
 		RemuxEnabled:     true,
 		MaxBitrateMbps:   20,
 		TranscodePreset:  "veryfast",
-		HardwareAccel:    "none",
+		HardwareAccel:    "auto",
 		MetadataLanguage: "zh-CN",
 	}
 }

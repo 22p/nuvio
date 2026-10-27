@@ -39,12 +39,14 @@ type API struct {
 	DemoFile string
 	Started  time.Time
 
-	toolsMu   sync.RWMutex
-	ffmpeg    string
-	ffprobe   string
-	encoder   string
-	imageMu   sync.Mutex
-	imageHTTP *http.Client
+	toolsMu     sync.RWMutex
+	ffmpeg      string
+	ffprobe     string
+	encoder     string
+	vaapiDevice string
+	qsvDevice   string
+	imageMu     sync.Mutex
+	imageHTTP   *http.Client
 }
 
 // SetTools updates ffmpeg/ffprobe paths at runtime.
@@ -59,6 +61,40 @@ func (a *API) SetEncoder(name string) {
 	a.toolsMu.Lock()
 	a.encoder = name
 	a.toolsMu.Unlock()
+}
+
+// SetHardware records the detected hardware render nodes. An empty string
+// means that backend is unavailable.
+func (a *API) SetHardware(vaapiDevice, qsvDevice string) {
+	a.toolsMu.Lock()
+	a.vaapiDevice, a.qsvDevice = vaapiDevice, qsvDevice
+	a.toolsMu.Unlock()
+}
+
+// HardwareDevice returns the render node for the requested backend.
+func (a *API) HardwareDevice(mode string) string {
+	a.toolsMu.RLock()
+	defer a.toolsMu.RUnlock()
+	switch mode {
+	case "vaapi":
+		return a.vaapiDevice
+	case "qsv":
+		return a.qsvDevice
+	}
+	return ""
+}
+
+// HardwareMode returns the preferred detected backend (VAAPI first).
+func (a *API) HardwareMode() string {
+	a.toolsMu.RLock()
+	defer a.toolsMu.RUnlock()
+	if a.vaapiDevice != "" {
+		return "vaapi"
+	}
+	if a.qsvDevice != "" {
+		return "qsv"
+	}
+	return ""
 }
 
 // Encoder returns the selected H.264 encoder.

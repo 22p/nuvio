@@ -13,7 +13,10 @@ COPY --from=web /app/web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/nuvio ./cmd/nuvio
 
 FROM alpine:3.24
-RUN apk add --no-cache ffmpeg ca-certificates tzdata
+RUN apk add --no-cache ffmpeg ca-certificates tzdata libva libva-utils mesa-va-gallium \
+    && if [ "$(apk --print-arch)" = "x86_64" ]; then \
+         apk add --no-cache libvpl intel-media-driver libva-intel-driver; \
+       fi
 COPY --from=build /out/nuvio /usr/local/bin/nuvio
 VOLUME ["/data"]
 EXPOSE 8096

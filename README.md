@@ -13,7 +13,7 @@
 - **媒体扫描**：电影目录、剧集 `Show/Season 01/S01E01`、扁平目录、电影/剧集混合库；从文件名解析标题与年份。读取同目录下的 `movie.nfo` / `剧集名.nfo`（标题、简介、评分、分级、类型、演员）以及 `folder.jpg`、`backdrop.jpg`、`landscape.jpg`、`logo.png`，本地元数据与图片优先于在线数据。扫描结果写入 SQLite，重启后直接读取，不会重复扫描。
 - **在线元数据（可选）**：填写 TMDb API Key 后，重新扫描会补全海报、背景图、简介、评分、类型与演员表；剧集海报和演员会继承给季和单集，图片经服务器代理并缓存到磁盘。
 - **字幕**：自动发现同名字幕 `.srt` / `.vtt` / `.ass` / `.ssa`，统一转换为 WebVTT；ffmpeg 可提取内嵌字幕；支持语言、字号、颜色、背景、描边等偏好。
-- **播放**：浏览器兼容格式直连播放；容器不兼容但编码兼容（H.264 + AAC/MP3）时优先**转封装**（`-c copy`，不重新编码）；只有编码或码率不兼容时才转码为 HLS。
+- **播放**：浏览器兼容格式直连播放；容器不兼容但编码兼容（H.264 + AAC/MP3）时优先**转封装**（`-c copy`，不重新编码）；只有编码或码率不兼容时才转码为 HLS。可选用 VAAPI（Intel / AMD）或 QSV（Intel）硬件解码与编码，失败自动回退软件。
 - **账户与权限**：管理员/普通用户、PBKDF2-SHA256 密码哈希、持久化访问令牌；独立「用户」页面可为每个账号设置可见媒体库、转码、转封装，并支持重置密码与删除账号。
 - **自生成封面**：没有海报的条目会生成确定性的抽象封面与背景图，媒体库开箱即用。
 - **SQLite 存储**：用户、令牌、媒体库、片库索引与观看进度统一存放在 `data/nuvio.db`（WAL 模式，纯 Go 驱动，无需 CGO）。
@@ -51,6 +51,18 @@ cd web/ui && npm run dev                # 终端 2（默认代理到 :8096）
 docker build -t nuvio .
 docker run -d --name nuvio -p 8096:8096 -v nuvio-data:/data nuvio
 ```
+
+### 硬件转码（VAAPI / QSV）
+
+Docker 镜像内置 Intel（`intel-media-driver` / `libva-intel-driver`）与 AMD（`mesa-va-gallium`）的 VAAPI 驱动，以及 Intel QSV 运行时 `libvpl`（仅 x86_64）。把宿主机的渲染节点传入容器即可：
+
+```bash
+docker run -d --name nuvio -p 8096:8096 \
+  --device /dev/dri:/dev/dri \
+  -v nuvio-data:/data nuvio
+```
+
+启动日志会打印 `Hardware acceleration: vaapi (/dev/dri/renderD128)`，同时检测到 QSV 时会一并列出。设置 → 服务器 → 转码中可选择 `Auto`、`VAAPI (Intel / AMD)`、`QSV (Intel)` 或 `Off`；硬件初始化失败或某个文件无法硬解时会自动回退到 `libx264` 软件编码。宿主机需要安装对应的内核驱动（Intel `i915`/`xe`、AMD `amdgpu`）和 VAAPI 驱动（Debian/Ubuntu 可安装 `mesa-va-drivers`、`intel-media-va-driver-non-free`），裸机运行时把运行用户加入 `render` 组。
 
 ## 连接官方 Jellyfin 客户端
 

@@ -391,6 +391,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   const [serverName, setServerName] = useState('')
   const [transcode, setTranscode] = useState(true)
   const [remux, setRemux] = useState(true)
+  const [hardwareAccel, setHardwareAccel] = useState('auto')
   const [maxBitrate, setMaxBitrate] = useState(20)
   const [preset, setPreset] = useState('veryfast')
   const [ffmpegPath, setFfmpegPath] = useState('')
@@ -413,6 +414,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       setServerName(data.serverName)
       setTranscode(data.settings.transcodeEnabled)
       setRemux(data.settings.remuxEnabled !== false)
+      setHardwareAccel(data.settings.hardwareAccel || 'auto')
       setMaxBitrate(data.settings.maxBitrateMbps)
       setPreset(data.settings.transcodePreset || 'veryfast')
       setFfmpegPath(data.settings.ffmpegPath || '')
@@ -460,6 +462,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
         serverName,
         transcodeEnabled: transcode,
         remuxEnabled: remux,
+        hardwareAccel,
         maxBitrateMbps: maxBitrate,
         transcodePreset: preset,
         ffmpegPath,
@@ -629,11 +632,20 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
         <div className="admin-block">
           <div className="admin-block-head">
             <h3>{t("Transcoding")}</h3>
-            <span className={`status-dot ${overview.ffmpeg ? 'ok' : 'warn'}`}>
-              {overview.ffmpeg
-                ? t("ffmpeg ready{0}", { 0: overview.encoder ? ` · ${overview.encoder}` : '' })
-                : t("ffmpeg not found")}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              <span className={`status-dot ${overview.ffmpeg ? 'ok' : 'warn'}`}>
+                {overview.ffmpeg
+                  ? t("ffmpeg ready{0}", { 0: overview.encoder ? ` · ${overview.encoder}` : '' })
+                  : t("ffmpeg not found")}
+              </span>
+              <span className={`status-dot ${overview.hardware ? 'ok' : 'warn'}`}>
+                {overview.hardware === 'qsv'
+                  ? t("QSV ready")
+                  : overview.hardware
+                    ? t("VAAPI ready")
+                    : t("Hardware unavailable")}
+              </span>
+            </div>
           </div>
           {!overview.ffmpeg && (
             <p className="hint-box">{t("Without ffmpeg only direct play is possible. Formats the browser cannot play, such as MKV/HEVC, need transcoding. Install ffmpeg on the server (e.g.")}{ ' '}<code>apt install ffmpeg</code>{t(") and enter the path here.")}</p>
@@ -651,6 +663,22 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               <div className="setting-hint">{t("When only the container is incompatible, package HLS with -c copy instead of re-encoding.")}</div>
             </div>
             <Switch checked={remux} onChange={setRemux} />
+          </div>
+          <div className="setting-row">
+            <div>
+              <div className="setting-label">{t("Hardware acceleration")}</div>
+              <div className="setting-hint">{t("Uses VAAPI (Intel / AMD) or QSV (Intel) through /dev/dri. Falls back to software when unavailable.")}</div>
+            </div>
+            <Select
+              value={hardwareAccel}
+              options={[
+                { value: 'auto', label: t("Auto") },
+                { value: 'vaapi', label: 'VAAPI (Intel / AMD)' },
+                { value: 'qsv', label: 'QSV (Intel)' },
+                { value: 'none', label: t("Off") },
+              ]}
+              onChange={setHardwareAccel}
+            />
           </div>
           <div className="form-grid-3">
             <label className="field">

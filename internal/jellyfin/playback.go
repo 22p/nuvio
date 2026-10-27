@@ -520,16 +520,26 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 	if psid == "" {
 		psid = randomHex(12)
 	}
+	mode := strings.ToLower(strings.TrimSpace(settings.HardwareAccel))
+	if mode == "" || mode == "auto" {
+		mode = a.HardwareMode()
+	}
+	device := a.HardwareDevice(mode)
+	if device == "" {
+		mode = ""
+	}
 	opts := hls.Options{
-		BitrateKbps: int(hls.ParseInt(q.Get("MaxStreamingBitrate"), 8_000_000) / 1000),
-		AudioIndex:  hls.ParseInt(q.Get("AudioStreamIndex"), 1),
-		StartTicks:  int64(hls.ParseInt(q.Get("StartTimeTicks"), 0)),
-		Height:      hls.ParseInt(q.Get("Height"), 720),
-		Width:       hls.ParseInt(q.Get("Width"), 0),
-		Preset:      settings.TranscodePreset,
-		Hardware:    settings.HardwareAccel,
-		Encoder:     a.Encoder(),
-		Copy:        remux,
+		BitrateKbps:    int(hls.ParseInt(q.Get("MaxStreamingBitrate"), 8_000_000) / 1000),
+		AudioIndex:     hls.ParseInt(q.Get("AudioStreamIndex"), 1),
+		StartTicks:     int64(hls.ParseInt(q.Get("StartTimeTicks"), 0)),
+		Height:         hls.ParseInt(q.Get("Height"), 720),
+		Width:          hls.ParseInt(q.Get("Width"), 0),
+		Preset:         settings.TranscodePreset,
+		Hardware:       mode,
+		HardwareDevice: device,
+		VideoCodec:     it.Media.VideoCodec,
+		Encoder:        a.Encoder(),
+		Copy:           remux,
 	}
 	if remux && it.Media != nil {
 		// Repackaging keeps the original resolution and bitrate.
@@ -572,6 +582,12 @@ func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if file == "main.m3u8" {
 		path, ok := sess.WaitForPlaylist(25 * time.Second)
+		if !ok {
+			if next, retried := a.HLS.FallbackSoftware(sid); retried {
+				sess = next
+				path, ok = sess.WaitForPlaylist(25 * time.Second)
+			}
+		}
 		if !ok {
 			msg := sess.Err()
 			if msg == "" {

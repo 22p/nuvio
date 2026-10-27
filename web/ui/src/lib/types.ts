@@ -164,6 +164,7 @@ export interface AdminOverview {
   ffmpeg: string
   ffprobe: string
   encoder?: string
+  hardware?: string
   scan: ScanStatus
   counts: Record<string, number>
   libraries: LibraryInfo[]

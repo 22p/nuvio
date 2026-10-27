@@ -26,7 +26,11 @@ type Options struct {
 	Width       int
 	Preset      string
 	Hardware    string
-	Encoder     string
+	// HardwareDevice is the VAAPI render node, e.g. /dev/dri/renderD128.
+	HardwareDevice string
+	// VideoCodec is the source codec, used to pick a QSV decoder.
+	VideoCodec string
+	Encoder    string
 	// Copy repackages the existing streams (-c copy) instead of encoding.
 	Copy bool
 }
@@ -48,6 +52,10 @@ type Session struct {
 	err    string
 	stderr strings.Builder
 	done   chan struct{}
+
+	opts          Options
+	itemPath      string
+	fallbackTried bool
 }
 
 // Manager owns active sessions.
@@ -123,51 +131,10 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 		Copy:       opts.Copy,
 		CreatedAt:  time.Now(),
 		done:       make(chan struct{}),
+		opts:       opts,
+		itemPath:   itemPath,
 	}
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
-	if opts.StartTicks > 0 {
-		args = append(args, "-ss", fmt.Sprintf("%.3f", float64(opts.StartTicks)/10_000_000))
-	}
-	encoder := opts.Encoder
-	if encoder == "" {
-		encoder = "libx264"
-	}
-	args = append(args, "-i", itemPath,
-		"-map", "0:v:0",
-		"-map", fmt.Sprintf("0:a:%d?", max(opts.AudioIndex-1, 0)),
-	)
-	if opts.Copy {
-		args = append(args,
-			"-c", "copy",
-			"-avoid_negative_ts", "make_zero",
-		)
-	} else {
-		args = append(args, "-c:v", encoder)
-		if encoder == "libx264" {
-			args = append(args, "-preset", opts.Preset)
-		}
-		args = append(args,
-			"-force_key_frames", "expr:gte(t,n_forced*4)",
-			"-profile:v", "high",
-			"-pix_fmt", "yuv420p",
-			"-vf", fmt.Sprintf("scale=-2:%d", opts.Height),
-			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
-			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
-			"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),
-			"-c:a", "aac",
-			"-b:a", "160k",
-			"-ac", "2",
-		)
-	}
-	args = append(args,
-		"-f", "hls",
-		"-hls_time", "4",
-		"-hls_list_size", "0",
-		"-hls_playlist_type", "event",
-		"-hls_flags", "independent_segments",
-		"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
-		filepath.Join(dir, "main.m3u8"),
-	)
+	args := buildArgs(opts, itemPath, dir)
 	cmd := exec.Command(ff, args...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -210,6 +177,131 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	m.sessions[id] = s
 	m.mu.Unlock()
 	return s, nil
+}
+
+// buildArgs assembles the ffmpeg command line for one session. VAAPI is used
+// for both decoding and encoding when the caller selected hardware mode.
+func buildArgs(opts Options, itemPath, dir string) []string {
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
+	if opts.StartTicks > 0 {
+		args = append(args, "-ss", fmt.Sprintf("%.3f", float64(opts.StartTicks)/10_000_000))
+	}
+	vaapi := !opts.Copy && opts.Hardware == "vaapi" && opts.HardwareDevice != ""
+	qsv := !opts.Copy && opts.Hardware == "qsv" && opts.HardwareDevice != ""
+	if vaapi {
+		args = append(args,
+			"-hwaccel", "vaapi",
+			"-hwaccel_device", opts.HardwareDevice,
+			"-hwaccel_output_format", "vaapi",
+		)
+	}
+	if qsv {
+		args = append(args,
+			"-hwaccel", "qsv",
+			"-qsv_device", opts.HardwareDevice,
+			"-hwaccel_output_format", "qsv",
+		)
+		if decoder := qsvDecoder(opts.VideoCodec); decoder != "" {
+			args = append(args, "-c:v", decoder)
+		}
+	}
+	encoder := opts.Encoder
+	if encoder == "" {
+		encoder = "libx264"
+	}
+	args = append(args, "-i", itemPath,
+		"-map", "0:v:0",
+		"-map", fmt.Sprintf("0:a:%d?", max(opts.AudioIndex-1, 0)),
+	)
+	switch {
+	case opts.Copy:
+		args = append(args,
+			"-c", "copy",
+			"-avoid_negative_ts", "make_zero",
+		)
+	case vaapi:
+		args = append(args,
+			"-c:v", "h264_vaapi",
+			"-force_key_frames", "expr:gte(t,n_forced*4)",
+			"-profile:v", "high",
+			"-vf", fmt.Sprintf("scale_vaapi=w=-2:h=%d:format=nv12", opts.Height),
+			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
+			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
+			"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),
+			"-c:a", "aac",
+			"-b:a", "160k",
+			"-ac", "2",
+		)
+	case qsv:
+		width, height := evenDimensions(opts.Width, opts.Height)
+		args = append(args,
+			"-c:v", "h264_qsv",
+			"-force_key_frames", "expr:gte(t,n_forced*4)",
+			"-profile:v", "high",
+			"-vf", fmt.Sprintf("scale_qsv=w=%d:h=%d:format=nv12", width, height),
+			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
+			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
+			"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),
+			"-c:a", "aac",
+			"-b:a", "160k",
+			"-ac", "2",
+		)
+	default:
+		args = append(args, "-c:v", encoder)
+		if encoder == "libx264" {
+			args = append(args, "-preset", opts.Preset)
+		}
+		args = append(args,
+			"-force_key_frames", "expr:gte(t,n_forced*4)",
+			"-profile:v", "high",
+			"-pix_fmt", "yuv420p",
+			"-vf", fmt.Sprintf("scale=-2:%d", opts.Height),
+			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
+			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
+			"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),
+			"-c:a", "aac",
+			"-b:a", "160k",
+			"-ac", "2",
+		)
+	}
+	args = append(args,
+		"-f", "hls",
+		"-hls_time", "4",
+		"-hls_list_size", "0",
+		"-hls_playlist_type", "event",
+		"-hls_flags", "independent_segments",
+		"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
+		filepath.Join(dir, "main.m3u8"),
+	)
+	return args
+}
+
+// FallbackSoftware restarts a failed hardware session with software encoding.
+// It returns false once the session has already fallen back.
+func (m *Manager) FallbackSoftware(id string) (*Session, bool) {
+	m.mu.Lock()
+	s := m.sessions[id]
+	m.mu.Unlock()
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	if s.opts.Hardware == "" || s.fallbackTried {
+		s.mu.Unlock()
+		return nil, false
+	}
+	s.fallbackTried = true
+	opts := s.opts
+	itemID, itemPath := s.ItemID, s.itemPath
+	s.mu.Unlock()
+
+	opts.Hardware = ""
+	m.Stop(id)
+	next, err := m.start(id, itemID, itemPath, opts)
+	if err != nil {
+		return nil, false
+	}
+	return next, true
 }
 
 // Get resolves a session id.
@@ -364,6 +456,46 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// qsvDecoder maps a source codec to its Intel QSV decoder.
+func qsvDecoder(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "h264", "avc", "avc1":
+		return "h264_qsv"
+	case "hevc", "h265":
+		return "hevc_qsv"
+	case "vp9":
+		return "vp9_qsv"
+	case "av1", "av01":
+		return "av1_qsv"
+	case "mpeg2video", "mpeg2":
+		return "mpeg2_qsv"
+	case "vc1":
+		return "vc1_qsv"
+	case "mjpeg", "jpeg":
+		return "mjpeg_qsv"
+	}
+	return ""
+}
+
+// evenDimensions keeps QSV/VAAPI scaling on even pixel boundaries.
+func evenDimensions(width, height int) (int, int) {
+	if height <= 0 {
+		height = 1080
+	}
+	if width <= 0 {
+		width = height * 16 / 9
+	}
+	width &^= 1
+	height &^= 1
+	if width < 2 {
+		width = 2
+	}
+	if height < 2 {
+		height = 2
+	}
+	return width, height
 }
 
 func randomID() string {
