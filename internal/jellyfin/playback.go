@@ -80,6 +80,8 @@ func (a *API) registerMedia(mux *http.ServeMux) {
 		mux.HandleFunc("GET "+prefix+"/{itemId}/hls/{sessionId}/{file}", a.handleHLSFile)
 		mux.HandleFunc("GET "+prefix+"/{itemId}/{mediaSourceId}/Subtitles/{index}/{file}", a.handleSubtitle)
 		mux.HandleFunc("GET "+prefix+"/{itemId}/{mediaSourceId}/Subtitles/{index}/{start}/{file}", a.handleSubtitle)
+		// Legacy 10.x apps request subtitles without a media source id.
+		mux.HandleFunc("GET "+prefix+"/{itemId}/Subtitles/{index}/{file}", a.handleSubtitle)
 	}
 	mux.HandleFunc("GET /Items/{itemId}/Images/{imageType}", a.handleImage)
 	mux.HandleFunc("GET /Items/{itemId}/Images/{imageType}/{imageIndex}", a.handleImage)
@@ -99,7 +101,7 @@ func boolOr(p *bool, def bool) bool {
 }
 
 func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}

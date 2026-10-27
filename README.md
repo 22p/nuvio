@@ -86,7 +86,7 @@ http://<服务器地址>:8096
 | 进度 | `/Sessions/Playing`、`/Sessions/Playing/Progress`、`/Sessions/Playing/Stopped`、`/Sessions/Capabilities/Full` |
 | 用户数据 | `/UserPlayedItems/{itemId}`、`/UserFavoriteItems/{itemId}`、`/UserItems/{itemId}/UserData` |
 
-接口按 Jellyfin **12.4.0** 的路由组织，不再保留 10.x 的 `/Users/{id}/Items`、`/Users/{id}/PlayedItems` 等旧路径；旧版客户端请使用 v1.0.x。当前 Web 客户端已同步使用新路径。
+接口以 Jellyfin **12.4.0** 路由为主，同时保留 10.x 的 `/Users/{id}/Views`、`/Users/{id}/Items`、`/Users/{id}/PlayedItems`、`/Users/{id}/FavoriteItems` 等兼容别名，旧版客户端（Filebar、JellyWatch 等）可继续使用；内置 Web 客户端使用新路径。
 
 **未实现**：插件、Live TV、音乐库、Quick Connect、远程控制/投屏、部分高级筛选参数（如 `studioIds`、`tags`、`officialRatings`）。如果你的客户端依赖其中某项，会得到 404 或空结果，但登录、浏览和视频播放不依赖它们。
 

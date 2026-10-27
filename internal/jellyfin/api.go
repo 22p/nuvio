@@ -25,7 +25,7 @@ import (
 )
 
 // Version is Nuvio's own version.
-const Version = "1.1.0"
+const Version = "1.1.1"
 
 // ApiVersion is the Jellyfin server version we advertise. Native clients gate
 // features on this string.
@@ -130,6 +130,19 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /Users/Public", a.handlePublicUsers)
 	mux.HandleFunc("GET /Users/Me", a.handleMe)
 	mux.HandleFunc("GET /Users/{userId}", a.handleUser)
+	// Legacy 10.x user scoped aliases. New clients use the 12.4 routes below,
+	// but older Jellyfin apps still call these paths.
+	mux.HandleFunc("GET /Users/{userId}/Views", a.handleViews)
+	mux.HandleFunc("GET /Users/{userId}/Items", a.handleItems)
+	mux.HandleFunc("GET /Users/{userId}/Items/Resume", a.handleResume)
+	mux.HandleFunc("GET /Users/{userId}/Items/Latest", a.handleLatest)
+	mux.HandleFunc("GET /Users/{userId}/Items/{itemId}", a.handleItem)
+	mux.HandleFunc("POST /Users/{userId}/PlayedItems/{itemId}", a.handlePlayed(true))
+	mux.HandleFunc("DELETE /Users/{userId}/PlayedItems/{itemId}", a.handlePlayed(false))
+	mux.HandleFunc("POST /Users/{userId}/FavoriteItems/{itemId}", a.handleFavorite(true))
+	mux.HandleFunc("DELETE /Users/{userId}/FavoriteItems/{itemId}", a.handleFavorite(false))
+	mux.HandleFunc("POST /Users/{userId}/PlayingItems/{itemId}", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
+	mux.HandleFunc("DELETE /Users/{userId}/PlayingItems/{itemId}", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	mux.HandleFunc("GET /UserViews", a.handleViews)
 	mux.HandleFunc("GET /Items", a.handleItems)
 	mux.HandleFunc("GET /Items/Latest", a.handleLatest)
@@ -254,6 +267,15 @@ func (a *API) resolveUser(w http.ResponseWriter, r *http.Request, pathID string)
 		return nil, false
 	}
 	return target, true
+}
+
+// requestUserID resolves the target user for both the 12.x routes (userId
+// query) and the legacy user scoped routes (/Users/{userId}/...).
+func requestUserID(r *http.Request, pathID string) string {
+	if id := normalizeID(pathID); id != "" {
+		return id
+	}
+	return r.URL.Query().Get("userId")
 }
 
 // canSeeLibrary reports whether the user may browse a library. Admins and
@@ -589,7 +611,7 @@ func (a *API) handleUser(w http.ResponseWriter, r *http.Request) {
 // Views -------------------------------------------------------------------
 
 func (a *API) handleViews(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -777,7 +799,7 @@ func mediaTypeMatches(it *model.Item, mediaTypes []string) bool {
 }
 
 func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -856,7 +878,7 @@ func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleSuggestions(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -910,7 +932,7 @@ func containsFold(list []string, want string) bool {
 }
 
 func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -971,7 +993,7 @@ func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleLatest(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -1046,7 +1068,7 @@ func (a *API) handleLatest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -1084,7 +1106,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -1135,7 +1157,7 @@ func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
 // Shows -------------------------------------------------------------------
 
 func (a *API) handleSeasons(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -1156,7 +1178,7 @@ func (a *API) handleSeasons(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -1220,7 +1242,7 @@ func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -1290,7 +1312,7 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleSearchHints(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}
@@ -1348,7 +1370,7 @@ func mediaTypeOf(it *model.Item) string {
 
 func (a *API) handlePlayed(played bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+		u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 		if !ok {
 			return
 		}
@@ -1384,7 +1406,7 @@ func (a *API) itemAndEpisodes(it *model.Item) []string {
 
 func (a *API) handleFavorite(fav bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+		u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 		if !ok {
 			return
 		}
@@ -1399,7 +1421,7 @@ func (a *API) handleFavorite(fav bool) http.HandlerFunc {
 }
 
 func (a *API) handleUserData(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
 		return
 	}

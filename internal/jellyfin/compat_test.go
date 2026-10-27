@@ -166,10 +166,19 @@ func TestLatestAPIRoutes(t *testing.T) {
 		t.Fatalf("UserItems/Resume = %d", rec.Code)
 	}
 
-	// The legacy user scoped routes are intentionally gone.
+	// Legacy 10.x user scoped routes stay as compatibility aliases.
 	rec, _ = doJSON(t, h, "GET", "/Users/"+u.ID+"/Items", tok, "")
-	if rec.Code != 404 {
-		t.Fatalf("legacy /Users/{id}/Items = %d, want 404", rec.Code)
+	if rec.Code != 200 {
+		t.Fatalf("legacy /Users/{id}/Items = %d, want 200", rec.Code)
+	}
+	rec, _ = doJSON(t, h, "GET", "/Users/"+u.ID+"/Views", tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("legacy /Users/{id}/Views = %d, want 200", rec.Code)
+	}
+	movieID := demo.Items()[0].ID
+	rec, _ = doJSON(t, h, "GET", "/Users/"+u.ID+"/Items/"+movieID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("legacy item details = %d, want 200", rec.Code)
 	}
 }
 
