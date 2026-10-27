@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   getEpisodes,
   getItem,
@@ -34,6 +34,7 @@ export function DetailPage() {
   const { id = '' } = useParams()
   const { session } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [item, setItem] = useState<JFItem | null>(null)
   const [seasons, setSeasons] = useState<JFItem[]>([])
   const [allEpisodes, setAllEpisodes] = useState<JFItem[]>([])
@@ -153,6 +154,23 @@ export function DetailPage() {
   const audio = source?.MediaStreams?.find((s) => s.Type === 'Audio')
   const subtitles = source?.MediaStreams?.filter((s) => s.Type === 'Subtitle') || []
   const playerLink = playItem ? `/watch/${playItem.Id}` : ''
+  const cameFromPlayer = Boolean(
+    (location.state as { fromPlayer?: boolean } | null)?.fromPlayer,
+  )
+  // Never go back into the player: when the detail page was opened from
+  // playback, return to its logical parent instead of the history entry.
+  const parentPath =
+    isEpisode || isSeason
+      ? item.SeriesId
+        ? `/item/${item.SeriesId}`
+        : '/'
+      : item.ParentId
+        ? `/library/${item.ParentId}`
+        : '/'
+  const goBack = () => {
+    if (cameFromPlayer) navigate(parentPath)
+    else navigate(-1)
+  }
 
   const togglePlayed = async () => {
     if (!session || busy) return
@@ -186,7 +204,7 @@ export function DetailPage() {
     <div className={`detail-page ${isShowLike ? 'show-detail' : ''}`}>
       <div className="detail-backdrop" style={{ backgroundImage: `url(${backdrop})` }} />
       <div className="detail-scrim" />
-      <button className="back-button" onClick={() => navigate(-1)} aria-label={t("Back")}>
+      <button className="back-button" onClick={goBack} aria-label={t("Back")}>
         <IconBack size={20} />
       </button>
 

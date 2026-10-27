@@ -852,7 +852,7 @@ export function PlayerPage() {
       <div className="player-shade bottom" />
 
       <header className="player-topbar">
-        <button className="glass-button" onClick={() => navigate(`/item/${item.Id}`)} aria-label={t("Back")}>
+        <button className="glass-button" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })} aria-label={t("Back")}>
           <IconBack size={20} />
         </button>
         <div className="player-heading">
@@ -890,7 +890,7 @@ export function PlayerPage() {
             <h2>{t("Playback problem")}</h2>
             <p>{t(error)}</p>
             <div className="player-error-actions">
-              <button className="btn btn-ghost" onClick={() => navigate(`/item/${item.Id}`)}>{t("Back to details")}</button>
+              <button className="btn btn-ghost" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })}>{t("Back to details")}</button>
               <button
                 className="btn btn-primary"
                 onClick={() => {
@@ -1175,13 +1175,13 @@ export function PlayerPage() {
               <dd>{activeAudio?.DisplayTitle || '—'}</dd>
             </div>
           </dl>
-          <button className="menu-option" onClick={() => navigate(`/item/${item.Id}`)}>
+          <button className="menu-option" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })}>
             <span>{t("View details / episodes")}</span>
           </button>
         </div>
       )}
 
-      <button className="player-back-floating" onClick={() => navigate(`/item/${item.Id}`)} aria-label={t("Back to details")}>
+      <button className="player-back-floating" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })} aria-label={t("Back to details")}>
         <IconClose size={18} />
       </button>
     </div>

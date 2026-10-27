@@ -1263,7 +1263,7 @@ select option:disabled {
 .back-button {
   position: absolute;
   top: calc(var(--header-h) + 16px);
-  left: var(--gutter);
+  left: max(var(--gutter), calc((100% - 1600px) / 2 + var(--gutter)));
   z-index: 5;
   width: 40px;
   height: 40px;
@@ -3343,7 +3343,7 @@ select option:disabled {
     height: 640px;
   }
   .back-button {
-    left: 18px;
+    left: var(--gutter);
     top: calc(var(--header-h) + 10px);
   }
   .detail-hero {
