@@ -384,3 +384,48 @@ func TestUserDataItemIDPresent(t *testing.T) {
 		}
 	}
 }
+
+// Jellyfin's query binding is case-insensitive; clients such as Filebar send
+// PascalCase names. Ignoring them merged every library into one list.
+func TestQueryParameterCasing(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	rec, data := doJSON(t, h, "GET",
+		"/Users/"+u.ID+"/Items?ParentId="+demo.MovieLibraryID+"&IncludeItemTypes=Movie&Limit=500", tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("items = %d", rec.Code)
+	}
+	items, _ := data["Items"].([]any)
+	if len(items) == 0 {
+		t.Fatal("PascalCase ParentId returned no items")
+	}
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if item["Type"] != model.TypeMovie {
+			t.Fatalf("library filter leaked %s", item["Type"])
+		}
+	}
+
+	rec, _ = doJSON(t, h, "GET", "/UserViews?UserId="+u.ID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("PascalCase UserId = %d", rec.Code)
+	}
+
+	req := httptest.NewRequest("GET", "/Users/"+u.ID+"/Items/Latest?ParentId="+demo.MovieLibraryID+"&Limit=50", nil)
+	req.Header.Set("X-Emby-Token", tok)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var latest []itemDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &latest); err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) == 0 {
+		t.Fatal("PascalCase latest returned nothing")
+	}
+	for _, it := range latest {
+		if it.Type != model.TypeMovie {
+			t.Fatalf("latest leaked %s from another library", it.Type)
+		}
+	}
+}

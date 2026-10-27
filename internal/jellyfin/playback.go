@@ -114,7 +114,7 @@ func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && r.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req)
 	}
-	qp := r.URL.Query()
+	qp := queryValues(r)
 	if req.StartTimeTicks == 0 {
 		req.StartTimeTicks, _ = strconv.ParseInt(qp.Get("startTimeTicks"), 10, 64)
 	}
@@ -511,7 +511,7 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	settings := a.Store.Settings()
-	q := r.URL.Query()
+	q := queryValues(r)
 	remux := q.Get("Remux") == "1"
 	if remux {
 		if !settings.RemuxEnabled {

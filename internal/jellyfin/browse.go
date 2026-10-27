@@ -122,11 +122,11 @@ func (a *API) handleSystemConfiguration(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *API) handleGenres(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, queryValues(r).Get("userId"))
 	if !ok {
 		return
 	}
-	v := r.URL.Query()
+	v := queryValues(r)
 	parent := normalizeID(v.Get("parentId"))
 	types := splitList(v.Get("includeItemTypes"))
 	search := strings.ToLower(strings.TrimSpace(v.Get("searchTerm")))
@@ -189,11 +189,11 @@ func (a *API) handleGenres(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePersons(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, queryValues(r).Get("userId"))
 	if !ok {
 		return
 	}
-	v := r.URL.Query()
+	v := queryValues(r)
 	parent := normalizeID(v.Get("parentId"))
 	appearsIn := normalizeID(v.Get("appearsInItemId"))
 	personTypes := splitList(v.Get("personTypes"))
@@ -262,11 +262,11 @@ func (a *API) handlePersons(w http.ResponseWriter, r *http.Request) {
 // Display preferences -----------------------------------------------------
 
 func (a *API) handleDisplayPreferences(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.resolveUser(w, r, r.URL.Query().Get("userId"))
+	u, ok := a.resolveUser(w, r, queryValues(r).Get("userId"))
 	if !ok {
 		return
 	}
-	client := strings.TrimSpace(r.URL.Query().Get("client"))
+	client := strings.TrimSpace(queryValues(r).Get("client"))
 	if client == "" {
 		writeError(w, 400, "client is required")
 		return

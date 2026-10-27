@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"runtime"
 	"sort"
 	"strconv"
@@ -206,8 +207,8 @@ func (a *API) tokenFromRequest(r *http.Request) string {
 			return v
 		}
 	}
-	q := r.URL.Query()
-	for _, name := range []string{"api_key", "ApiKey", "X-Emby-Token", "AccessToken"} {
+	q := queryValues(r)
+	for _, name := range []string{"api_key", "apikey", "x-emby-token", "accesstoken"} {
 		if v := q.Get(name); v != "" {
 			return v
 		}
@@ -269,13 +270,31 @@ func (a *API) resolveUser(w http.ResponseWriter, r *http.Request, pathID string)
 	return target, true
 }
 
+// queryParams is a case-insensitive view over the request query. Jellyfin's
+// ASP.NET binder matches query names case-insensitively, and third-party
+// clients send ParentId / IncludeItemTypes with different casing.
+type queryParams url.Values
+
+func (q queryParams) Get(name string) string {
+	for k, vs := range q {
+		if len(vs) > 0 && strings.EqualFold(k, name) {
+			return vs[0]
+		}
+	}
+	return ""
+}
+
+func queryValues(r *http.Request) queryParams {
+	return queryParams(r.URL.Query())
+}
+
 // requestUserID resolves the target user for both the 12.x routes (userId
 // query) and the legacy user scoped routes (/Users/{userId}/...).
 func requestUserID(r *http.Request, pathID string) string {
 	if id := normalizeID(pathID); id != "" {
 		return id
 	}
-	return r.URL.Query().Get("userId")
+	return queryValues(r).Get("userId")
 }
 
 // canSeeLibrary reports whether the user may browse a library. Admins and
@@ -654,7 +673,7 @@ func intList(s string) []int {
 }
 
 func boolParam(r *http.Request, name string) (bool, bool) {
-	v := r.URL.Query().Get(name)
+	v := queryValues(r).Get(name)
 	if v == "" {
 		return false, false
 	}
@@ -680,7 +699,7 @@ type itemQueryOptions struct {
 }
 
 func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, itemQueryOptions) {
-	v := r.URL.Query()
+	v := queryValues(r)
 	q := catalog.Query{
 		ParentID: normalizeID(v.Get("parentId")),
 		Search:   v.Get("searchTerm"),
@@ -882,21 +901,21 @@ func (a *API) handleSuggestions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if mediaTypes := splitList(r.URL.Query().Get("mediaType")); len(mediaTypes) > 0 && !containsFold(mediaTypes, "Video") {
+	if mediaTypes := splitList(queryValues(r).Get("mediaType")); len(mediaTypes) > 0 && !containsFold(mediaTypes, "Video") {
 		writeJSON(w, 200, queryResult{Items: []itemDTO{}, TotalRecordCount: 0, StartIndex: 0})
 		return
 	}
-	start := hls.ParseInt(r.URL.Query().Get("startIndex"), 0)
-	limit := hls.ParseInt(r.URL.Query().Get("limit"), 6)
+	start := hls.ParseInt(queryValues(r).Get("startIndex"), 0)
+	limit := hls.ParseInt(queryValues(r).Get("limit"), 6)
 	if limit <= 0 {
 		limit = 6
 	}
 	if limit > 50 {
 		limit = 50
 	}
-	types := splitList(r.URL.Query().Get("type"))
+	types := splitList(queryValues(r).Get("type"))
 	if len(types) == 0 {
-		types = splitList(r.URL.Query().Get("includeItemTypes"))
+		types = splitList(queryValues(r).Get("includeItemTypes"))
 	}
 	if len(types) == 0 {
 		types = []string{model.TypeMovie, model.TypeSeries}
@@ -936,7 +955,7 @@ func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v := r.URL.Query()
+	v := queryValues(r)
 	parent := normalizeID(v.Get("parentId"))
 	types := splitList(v.Get("includeItemTypes"))
 	excludeTypes := splitList(v.Get("excludeItemTypes"))
@@ -997,7 +1016,7 @@ func (a *API) handleLatest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v := r.URL.Query()
+	v := queryValues(r)
 	parent := normalizeID(v.Get("parentId"))
 	limit := hls.ParseInt(v.Get("limit"), 20)
 	types := splitList(v.Get("includeItemTypes"))
@@ -1115,7 +1134,7 @@ func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Item does not exist")
 		return
 	}
-	limit := hls.ParseInt(r.URL.Query().Get("limit"), 12)
+	limit := hls.ParseInt(queryValues(r).Get("limit"), 12)
 	if limit <= 0 {
 		limit = 12
 	}
@@ -1188,7 +1207,7 @@ func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Series not found")
 		return
 	}
-	v := r.URL.Query()
+	v := queryValues(r)
 	seasonID := normalizeID(v.Get("seasonId"))
 	seasonNumber := hls.ParseInt(v.Get("season"), -1)
 	var eps []*model.Item
@@ -1246,7 +1265,7 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v := r.URL.Query()
+	v := queryValues(r)
 	seriesID := normalizeID(v.Get("seriesId"))
 	limit := hls.ParseInt(v.Get("limit"), 24)
 	start := hls.ParseInt(v.Get("startIndex"), 0)
@@ -1316,7 +1335,7 @@ func (a *API) handleSearchHints(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v := r.URL.Query()
+	v := queryValues(r)
 	term := strings.TrimSpace(v.Get("searchTerm"))
 	if term == "" {
 		writeError(w, 400, "searchTerm is required")
@@ -1526,7 +1545,7 @@ func (a *API) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePing(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("playSessionId") == "" {
+	if queryValues(r).Get("playSessionId") == "" {
 		writeError(w, 400, "playSessionId is required")
 		return
 	}

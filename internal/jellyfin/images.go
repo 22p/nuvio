@@ -112,13 +112,13 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxWidth := hls.ParseInt(r.URL.Query().Get("maxWidth"), 0)
+	maxWidth := hls.ParseInt(queryValues(r).Get("maxWidth"), 0)
 	if maxWidth == 0 {
-		maxWidth = hls.ParseInt(r.URL.Query().Get("width"), 0)
+		maxWidth = hls.ParseInt(queryValues(r).Get("width"), 0)
 	}
-	maxHeight := hls.ParseInt(r.URL.Query().Get("maxHeight"), 0)
+	maxHeight := hls.ParseInt(queryValues(r).Get("maxHeight"), 0)
 	if maxHeight == 0 {
-		maxHeight = hls.ParseInt(r.URL.Query().Get("height"), 0)
+		maxHeight = hls.ParseInt(queryValues(r).Get("height"), 0)
 	}
 	baseW, baseH, width := 2, 3, 600
 	if widescreen {
