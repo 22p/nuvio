@@ -36,11 +36,13 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		path = it.BackdropPath
 		widescreen = true
 	case "thumb":
-		path = it.BackdropPath
+		path = it.ThumbPath
+		if path == "" {
+			path = it.BackdropPath
+		}
 		widescreen = true
 	case "logo":
-		http.Error(w, "no logo", http.StatusNotFound)
-		return
+		path = it.LogoPath
 	case "banner", "art":
 		path = it.BackdropPath
 		widescreen = true
@@ -83,6 +85,10 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		remoteURL = it.PosterURL
 	}
 	if remoteURL != "" && a.serveRemoteImage(w, r, remoteURL) {
+		return
+	}
+	if kind == "logo" {
+		http.Error(w, "no logo", http.StatusNotFound)
 		return
 	}
 

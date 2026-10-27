@@ -1,0 +1,96 @@
+package media
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"nuvio/internal/model"
+)
+
+func TestScanReadsSeriesNFOAndArtwork(t *testing.T) {
+	root := t.TempDir()
+	show := filepath.Join(root, "Severance")
+	season := filepath.Join(show, "Season 01")
+	if err := os.MkdirAll(season, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(season, "Severance.S01E01.mkv"), "")
+	writeTestFile(t, filepath.Join(show, "Severance.nfo"), `<tvshow>
+  <title>Severance</title>
+  <plot>Office workers sever work memories.</plot>
+  <year>2022</year>
+  <genre>Drama</genre>
+  <actor><name>Adam Scott</name><role>Mark Scout</role></actor>
+</tvshow>`)
+	for _, name := range []string{"folder.jpg", "backdrop.jpg", "logo.png", "landscape.jpg"} {
+		writeTestFile(t, filepath.Join(show, name), "image")
+	}
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryShows, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var series, episode *model.Item
+	for _, it := range items {
+		switch it.Type {
+		case model.TypeSeries:
+			series = it
+		case model.TypeEpisode:
+			episode = it
+		}
+	}
+	if series == nil || episode == nil {
+		t.Fatalf("series or episode missing: %+v", items)
+	}
+	if series.Name != "Severance" || series.Overview == "" || series.Year != 2022 {
+		t.Fatalf("series nfo fields: %+v", series)
+	}
+	if series.PosterPath == "" || series.BackdropPath == "" || series.LogoPath == "" || series.ThumbPath == "" {
+		t.Fatalf("series artwork missing: %+v", series)
+	}
+	if len(series.People) != 1 || series.People[0].Name != "Adam Scott" {
+		t.Fatalf("series cast: %+v", series.People)
+	}
+	if episode.LogoPath != series.LogoPath || episode.ThumbPath != series.ThumbPath {
+		t.Fatalf("episode artwork not inherited: %+v", episode)
+	}
+	if len(episode.People) != 1 || len(episode.Genres) != 1 {
+		t.Fatalf("episode metadata not inherited: %+v", episode)
+	}
+}
+
+func TestScanReadsMovieNFO(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "The Matrix (1999)")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(dir, "The.Matrix.1999.mkv"), "")
+	writeTestFile(t, filepath.Join(dir, "movie.nfo"), `<movie>
+  <title>The Matrix</title>
+  <plot>A hacker discovers reality.</plot>
+  <year>1999</year>
+  <genre>Action</genre>
+  <actor><name>Keanu Reeves</name><role>Neo</role></actor>
+</movie>`)
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryMovies, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	it := items[0]
+	if it.Name != "The Matrix" || it.Overview == "" || it.Year != 1999 {
+		t.Fatalf("movie nfo fields: %+v", it)
+	}
+	if len(it.People) != 1 || it.People[0].Name != "Keanu Reeves" {
+		t.Fatalf("movie cast: %+v", it.People)
+	}
+}

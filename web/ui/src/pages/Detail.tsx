@@ -17,6 +17,7 @@ import {
   episodeCode,
   formatRating,
   formatRuntime,
+  initials,
   playProgress,
   prettyContainer,
   seasonLabel,
@@ -25,6 +26,7 @@ import { EmptyState, MediaRow, Spinner } from '../components/Media'
 import {
   IconBack,
   IconCheck,
+  IconInfo,
   IconPlay,
   IconPlus,
   IconStar,
@@ -147,8 +149,11 @@ export function DetailPage() {
   const progress = playProgress(item)
   const backdrop = item.BackdropImageTags?.length
     ? imageUrl(item.Id, 'Backdrop', 1920)
-    : imageUrl(item.Id, 'Primary', 1200)
+    : item.ImageTags?.Thumb
+      ? imageUrl(item.Id, 'Thumb', 1920)
+      : imageUrl(item.Id, 'Primary', 1200)
   const poster = imageUrl(item.Id, 'Primary', 600)
+  const logo = item.ImageTags?.Logo ? imageUrl(item.Id, 'Logo', 900) : ''
   const source = item.MediaSources?.[0]
   const video = source?.MediaStreams?.find((s) => s.Type === 'Video')
   const audio = source?.MediaStreams?.find((s) => s.Type === 'Audio')
@@ -218,7 +223,11 @@ export function DetailPage() {
               {item.SeriesName}
             </Link>
           )}
-          <h1>{item.Name}</h1>
+          {logo && !isEpisode && !isSeason ? (
+            <img className="detail-logo" src={logo} alt={item.Name} />
+          ) : (
+            <h1>{item.Name}</h1>
+          )}
           {item.Taglines?.[0] && <p className="detail-tagline">{item.Taglines[0]}</p>}
           <div className="detail-meta">
             {item.ProductionYear ? <span>{item.ProductionYear}</span> : null}
@@ -296,7 +305,12 @@ export function DetailPage() {
             </div>
             <div className="episode-list">
               {episodes.map((ep) => (
-                <EpisodeRow key={ep.Id} episode={ep} onPlay={() => navigate(`/watch/${ep.Id}`)} />
+                <EpisodeRow
+                  key={ep.Id}
+                  episode={ep}
+                  onPlay={() => navigate(`/watch/${ep.Id}`)}
+                  onDetails={() => navigate(`/item/${ep.Id}`)}
+                />
               ))}
               {!episodes.length && <p className="muted">{t("No episodes in this season yet.")}</p>}
             </div>
@@ -320,11 +334,43 @@ export function DetailPage() {
                 </div>
                 <div className="episode-list">
                   {episodes.map((ep) => (
-                    <EpisodeRow key={ep.Id} episode={ep} onPlay={() => navigate(`/watch/${ep.Id}`)} />
+                    <EpisodeRow
+                      key={ep.Id}
+                      episode={ep}
+                      onPlay={() => navigate(`/watch/${ep.Id}`)}
+                      onDetails={() => navigate(`/item/${ep.Id}`)}
+                    />
                   ))}
                 </div>
               </>
             )}
+          </section>
+        )}
+
+        {item.People && item.People.length > 0 && (
+          <section className="cast-section">
+            <h2>{t("Cast")}</h2>
+            <div className="cast-row">
+              {item.People.map((p, i) => (
+                <div className="cast-card" key={`${p.Id || p.Name}-${i}`}>
+                  <div className="cast-avatar">
+                    <span>{initials(p.Name)}</span>
+                    {p.ImageUrl && (
+                      <img
+                        src={p.ImageUrl}
+                        alt=""
+                        loading="lazy"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none'
+                        }}
+                      />
+                    )}
+                  </div>
+                  <div className="cast-name">{p.Name}</div>
+                  {p.Role && <div className="cast-role">{p.Role}</div>}
+                </div>
+              ))}
+            </div>
           </section>
         )}
 
@@ -381,31 +427,49 @@ export function DetailPage() {
   )
 }
 
-function EpisodeRow({ episode, onPlay }: { episode: JFItem; onPlay: () => void }) {
+function EpisodeRow({
+  episode,
+  onPlay,
+  onDetails,
+}: {
+  episode: JFItem
+  onPlay: () => void
+  onDetails: () => void
+}) {
   const progress = playProgress(episode)
   return (
-    <button className="episode-row" onClick={onPlay}>
-      <div className="episode-thumb">
-        <img src={imageUrl(episode.Id, 'Backdrop', 480)} alt="" loading="lazy" />
-        <span className="episode-number">{episode.IndexNumber ?? '·'}</span>
-        <span className="episode-play">
-          <IconPlay size={15} />
-        </span>
-        {progress > 0 && (
-          <span className="episode-progress">
-            <i style={{ width: `${progress}%` }} />
+    <div className="episode-row">
+      <button className="episode-main" onClick={onPlay}>
+        <div className="episode-thumb">
+          <img src={imageUrl(episode.Id, 'Backdrop', 480)} alt="" loading="lazy" />
+          <span className="episode-number">{episode.IndexNumber ?? '·'}</span>
+          <span className="episode-play">
+            <IconPlay size={15} />
           </span>
-        )}
-      </div>
-      <div className="episode-info">
-        <div className="episode-top">
-          <span className="episode-title">{episode.Name}</span>
-          <span className="episode-runtime">{formatRuntime(episode.RunTimeTicks, true)}</span>
+          {progress > 0 && (
+            <span className="episode-progress">
+              <i style={{ width: `${progress}%` }} />
+            </span>
+          )}
         </div>
-        <p>{episode.Overview || t("No overview for this episode.")}</p>
-        {episode.UserData?.Played && <span className="episode-watched">{t("Watched")}</span>}
-      </div>
-    </button>
+        <div className="episode-info">
+          <div className="episode-top">
+            <span className="episode-title">{episode.Name}</span>
+            <span className="episode-runtime">{formatRuntime(episode.RunTimeTicks, true)}</span>
+          </div>
+          <p>{episode.Overview || t("No overview for this episode.")}</p>
+          {episode.UserData?.Played && <span className="episode-watched">{t("Watched")}</span>}
+        </div>
+      </button>
+      <button
+        className="episode-details"
+        onClick={onDetails}
+        aria-label={t("Details")}
+        title={t("Details")}
+      >
+        <IconInfo size={17} />
+      </button>
+    </div>
   )
 }
 

@@ -46,6 +46,7 @@ export const ko: Record<string, string> = {
   'Save permissions': '권한 저장',
   'Save settings': '설정 저장',
   'Update failed': '변경 실패',
+  'Cast': '출연진',
   'Change password': '비밀번호 변경',
   'Could not change the password': '비밀번호 변경 실패',
   'Preferences': '환경 설정',

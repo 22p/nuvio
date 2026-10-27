@@ -46,6 +46,7 @@ export const zhTW: Record<string, string> = {
   'Save permissions': '儲存權限',
   'Save settings': '儲存設定',
   'Update failed': '修改失敗',
+  'Cast': '演員',
   'Change password': '修改密碼',
   'Could not change the password': '修改密碼失敗',
   'Preferences': '偏好',

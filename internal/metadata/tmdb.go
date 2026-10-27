@@ -233,23 +233,47 @@ func yearOf(values ...string) int {
 }
 
 func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
+	local := it.MetadataSource == "nfo"
 	it.TMDBID = r.ID
-	it.MetadataSource = "tmdb"
 	it.MetadataLanguage = e.Language
-	if r.Overview != "" {
-		it.Overview = r.Overview
-	}
-	if y := yearOf(r.ReleaseDate, r.FirstAirDate); y > 0 {
-		it.Year = y
-		if it.PremiereDate == "" {
-			it.PremiereDate = fmt.Sprintf("%d-01-01T00:00:00.0000000Z", y)
+	if local {
+		// Local .nfo metadata wins; TMDb only fills the gaps.
+		if it.Overview == "" {
+			it.Overview = r.Overview
 		}
-	}
-	if r.VoteAverage > 0 {
-		it.Rating = r.VoteAverage
-	}
-	if names := e.genreNames(ctx, kindOfItem(it), r.GenreIDs); len(names) > 0 {
-		it.Genres = names
+		if it.Year == 0 {
+			if y := yearOf(r.ReleaseDate, r.FirstAirDate); y > 0 {
+				it.Year = y
+				if it.PremiereDate == "" {
+					it.PremiereDate = fmt.Sprintf("%d-01-01T00:00:00.0000000Z", y)
+				}
+			}
+		}
+		if it.Rating == 0 {
+			it.Rating = r.VoteAverage
+		}
+		if len(it.Genres) == 0 {
+			if names := e.genreNames(ctx, kindOfItem(it), r.GenreIDs); len(names) > 0 {
+				it.Genres = names
+			}
+		}
+	} else {
+		it.MetadataSource = "tmdb"
+		if r.Overview != "" {
+			it.Overview = r.Overview
+		}
+		if y := yearOf(r.ReleaseDate, r.FirstAirDate); y > 0 {
+			it.Year = y
+			if it.PremiereDate == "" {
+				it.PremiereDate = fmt.Sprintf("%d-01-01T00:00:00.0000000Z", y)
+			}
+		}
+		if r.VoteAverage > 0 {
+			it.Rating = r.VoteAverage
+		}
+		if names := e.genreNames(ctx, kindOfItem(it), r.GenreIDs); len(names) > 0 {
+			it.Genres = names
+		}
 	}
 	if r.PosterPath != "" {
 		it.PosterURL = e.ImageBase + "/w780" + r.PosterPath
@@ -257,6 +281,48 @@ func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
 	if r.BackdropPath != "" {
 		it.BackdropURL = e.ImageBase + "/w1280" + r.BackdropPath
 	}
+	if len(it.People) == 0 {
+		it.People = e.credits(ctx, kindOfItem(it), r.ID)
+	}
+}
+
+type creditsResponse struct {
+	Cast []struct {
+		Name        string `json:"name"`
+		Character   string `json:"character"`
+		ProfilePath string `json:"profile_path"`
+	} `json:"cast"`
+}
+
+// credits returns the top billed actors for a movie or series. Failures are
+// ignored so cast data never blocks the rest of the enrichment.
+func (e *Enricher) credits(ctx context.Context, kind string, id int) []model.Person {
+	if id <= 0 {
+		return nil
+	}
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("language", e.Language)
+	var out creditsResponse
+	if err := e.getJSON(ctx, fmt.Sprintf("/%s/%d/credits?%s", kind, id, q.Encode()), &out); err != nil {
+		return nil
+	}
+	people := make([]model.Person, 0, len(out.Cast))
+	for _, c := range out.Cast {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			continue
+		}
+		p := model.Person{Name: name, Role: strings.TrimSpace(c.Character), Type: "Actor"}
+		if c.ProfilePath != "" {
+			p.ImageURL = e.ImageBase + "/w185" + c.ProfilePath
+		}
+		people = append(people, p)
+		if len(people) == 24 {
+			break
+		}
+	}
+	return people
 }
 
 func kindOfItem(it *model.Item) string {
@@ -356,6 +422,9 @@ func (e *Enricher) inheritSeriesArt(items []*model.Item) {
 		}
 		if len(it.Genres) == 0 {
 			it.Genres = s.Genres
+		}
+		if len(it.People) == 0 {
+			it.People = s.People
 		}
 	}
 }

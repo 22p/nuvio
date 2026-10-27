@@ -43,6 +43,15 @@ export interface MediaSource {
   MediaStreams?: MediaStream[]
 }
 
+export interface Person {
+  Name: string
+  Id?: string
+  Role?: string
+  Type?: string
+  ImageUrl?: string
+  PrimaryImageTag?: string
+}
+
 export interface JFItem {
   Id: string
   Name: string
@@ -71,6 +80,7 @@ export interface JFItem {
   UserData?: UserData
   MediaSources?: MediaSource[]
   MediaStreams?: MediaStream[]
+  People?: Person[]
   Container?: string
   Path?: string
   LocationType?: string

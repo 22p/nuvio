@@ -37,8 +37,10 @@ type videoEntry struct {
 }
 
 type artSet struct {
-	poster   string
-	backdrop string
+	poster    string
+	backdrop  string
+	logo      string
+	landscape string
 }
 
 var (
@@ -93,11 +95,23 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 					set = &artSet{}
 					artByDir[dir] = set
 				}
-				if kind == "poster" && set.poster == "" {
-					set.poster = path
-				}
-				if kind == "backdrop" && set.backdrop == "" {
-					set.backdrop = path
+				switch kind {
+				case "poster":
+					if set.poster == "" {
+						set.poster = path
+					}
+				case "backdrop":
+					if set.backdrop == "" {
+						set.backdrop = path
+					}
+				case "logo":
+					if set.logo == "" {
+						set.logo = path
+					}
+				case "landscape":
+					if set.landscape == "" {
+						set.landscape = path
+					}
 				}
 				return nil
 			}
@@ -180,15 +194,18 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 
 	// Group episodes into series -> season.
 	type seriesAgg struct {
-		dir      string
-		key      string
-		id       string
-		name     string
-		year     int
-		seasons  map[int][]*model.Item
-		added    time.Time
-		poster   string
-		backdrop string
+		dir       string
+		key       string
+		id        string
+		name      string
+		year      int
+		seasons   map[int][]*model.Item
+		added     time.Time
+		poster    string
+		backdrop  string
+		logo      string
+		landscape string
+		nfo       *nfoData
 	}
 	groups := map[string]*seriesAgg{}
 	var movies []*videoEntry
@@ -230,6 +247,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 		art := artByDir[seriesDir]
 		if art != nil {
 			agg.poster, agg.backdrop = art.poster, art.backdrop
+			agg.logo, agg.landscape = art.logo, art.landscape
 		}
 
 		if episode == 0 {
@@ -262,12 +280,26 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			Media:         &ve.media,
 			PosterPath:    agg.poster,
 			BackdropPath:  agg.backdrop,
+			LogoPath:      agg.logo,
+			ThumbPath:     agg.landscape,
 			ArtSeed:       md5hex("art:" + ve.path),
 		}
 		if agg.year == 0 && epYear > 0 {
 			agg.year = epYear
 		}
 		agg.seasons[season] = append(agg.seasons[season], ep)
+	}
+
+	for _, agg := range groups {
+		if n := seriesNFO(agg.dir, agg.name); n != nil {
+			agg.nfo = n
+			if title := strings.TrimSpace(n.Title); title != "" {
+				agg.name = title
+			}
+			if n.Year > 0 && agg.year == 0 {
+				agg.year = n.Year
+			}
+		}
 	}
 
 	for _, agg := range groups {
@@ -283,9 +315,12 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			AddedAt:      agg.added,
 			PosterPath:   agg.poster,
 			BackdropPath: agg.backdrop,
+			LogoPath:     agg.logo,
+			ThumbPath:    agg.landscape,
 			ArtSeed:      md5hex("art:" + agg.key),
 			ChildCount:   len(agg.seasons),
 		}
+		applyNFO(series, agg.nfo)
 		if series.AddedAt.IsZero() {
 			series.AddedAt = time.Now().Add(-time.Hour * 24 * 365)
 		}
@@ -308,7 +343,14 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 				ep.SeriesName = agg.name
 				ep.SeasonID = ep.ParentID
 				ep.SeasonName = seasonName(n)
-				ep.SeriesName = agg.name
+				if agg.nfo != nil {
+					if len(ep.People) == 0 {
+						ep.People = nfoPeople(agg.nfo.Actors)
+					}
+					if len(ep.Genres) == 0 {
+						ep.Genres = cleanNFOStrings(agg.nfo.Genres)
+					}
+				}
 			}
 			season := &model.Item{
 				ID:           eps[0].ParentID,
@@ -324,6 +366,8 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 				AddedAt:      eps[len(eps)-1].AddedAt,
 				PosterPath:   agg.poster,
 				BackdropPath: agg.backdrop,
+				LogoPath:     agg.logo,
+				ThumbPath:    agg.landscape,
 				ArtSeed:      md5hex(fmt.Sprintf("art:%s:%d", agg.dir, n)),
 			}
 			items = append(items, season)
@@ -367,7 +411,10 @@ func (s *Scanner) movieItem(lib *model.Library, ve *videoEntry, artByDir map[str
 	if art != nil {
 		item.PosterPath = art.poster
 		item.BackdropPath = art.backdrop
+		item.LogoPath = art.logo
+		item.ThumbPath = art.landscape
 	}
+	applyNFO(item, movieNFO(ve))
 	return item
 }
 
@@ -383,6 +430,10 @@ func artKind(name string) string {
 		return "poster"
 	case "fanart", "backdrop", "background":
 		return "backdrop"
+	case "logo", "clearlogo":
+		return "logo"
+	case "landscape", "thumb":
+		return "landscape"
 	}
 	return ""
 }

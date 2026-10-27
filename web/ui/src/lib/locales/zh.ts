@@ -46,6 +46,7 @@ export const zh: Record<string, string> = {
   'Save permissions': '保存权限',
   'Save settings': '保存设置',
   'Update failed': '修改失败',
+  'Cast': '演员',
   'Change password': '修改密码',
   'Could not change the password': '修改密码失败',
   'Preferences': '偏好',

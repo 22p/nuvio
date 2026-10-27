@@ -228,7 +228,7 @@ export function reportStopped(report: PlaybackReport) {
   )
 }
 
-export function imageUrl(id: string, kind: 'Primary' | 'Backdrop' | 'Thumb' = 'Primary', width = 500) {
+export function imageUrl(id: string, kind: 'Primary' | 'Backdrop' | 'Thumb' | 'Logo' = 'Primary', width = 500) {
   const token = getToken()
   return `/Items/${id}/Images/${kind}?maxWidth=${width}${token ? `&api_key=${encodeURIComponent(token)}` : ''}`
 }

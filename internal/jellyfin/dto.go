@@ -205,8 +205,19 @@ type itemDTO struct {
 	IsHD                    bool              `json:"IsHD"`
 	MediaStreams            []mediaStreamDTO  `json:"MediaStreams,omitempty"`
 	Chapters                []any             `json:"Chapters,omitempty"`
-	People                  []any             `json:"People,omitempty"`
+	People                  []personDTO       `json:"People,omitempty"`
 	Studios                 []any             `json:"Studios,omitempty"`
+}
+
+// personDTO mirrors Jellyfin's BaseItemPerson. ImageUrl is an extra field used
+// by the bundled web client because Nuvio has no person library items.
+type personDTO struct {
+	Name            string `json:"Name"`
+	Id              string `json:"Id"`
+	Role            string `json:"Role,omitempty"`
+	Type            string `json:"Type"`
+	PrimaryImageTag string `json:"PrimaryImageTag,omitempty"`
+	ImageUrl        string `json:"ImageUrl,omitempty"`
 }
 
 type mediaSourceDTO struct {
@@ -280,19 +291,39 @@ func imageTag(it *model.Item, kind string) string {
 	if seed == "" {
 		seed = it.ID
 	}
-	if kind == "Backdrop" && it.BackdropPath == "" {
-		seed += ":backdrop"
+	k := strings.ToLower(kind)
+	switch k {
+	case "primary":
+		if it.PosterPath != "" {
+			seed += ":poster-file"
+		}
+		if it.PosterURL != "" {
+			seed += ":url:" + it.PosterURL
+		}
+	case "backdrop":
+		if it.BackdropPath == "" {
+			seed += ":backdrop"
+		}
+		if it.BackdropURL != "" {
+			seed += ":url:" + it.BackdropURL
+		}
+	case "logo":
+		if it.LogoPath != "" {
+			seed += ":logo-file"
+		}
+	case "thumb":
+		if it.ThumbPath != "" {
+			seed += ":thumb-file"
+		} else if it.BackdropURL != "" {
+			seed += ":url:" + it.BackdropURL
+		}
 	}
-	if kind == "Primary" && it.PosterPath != "" {
-		seed += ":poster-file"
-	}
-	if kind == "Primary" && it.PosterURL != "" {
-		seed += ":url:" + it.PosterURL
-	}
-	if kind != "Primary" && it.BackdropURL != "" {
-		seed += ":url:" + it.BackdropURL
-	}
-	sum := md5.Sum([]byte("image:" + seed + ":" + kind))
+	sum := md5.Sum([]byte("image:" + seed + ":" + k))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func personID(name string) string {
+	sum := md5.Sum([]byte("person:" + strings.ToLower(strings.TrimSpace(name))))
 	return hex.EncodeToString(sum[:])[:16]
 }
 
@@ -340,6 +371,28 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 	}
 	if it.BackdropPath != "" || it.Type == model.TypeMovie || it.Type == model.TypeSeries {
 		dto.BackdropImageTags = append(dto.BackdropImageTags, imageTag(it, "Backdrop"))
+	}
+	if it.LogoPath != "" {
+		dto.ImageTags["Logo"] = imageTag(it, "Logo")
+	}
+	if it.ThumbPath != "" {
+		dto.ImageTags["Thumb"] = imageTag(it, "Thumb")
+	}
+	if includeMedia && len(it.People) > 0 {
+		dto.People = make([]personDTO, 0, len(it.People))
+		for _, p := range it.People {
+			typ := p.Type
+			if typ == "" {
+				typ = "Actor"
+			}
+			dto.People = append(dto.People, personDTO{
+				Name:     p.Name,
+				Id:       personID(p.Name),
+				Role:     p.Role,
+				Type:     typ,
+				ImageUrl: p.ImageURL,
+			})
+		}
 	}
 	if it.Type == model.TypeMovie || it.Type == model.TypeEpisode {
 		dto.MediaType = "Video"

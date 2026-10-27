@@ -46,6 +46,7 @@ export const ja: Record<string, string> = {
   'Save permissions': '権限を保存',
   'Save settings': '設定を保存',
   'Update failed': '変更に失敗しました',
+  'Cast': 'キャスト',
   'Change password': 'パスワード変更',
   'Could not change the password': 'パスワードの変更に失敗しました',
   'Preferences': '環境設定',

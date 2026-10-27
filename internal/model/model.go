@@ -53,16 +53,28 @@ type Item struct {
 
 	// PosterPath/BackdropPath point at sidecar artwork on disk. When empty the
 	// image endpoint renders deterministic procedural artwork instead.
-	PosterPath   string `json:"posterPath,omitempty"`
-	BackdropPath string `json:"backdropPath,omitempty"`
-	PosterURL    string `json:"posterUrl,omitempty"`
-	BackdropURL  string `json:"backdropUrl,omitempty"`
-	ArtSeed      string `json:"artSeed,omitempty"`
-	Demo         bool   `json:"demo,omitempty"`
+	PosterPath   string   `json:"posterPath,omitempty"`
+	BackdropPath string   `json:"backdropPath,omitempty"`
+	LogoPath     string   `json:"logoPath,omitempty"`
+	ThumbPath    string   `json:"thumbPath,omitempty"`
+	PosterURL    string   `json:"posterUrl,omitempty"`
+	BackdropURL  string   `json:"backdropUrl,omitempty"`
+	ArtSeed      string   `json:"artSeed,omitempty"`
+	Demo         bool     `json:"demo,omitempty"`
+	People       []Person `json:"people,omitempty"`
 
 	TMDBID           int    `json:"tmdbId,omitempty"`
 	MetadataSource   string `json:"metadataSource,omitempty"`
 	MetadataLanguage string `json:"metadataLanguage,omitempty"`
+}
+
+// Person is a cast or crew member attached to an item. ImageURL is an optional
+// remote portrait (TMDb) used by the web UI.
+type Person struct {
+	Name     string `json:"name"`
+	Role     string `json:"role,omitempty"`
+	Type     string `json:"type,omitempty"`
+	ImageURL string `json:"imageUrl,omitempty"`
 }
 
 // MediaInfo describes the single video file backing a movie or episode.
