@@ -60,7 +60,7 @@ docker run -d --name nuvio -p 8096:8096 -v nuvio-data:/data nuvio
 http://<服务器地址>:8096
 ```
 
-使用在 Nuvio 网页里创建的同一账号登录即可浏览和播放。Nuvio 对外声明的接口版本为 `12.2.0`，核心播放链路使用与官方客户端完全相同的 `PlaybackInfo` / `stream` / `Sessions` 接口，没有网页专用后门。
+使用在 Nuvio 网页里创建的同一账号登录即可浏览和播放。Nuvio 对外声明的接口版本为 `12.4.0`（对齐官方最新稳定版），核心播放链路使用与官方客户端完全相同的 `PlaybackInfo` / `stream` / `Sessions` 接口，没有网页专用后门。这个版本号只是客户端的功能门槛：Nuvio 实现的是下表里的核心子集，12.x 新增的 MediaSegments、Trickplay、插件化搜索/推荐等没有实现，客户端会按 404 或空结果降级。
 
 已实现的核心接口范围：
 

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,7 +27,7 @@ const Version = "1.0.0"
 
 // ApiVersion is the Jellyfin server version we advertise. Native clients gate
 // features on this string.
-const ApiVersion = "12.2.0"
+const ApiVersion = "12.4.0"
 
 // API holds the shared server dependencies.
 type API struct {
@@ -244,8 +245,7 @@ func (a *API) handlePublicInfo(w http.ResponseWriter, r *http.Request) {
 		"ServerName":             a.Store.Settings().ServerName,
 		"Version":                ApiVersion,
 		"ProductName":            "Jellyfin Server",
-		"OperatingSystem":        "Linux",
-		"Architecture":           "arm64",
+		"OperatingSystem":        systemOS(),
 		"Id":                     a.Store.ServerID(),
 		"StartupWizardCompleted": a.Store.SetupComplete(),
 	})
@@ -254,29 +254,62 @@ func (a *API) handlePublicInfo(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	s := a.Store.Settings()
 	writeJSON(w, 200, map[string]any{
-		"ServerName":               s.ServerName,
-		"Version":                  ApiVersion,
-		"ProductName":              "Jellyfin Server",
-		"Id":                       a.Store.ServerID(),
-		"OperatingSystem":          "Linux",
-		"Architecture":             "arm64",
-		"SystemUpdateLevel":        "Release",
-		"HasPendingRestart":        false,
-		"IsShuttingDown":           false,
-		"SupportsLibraryMonitor":   false,
-		"WebSocketPortNumber":      0,
-		"CanSelfRestart":           false,
-		"CanLaunchWebBrowser":      false,
-		"ProgramDataPath":          a.DataDir,
-		"WebPath":                  "/",
-		"ItemsByNamePath":          "",
-		"CachePath":                a.DataDir,
-		"LogPath":                  a.DataDir,
-		"InternalMetadataPath":     a.DataDir,
-		"TranscodingTempPath":      a.DataDir,
-		"CompletedInstallations":   []any{},
-		"CastReceiverApplications": []any{},
+		"ServerName":                 s.ServerName,
+		"Version":                    ApiVersion,
+		"ProductName":                "Jellyfin Server",
+		"Id":                         a.Store.ServerID(),
+		"OperatingSystem":            systemOS(),
+		"OperatingSystemDisplayName": systemOS(),
+		"SystemArchitecture":         systemArchitecture(),
+		"EncoderLocation":            "System",
+		"PackageName":                "",
+		"HasUpdateAvailable":         false,
+		"StartupWizardCompleted":     a.Store.SetupComplete(),
+		"SystemUpdateLevel":          "Release",
+		"HasPendingRestart":          false,
+		"IsShuttingDown":             false,
+		"SupportsLibraryMonitor":     false,
+		"WebSocketPortNumber":        0,
+		"CanSelfRestart":             false,
+		"CanLaunchWebBrowser":        false,
+		"ProgramDataPath":            a.DataDir,
+		"WebPath":                    "/",
+		"ItemsByNamePath":            "",
+		"CachePath":                  a.DataDir,
+		"LogPath":                    a.DataDir,
+		"InternalMetadataPath":       a.DataDir,
+		"TranscodingTempPath":        a.DataDir,
+		"CompletedInstallations":     []any{},
+		"CastReceiverApplications":   []any{},
 	})
+}
+
+func systemOS() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "Linux"
+	case "darwin":
+		return "macOS"
+	case "windows":
+		return "Windows"
+	default:
+		return runtime.GOOS
+	}
+}
+
+func systemArchitecture() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "X64"
+	case "arm64":
+		return "Arm64"
+	case "386":
+		return "X86"
+	case "arm":
+		return "Arm"
+	default:
+		return runtime.GOARCH
+	}
 }
 
 func (a *API) handleBranding(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +324,7 @@ func (a *API) handlePublicUsers(w http.ResponseWriter, r *http.Request) {
 	users := a.Store.Users()
 	out := make([]userDTO, 0, len(users))
 	for i := range users {
-		out = append(out, buildUserDTO(&users[i], a.Store.ServerID()))
+		out = append(out, buildUserDTO(&users[i], a.Store.ServerID(), a.Store.Settings().ServerName))
 	}
 	writeJSON(w, 200, out)
 }
@@ -322,7 +355,7 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	writeJSON(w, 200, map[string]any{
-		"User":        buildUserDTO(u, a.Store.ServerID()),
+		"User":        buildUserDTO(u, a.Store.ServerID(), a.Store.Settings().ServerName),
 		"AccessToken": token,
 		"ServerId":    a.Store.ServerID(),
 		"SessionInfo": map[string]any{
@@ -346,7 +379,7 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, 200, buildUserDTO(u, a.Store.ServerID()))
+	writeJSON(w, 200, buildUserDTO(u, a.Store.ServerID(), a.Store.Settings().ServerName))
 }
 
 func (a *API) handleUser(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +387,7 @@ func (a *API) handleUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, 200, buildUserDTO(u, a.Store.ServerID()))
+	writeJSON(w, 200, buildUserDTO(u, a.Store.ServerID(), a.Store.Settings().ServerName))
 }
 
 // Views -------------------------------------------------------------------

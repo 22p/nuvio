@@ -262,7 +262,7 @@ export function SettingsPage() {
               </div>
               <div>
                 <span>{t("Jellyfin API")}</span>
-                <strong>{config?.apiVersion || '12.2.0'}</strong>
+                <strong>{config?.apiVersion || '12.4.0'}</strong>
               </div>
               <div>
                 <span>{t("Service name")}</span>

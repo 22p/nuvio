@@ -15,9 +15,13 @@ import (
 type userPolicy struct {
 	IsAdministrator                  bool     `json:"IsAdministrator"`
 	IsHidden                         bool     `json:"IsHidden"`
+	IsDisabled                       bool     `json:"IsDisabled"`
+	EnableCollectionManagement       bool     `json:"EnableCollectionManagement"`
 	EnableAllFolders                 bool     `json:"EnableAllFolders"`
 	EnabledFolders                   []string `json:"EnabledFolders"`
 	EnableContentDownloading         bool     `json:"EnableContentDownloading"`
+	EnablePublicSharing              bool     `json:"EnablePublicSharing"`
+	EnableRemoteAccess               bool     `json:"EnableRemoteAccess"`
 	EnableRemoteControlOfOtherUsers  bool     `json:"EnableRemoteControlOfOtherUsers"`
 	EnableSharedDeviceControl        bool     `json:"EnableSharedDeviceControl"`
 	EnableLiveTvManagement           bool     `json:"EnableLiveTvManagement"`
@@ -26,71 +30,120 @@ type userPolicy struct {
 	EnableAudioPlaybackTranscoding   bool     `json:"EnableAudioPlaybackTranscoding"`
 	EnableVideoPlaybackTranscoding   bool     `json:"EnableVideoPlaybackTranscoding"`
 	EnablePlaybackRemuxing           bool     `json:"EnablePlaybackRemuxing"`
+	EnableMediaConversion            bool     `json:"EnableMediaConversion"`
 	EnableContentDeletion            bool     `json:"EnableContentDeletion"`
 	EnableContentDeletionFromFolders []string `json:"EnableContentDeletionFromFolders"`
 	EnableSyncTranscoding            bool     `json:"EnableSyncTranscoding"`
 	EnableSubtitleManagement         bool     `json:"EnableSubtitleManagement"`
 	EnableSubtitleDownloading        bool     `json:"EnableSubtitleDownloading"`
+	EnableLyricManagement            bool     `json:"EnableLyricManagement"`
+	EnableUserPreferenceAccess       bool     `json:"EnableUserPreferenceAccess"`
 	EnableAllDevices                 bool     `json:"EnableAllDevices"`
 	EnabledDevices                   []string `json:"EnabledDevices"`
 	BlockedChannels                  []string `json:"BlockedChannels"`
 	BlockedMediaFolders              []string `json:"BlockedMediaFolders"`
 	BlockedTags                      []string `json:"BlockedTags"`
 	AllowedTags                      []string `json:"AllowedTags"`
+	MaxActiveSessions                int      `json:"MaxActiveSessions"`
+	SyncPlayAccess                   string   `json:"SyncPlayAccess"`
 	InvalidLoginAttemptCount         int      `json:"InvalidLoginAttemptCount"`
 	LoginAttemptsBeforeLockout       int      `json:"LoginAttemptsBeforeLockout"`
 }
 
-type userDTO struct {
-	Name                      string     `json:"Name"`
-	ServerId                  string     `json:"ServerId"`
-	Id                        string     `json:"Id"`
-	HasPassword               bool       `json:"HasPassword"`
-	HasConfiguredPassword     bool       `json:"HasConfiguredPassword"`
-	HasConfiguredEasyPassword bool       `json:"HasConfiguredEasyPassword"`
-	EnableAutoLogin           bool       `json:"EnableAutoLogin"`
-	LastLoginDate             *time.Time `json:"LastLoginDate,omitempty"`
-	LastActivityDate          *time.Time `json:"LastActivityDate,omitempty"`
-	Policy                    userPolicy `json:"Policy"`
-	PrimaryImageTag           string     `json:"PrimaryImageTag,omitempty"`
+type userConfiguration struct {
+	AudioLanguagePreference    string   `json:"AudioLanguagePreference,omitempty"`
+	PlayDefaultAudioTrack      bool     `json:"PlayDefaultAudioTrack"`
+	SubtitleLanguagePreference string   `json:"SubtitleLanguagePreference,omitempty"`
+	DisplayMissingEpisodes     bool     `json:"DisplayMissingEpisodes"`
+	GroupedFolders             []string `json:"GroupedFolders"`
+	SubtitleMode               string   `json:"SubtitleMode"`
+	DisplayCollectionsView     bool     `json:"DisplayCollectionsView"`
+	EnableLocalPassword        bool     `json:"EnableLocalPassword"`
+	OrderedViews               []string `json:"OrderedViews"`
+	LatestItemsExcludes        []string `json:"LatestItemsExcludes"`
+	MyMediaExcludes            []string `json:"MyMediaExcludes"`
+	HidePlayedInLatest         bool     `json:"HidePlayedInLatest"`
+	RememberAudioSelections    bool     `json:"RememberAudioSelections"`
+	RememberSubtitleSelections bool     `json:"RememberSubtitleSelections"`
+	EnableNextEpisodeAutoPlay  bool     `json:"EnableNextEpisodeAutoPlay"`
+	CastReceiverId             string   `json:"CastReceiverId,omitempty"`
 }
 
-func buildUserDTO(u *model.User, serverID string) userDTO {
+type userDTO struct {
+	Name                      string            `json:"Name"`
+	ServerId                  string            `json:"ServerId"`
+	ServerName                string            `json:"ServerName"`
+	Id                        string            `json:"Id"`
+	HasPassword               bool              `json:"HasPassword"`
+	HasConfiguredPassword     bool              `json:"HasConfiguredPassword"`
+	HasConfiguredEasyPassword bool              `json:"HasConfiguredEasyPassword"`
+	EnableAutoLogin           bool              `json:"EnableAutoLogin"`
+	LastLoginDate             *time.Time        `json:"LastLoginDate,omitempty"`
+	LastActivityDate          *time.Time        `json:"LastActivityDate,omitempty"`
+	Configuration             userConfiguration `json:"Configuration"`
+	Policy                    userPolicy        `json:"Policy"`
+	PrimaryImageTag           string            `json:"PrimaryImageTag,omitempty"`
+}
+
+func buildUserDTO(u *model.User, serverID, serverName string) userDTO {
 	folders := u.AllowedLibraries
 	if folders == nil {
 		folders = []string{}
 	}
 	p := userPolicy{
-		IsAdministrator:                 u.IsAdmin,
-		EnableAllFolders:                len(folders) == 0,
-		EnabledFolders:                  folders,
-		EnableContentDownloading:        true,
-		EnableRemoteControlOfOtherUsers: u.IsAdmin,
-		EnableSharedDeviceControl:       true,
-		EnableMediaPlayback:             true,
-		EnableAudioPlaybackTranscoding:  u.AllowTranscode,
-		EnableVideoPlaybackTranscoding:  u.AllowTranscode,
-		EnablePlaybackRemuxing:          u.AllowRemux,
-		EnableContentDeletion:           u.IsAdmin,
-		EnableSyncTranscoding:           true,
-		EnableSubtitleManagement:        true,
-		EnableSubtitleDownloading:       true,
-		EnableAllDevices:                true,
-		EnabledDevices:                  []string{},
-		BlockedChannels:                 []string{},
-		BlockedMediaFolders:             []string{},
-		BlockedTags:                     []string{},
-		AllowedTags:                     []string{},
-		LoginAttemptsBeforeLockout:      -1,
+		IsAdministrator:                  u.IsAdmin,
+		IsDisabled:                       false,
+		EnableCollectionManagement:       u.IsAdmin,
+		EnableAllFolders:                 len(folders) == 0,
+		EnabledFolders:                   folders,
+		EnableContentDownloading:         true,
+		EnablePublicSharing:              false,
+		EnableRemoteAccess:               true,
+		EnableRemoteControlOfOtherUsers:  u.IsAdmin,
+		EnableSharedDeviceControl:        true,
+		EnableMediaPlayback:              true,
+		EnableAudioPlaybackTranscoding:   u.AllowTranscode,
+		EnableVideoPlaybackTranscoding:   u.AllowTranscode,
+		EnablePlaybackRemuxing:           u.AllowRemux,
+		EnableMediaConversion:            u.AllowTranscode,
+		EnableContentDeletion:            u.IsAdmin,
+		EnableContentDeletionFromFolders: []string{},
+		EnableSyncTranscoding:            true,
+		EnableSubtitleManagement:         true,
+		EnableSubtitleDownloading:        true,
+		EnableLyricManagement:            false,
+		EnableUserPreferenceAccess:       true,
+		EnableAllDevices:                 true,
+		EnabledDevices:                   []string{},
+		BlockedChannels:                  []string{},
+		BlockedMediaFolders:              []string{},
+		BlockedTags:                      []string{},
+		AllowedTags:                      []string{},
+		MaxActiveSessions:                0,
+		SyncPlayAccess:                   "None",
+		LoginAttemptsBeforeLockout:       -1,
 	}
 	return userDTO{
 		Name:                      u.Name,
 		ServerId:                  serverID,
+		ServerName:                serverName,
 		Id:                        u.ID,
 		HasPassword:               u.HasPassword,
 		HasConfiguredPassword:     u.HasPassword,
 		HasConfiguredEasyPassword: false,
-		Policy:                    p,
+		Configuration: userConfiguration{
+			PlayDefaultAudioTrack:      true,
+			GroupedFolders:             []string{},
+			SubtitleMode:               "Default",
+			OrderedViews:               []string{},
+			LatestItemsExcludes:        []string{},
+			MyMediaExcludes:            []string{},
+			HidePlayedInLatest:         true,
+			RememberAudioSelections:    true,
+			RememberSubtitleSelections: true,
+			EnableNextEpisodeAutoPlay:  true,
+		},
+		Policy: p,
 	}
 }
 
