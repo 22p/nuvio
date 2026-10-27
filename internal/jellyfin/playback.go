@@ -336,6 +336,14 @@ func remuxEligible(it *model.Item, req *playbackRequest) bool {
 		return false
 	}
 	audio := strings.ToLower(strings.TrimSpace(it.Media.AudioCodec))
+	if req != nil && req.AudioStreamIndex != nil && *req.AudioStreamIndex > 0 {
+		for _, track := range it.Media.AudioTracks {
+			if track.Index == *req.AudioStreamIndex {
+				audio = strings.ToLower(strings.TrimSpace(track.Codec))
+				break
+			}
+		}
+	}
 	if audio != "aac" && audio != "mp3" {
 		return false
 	}
@@ -371,6 +379,7 @@ func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
 	out = append(out, mediaStreamDTO{
 		Type: "Video", Index: 0, Codec: m.VideoCodec, DisplayTitle: strings.TrimSpace(videoTitle),
 		IsDefault: true, Width: m.Width, Height: m.Height, BitRate: m.Bitrate,
+		Profile: m.VideoProfile, RealFrameRate: m.FrameRate, AverageFrameRate: m.FrameRate,
 		VideoRange: "SDR", IsInterlaced: false,
 	})
 	for _, at := range m.AudioTracks {

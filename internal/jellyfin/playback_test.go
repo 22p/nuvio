@@ -18,6 +18,17 @@ func mediaItem(video, audio string, bitrate int64) *model.Item {
 }
 
 func TestRemuxEligible(t *testing.T) {
+	multiAudio := &model.Item{
+		Type: model.TypeMovie,
+		Media: &model.MediaInfo{
+			VideoCodec: "h264",
+			AudioCodec: "aac",
+			AudioTracks: []model.AudioTrack{
+				{Index: 1, Codec: "aac"},
+				{Index: 2, Codec: "ac3"},
+			},
+		},
+	}
 	cases := []struct {
 		name string
 		item *model.Item
@@ -28,6 +39,8 @@ func TestRemuxEligible(t *testing.T) {
 		{"avc1 mp3", mediaItem("avc1", "mp3", 0), &playbackRequest{}, true},
 		{"hevc must transcode", mediaItem("hevc", "aac", 0), &playbackRequest{}, false},
 		{"ac3 audio must transcode", mediaItem("h264", "ac3", 0), &playbackRequest{}, false},
+		{"selected aac can remux", multiAudio, &playbackRequest{AudioStreamIndex: intPtr(1)}, true},
+		{"selected ac3 must transcode", multiAudio, &playbackRequest{AudioStreamIndex: intPtr(2)}, false},
 		{"bitrate cap must transcode", mediaItem("h264", "aac", 20_000_000), &playbackRequest{MaxStreamingBitrate: 5_000_000}, false},
 		{"direct stream disabled", mediaItem("h264", "aac", 0), &playbackRequest{EnableDirectStream: boolPtr(false)}, false},
 	}
@@ -57,3 +70,4 @@ func TestLibraryVisibility(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+func intPtr(v int) *int    { return &v }

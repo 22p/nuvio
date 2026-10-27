@@ -39,6 +39,22 @@ import {
 type Menu = 'subs' | 'audio' | 'quality' | 'settings' | null
 type Mode = 'direct' | 'hls'
 
+interface PlaybackStats {
+  width: number
+  height: number
+  dropped: number
+  total: number
+  buffer: number
+  level: string
+  bandwidth: number
+  rate: number
+}
+
+interface AudioTrackList {
+  length: number
+  [index: number]: { enabled: boolean }
+}
+
 interface Cue {
   start: number
   end: number
@@ -131,6 +147,17 @@ function absolutePosition(video: HTMLVideoElement | null, mode: Mode, offset: nu
   return mode === 'hls' ? offset + video.currentTime : video.currentTime
 }
 
+function formatMbps(bps?: number): string {
+  return bps && bps > 0 ? `${(bps / 1_000_000).toFixed(1)} Mbps` : '—'
+}
+
+function setNativeAudio(video: HTMLVideoElement | null, index: number): boolean {
+  const tracks = (video as (HTMLVideoElement & { audioTracks?: AudioTrackList }) | null)?.audioTracks
+  if (!tracks || tracks.length < 2 || !tracks[index - 1]) return false
+  for (let i = 0; i < tracks.length; i++) tracks[i].enabled = i === index - 1
+  return true
+}
+
 export function PlayerPage() {
   const { id = '' } = useParams()
   const [searchParams] = useSearchParams()
@@ -166,6 +193,16 @@ export function PlayerPage() {
   const [controls, setControls] = useState(true)
   const [dragging, setDragging] = useState(false)
   const [seekPreview, setSeekPreview] = useState(0)
+  const [stats, setStats] = useState<PlaybackStats>({
+    width: 0,
+    height: 0,
+    dropped: 0,
+    total: 0,
+    buffer: 0,
+    level: '',
+    bandwidth: 0,
+    rate: 1,
+  })
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -182,7 +219,7 @@ export function PlayerPage() {
     duration: 0,
     dragging: false,
   })
-  const requestRef = useRef({ start: 0, audio: 1, bitrate: 0 })
+  const requestRef = useRef({ start: 0, audio: 1, bitrate: 0, disableDirectPlay: false })
 
   useEffect(() => {
     stateRef.current = { item, source, sessionId, mode, offset, audioIndex, duration, dragging }
@@ -191,6 +228,7 @@ export function PlayerPage() {
   const streams = useMemo(() => source?.MediaStreams || item?.MediaSources?.[0]?.MediaStreams || [], [source, item])
   const subtitleStreams = useMemo(() => streams.filter((s) => s.Type === 'Subtitle'), [streams])
   const audioStreams = useMemo(() => streams.filter((s) => s.Type === 'Audio'), [streams])
+  const videoStream = useMemo(() => streams.find((s) => s.Type === 'Video'), [streams])
   const activeAudio = audioStreams.find((a) => a.Index === audioIndex)
   const autoSubtitle = useMemo(
     () => chooseSubtitle(subtitleStreams, activeAudio?.Language, prefs.subtitleMode, prefs.subtitleLang),
@@ -199,6 +237,18 @@ export function PlayerPage() {
   const activeSubtitle: number | null =
     subChoice === 'auto' ? autoSubtitle : subChoice === 'off' ? null : subChoice
   const activeSubtitleStream = subtitleStreams.find((s) => s.Index === activeSubtitle)
+  const videoDetails = [
+    videoStream?.Codec ? videoStream.Codec.toUpperCase() : '',
+    videoStream?.Profile || '',
+    videoStream?.RealFrameRate
+      ? `${videoStream.RealFrameRate.toFixed(2)} fps`
+      : videoStream?.AverageFrameRate
+        ? `${videoStream.AverageFrameRate.toFixed(2)} fps`
+        : '',
+    videoStream?.BitRate ? formatMbps(videoStream.BitRate) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   useEffect(() => {
     const url = activeSubtitleStream?.DeliveryUrl
@@ -243,7 +293,7 @@ export function PlayerPage() {
         setEnded(false)
         setNextEpisode(null)
         startedRef.current = false
-        requestRef.current = { start, audio, bitrate: (prefs.maxBitrateMbps || 0) * 1_000_000 }
+        requestRef.current = { start, audio, bitrate: (prefs.maxBitrateMbps || 0) * 1_000_000, disableDirectPlay: false }
         startedRef.current = false
         setReload((n) => n + 1)
       })
@@ -270,6 +320,7 @@ export function PlayerPage() {
       startTicks: req.start,
       audioIndex: req.audio > 1 ? req.audio : undefined,
       maxBitrate: req.bitrate,
+      disableDirectPlay: req.disableDirectPlay,
     })
       .then((info) => {
         if (!alive) return
@@ -482,6 +533,37 @@ export function PlayerPage() {
     localStorage.setItem('nuvio.volume', String(volume))
   }, [volume, muted, item?.Id])
 
+  // Live playback statistics for the info panel.
+  useEffect(() => {
+    if (menu !== 'settings') return
+    const update = () => {
+      const video = videoRef.current
+      const hls = hlsRef.current
+      let level = ''
+      let bandwidth = 0
+      if (hls) {
+        const current = hls.currentLevel >= 0 ? hls.levels[hls.currentLevel] : undefined
+        if (current?.height) level = `${current.height}p`
+        bandwidth = hls.bandwidthEstimate || current?.bitrate || 0
+      }
+      const quality = video?.getVideoPlaybackQuality?.()
+      const bufferedEnd = video?.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0
+      setStats({
+        width: video?.videoWidth || 0,
+        height: video?.videoHeight || 0,
+        dropped: quality?.droppedVideoFrames || 0,
+        total: quality?.totalVideoFrames || 0,
+        buffer: Math.max(0, bufferedEnd - (video?.currentTime || 0)),
+        level,
+        bandwidth,
+        rate: video?.playbackRate || 1,
+      })
+    }
+    update()
+    const timer = window.setInterval(update, 1000)
+    return () => window.clearInterval(timer)
+  }, [menu, source, mode])
+
   const wake = useCallback(() => {
     setControls(true)
     window.clearTimeout(hideTimer.current)
@@ -631,6 +713,10 @@ export function PlayerPage() {
         case 'c':
           cycleSubtitles()
           break
+        case 'i':
+          e.preventDefault()
+          setMenu((m) => (m === 'settings' ? null : 'settings'))
+          break
         case 'escape':
           if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
           setMenu(null)
@@ -669,6 +755,7 @@ export function PlayerPage() {
       start: secondsToTicks(Math.max(0, seconds)),
       audio,
       bitrate: (prefs.maxBitrateMbps || 0) * 1_000_000,
+      disableDirectPlay: false,
     }
     setOffset(seconds)
     setCurrent(seconds)
@@ -688,6 +775,7 @@ export function PlayerPage() {
       start: secondsToTicks(pos),
       audio: s.audioIndex,
       bitrate: mbps * 1_000_000,
+      disableDirectPlay: false,
     }
     update({ maxBitrateMbps: mbps })
     setPlaybackLoading(true)
@@ -700,6 +788,12 @@ export function PlayerPage() {
       setMenu(null)
       return
     }
+    // Safari/WebKit can switch audio tracks inside a direct-playing file.
+    if (mode === 'direct' && setNativeAudio(videoRef.current, index)) {
+      setAudioIndex(index)
+      setMenu(null)
+      return
+    }
     const pos = currentPosition()
     videoRef.current?.pause()
     setAudioIndex(index)
@@ -707,6 +801,7 @@ export function PlayerPage() {
       start: secondsToTicks(pos),
       audio: index,
       bitrate: (prefs.maxBitrateMbps || 0) * 1_000_000,
+      disableDirectPlay: true,
     }
     if (startedRef.current) sendReport('/Sessions/Playing/Stopped', stateRef.current, true)
     startedRef.current = false
@@ -1007,7 +1102,7 @@ export function PlayerPage() {
             >
               <IconSubtitles size={21} />
             </button>
-            {audioStreams.length > 1 && (
+            {audioStreams.length > 0 && (
               <button
                 className={`control-button ${menu === 'audio' ? 'is-active' : ''}`}
                 onClick={() => setMenu(menu === 'audio' ? null : 'audio')}
@@ -1098,11 +1193,22 @@ export function PlayerPage() {
             >
               <span>
                 {s.DisplayTitle || s.Language}
-                <em>{s.Codec?.toUpperCase()}</em>
+                <em>
+                  {[
+                    s.Codec?.toUpperCase(),
+                    s.Channels ? `${s.Channels}ch` : '',
+                    s.IsDefault ? t("Default") : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </em>
               </span>
               {audioIndex === s.Index && <IconCheck size={16} />}
             </button>
           ))}
+          {audioStreams.length === 1 && (
+            <div className="menu-empty">{t("Only one audio track in this file")}</div>
+          )}
         </div>
       )}
 
@@ -1154,25 +1260,70 @@ export function PlayerPage() {
               <dd>{source?.Container?.toUpperCase() || '—'}</dd>
             </div>
             <div>
+              <dt>{t("Resolution")}</dt>
+              <dd>{videoStream?.Width && videoStream?.Height ? `${videoStream.Width} × ${videoStream.Height}` : '—'}</dd>
+            </div>
+            <div>
+              <dt>{t("Output")}</dt>
+              <dd>{stats.width && stats.height ? `${stats.width} × ${stats.height}` : '—'}</dd>
+            </div>
+            <div>
+              <dt>{t("Video")}</dt>
+              <dd>{videoDetails || '—'}</dd>
+            </div>
+            <div>
+              <dt>{t("Audio")}</dt>
+              <dd>
+                {activeAudio
+                  ? `${activeAudio.DisplayTitle || activeAudio.Language || ''}${
+                      activeAudio.Channels ? ` · ${activeAudio.Channels}ch` : ''
+                    }`
+                  : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt>{t("Subtitles")}</dt>
+              <dd>{activeSubtitleStream ? activeSubtitleStream.DisplayTitle || activeSubtitleStream.Language : t("Off")}</dd>
+            </div>
+            <div>
               <dt>{t("Duration")}</dt>
               <dd>{duration ? formatTime(duration) : '—'}</dd>
             </div>
             <div>
-              <dt>{t("Resolution")}</dt>
+              <dt>{t("Position")}</dt>
               <dd>
-                {(() => {
-                  const v = streams.find((s) => s.Type === 'Video')
-                  return v?.Width && v?.Height ? `${v.Width} × ${v.Height}` : '—'
-                })()}
+                {formatTime(current)} / {duration ? formatTime(duration) : '--:--'}
               </dd>
             </div>
+            <div>
+              <dt>{t("Buffer")}</dt>
+              <dd>{stats.buffer > 0 ? `${stats.buffer.toFixed(1)} s` : '—'}</dd>
+            </div>
+            <div>
+              <dt>{t("Dropped frames")}</dt>
+              <dd>{stats.total > 0 ? `${stats.dropped} / ${stats.total}` : '—'}</dd>
+            </div>
+            <div>
+              <dt>{t("Bandwidth")}</dt>
+              <dd>{formatMbps(stats.bandwidth || source?.Bitrate)}</dd>
+            </div>
+            {mode === 'hls' && (
+              <div>
+                <dt>{t("Level")}</dt>
+                <dd>{stats.level || t("Auto")}</dd>
+              </div>
+            )}
             <div>
               <dt>{t("Bitrate limit")}</dt>
               <dd>{prefs.maxBitrateMbps ? `${prefs.maxBitrateMbps} Mbps` : t("Auto")}</dd>
             </div>
             <div>
-              <dt>{t("Audio")}</dt>
-              <dd>{activeAudio?.DisplayTitle || '—'}</dd>
+              <dt>{t("Playback rate")}</dt>
+              <dd>{stats.rate.toFixed(2)}×</dd>
+            </div>
+            <div>
+              <dt>{t("Session")}</dt>
+              <dd>{sessionId ? sessionId.slice(0, 8) : '—'}</dd>
             </div>
           </dl>
           <button className="menu-option" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })}>

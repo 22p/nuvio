@@ -87,6 +87,8 @@ type MediaInfo struct {
 	AudioCodec    string       `json:"audioCodec"`
 	Width         int          `json:"width,omitempty"`
 	Height        int          `json:"height,omitempty"`
+	VideoProfile  string       `json:"videoProfile,omitempty"`
+	FrameRate     float64      `json:"frameRate,omitempty"`
 	AudioChannels int          `json:"audioChannels,omitempty"`
 	AudioTracks   []AudioTrack `json:"audioTracks,omitempty"`
 	Subtitles     []Subtitle   `json:"subtitles,omitempty"`

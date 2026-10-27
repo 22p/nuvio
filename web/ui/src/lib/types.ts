@@ -25,6 +25,9 @@ export interface MediaStream {
   IsExternal?: boolean
   DeliveryUrl?: string
   DeliveryMethod?: string
+  Profile?: string
+  RealFrameRate?: number
+  AverageFrameRate?: number
 }
 
 export interface MediaSource {

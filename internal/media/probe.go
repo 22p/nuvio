@@ -70,15 +70,17 @@ func GuessCodecs(container string) (video, audio string, width, height, channels
 
 type ffprobeResult struct {
 	Streams []struct {
-		Index       int               `json:"index"`
-		CodecType   string            `json:"codec_type"`
-		CodecName   string            `json:"codec_name"`
-		Width       int               `json:"width"`
-		Height      int               `json:"height"`
-		Channels    int               `json:"channels"`
-		BitRate     string            `json:"bit_rate"`
-		Tags        map[string]string `json:"tags"`
-		Disposition struct {
+		Index        int               `json:"index"`
+		CodecType    string            `json:"codec_type"`
+		CodecName    string            `json:"codec_name"`
+		Width        int               `json:"width"`
+		Height       int               `json:"height"`
+		Profile      string            `json:"profile"`
+		AvgFrameRate string            `json:"avg_frame_rate"`
+		Channels     int               `json:"channels"`
+		BitRate      string            `json:"bit_rate"`
+		Tags         map[string]string `json:"tags"`
+		Disposition  struct {
 			Default int `json:"default"`
 			Forced  int `json:"forced"`
 		} `json:"disposition"`
@@ -138,6 +140,25 @@ func atoi64(s string) int64 {
 	return n
 }
 
+func parseFrameRate(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	parts := strings.SplitN(s, "/", 2)
+	num, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0
+	}
+	den := 1.0
+	if len(parts) == 2 {
+		den, err = strconv.ParseFloat(parts[1], 64)
+		if err != nil || den == 0 {
+			return 0
+		}
+	}
+	return num / den
+}
+
 func fromFFprobe(res *ffprobeResult, container string) model.MediaInfo {
 	info := model.MediaInfo{Container: container}
 	secs, _ := strconv.ParseFloat(res.Format.Duration, 64)
@@ -150,6 +171,8 @@ func fromFFprobe(res *ffprobeResult, container string) model.MediaInfo {
 			if info.VideoCodec == "" {
 				info.VideoCodec = s.CodecName
 				info.Width, info.Height = s.Width, s.Height
+				info.VideoProfile = s.Profile
+				info.FrameRate = parseFrameRate(s.AvgFrameRate)
 			}
 		case "audio":
 			if info.AudioCodec == "" {

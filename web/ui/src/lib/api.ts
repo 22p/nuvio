@@ -154,6 +154,7 @@ export interface PlaybackOptions {
   audioIndex?: number
   subtitleIndex?: number
   maxBitrate?: number
+  disableDirectPlay?: boolean
 }
 
 export function getPlaybackInfo(itemId: string, userId: string, opts: PlaybackOptions = {}) {
@@ -164,7 +165,7 @@ export function getPlaybackInfo(itemId: string, userId: string, opts: PlaybackOp
     AudioStreamIndex: opts.audioIndex && opts.audioIndex > 0 ? opts.audioIndex : undefined,
     SubtitleStreamIndex: opts.subtitleIndex,
     MaxStreamingBitrate: maxBitrate,
-    EnableDirectPlay: true,
+    EnableDirectPlay: !opts.disableDirectPlay,
     EnableDirectStream: true,
     EnableTranscoding: true,
     DeviceProfile: {
