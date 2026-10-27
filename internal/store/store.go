@@ -134,6 +134,10 @@ func Open(dir, defaultServerName string) (*Store, error) {
 			return nil, fmt.Errorf("migrate users.%s: %w", col.name, err)
 		}
 	}
+	if err := migrateLibraryIDs(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate library ids: %w", err)
+	}
 
 	s := &Store{db: db, path: dbPath}
 	s.serverID, _ = s.metaGet("server_id")
@@ -184,6 +188,123 @@ func Open(dir, defaultServerName string) (*Store, error) {
 		s.settings.MaxBitrateMbps = 20
 	}
 	return s, nil
+}
+
+// migrateLibraryIDs expands old 16 character library IDs to 32 hex characters
+// so they are valid GUIDs for Jellyfin clients (the Kotlin SDK parses them as
+// UUIDs). Item and user references are updated in the same transaction.
+func migrateLibraryIDs(db *sql.DB) error {
+	rows, err := db.Query("SELECT id, data FROM libraries")
+	if err != nil {
+		return err
+	}
+	type legacyLibrary struct{ id, data string }
+	var legacy []legacyLibrary
+	for rows.Next() {
+		var l legacyLibrary
+		if err := rows.Scan(&l.id, &l.data); err != nil {
+			rows.Close()
+			return err
+		}
+		if len(l.id) == 16 {
+			legacy = append(legacy, l)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, old := range legacy {
+		newID := randomHex(16)
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		if err := migrateLibraryTx(tx, old.id, old.data, newID); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateLibraryTx(tx *sql.Tx, oldID, raw, newID string) error {
+	var lib model.Library
+	if err := json.Unmarshal([]byte(raw), &lib); err == nil {
+		lib.ID = newID
+		if data, err := json.Marshal(lib); err == nil {
+			raw = string(data)
+		}
+	}
+	if _, err := tx.Exec("UPDATE libraries SET id = ?, data = ? WHERE id = ?", newID, raw, oldID); err != nil {
+		return err
+	}
+
+	type itemRow struct{ id, data string }
+	rows, err := tx.Query("SELECT id, data FROM items WHERE library_id = ?", oldID)
+	if err != nil {
+		return err
+	}
+	var items []itemRow
+	for rows.Next() {
+		var row itemRow
+		if err := rows.Scan(&row.id, &row.data); err == nil {
+			items = append(items, row)
+		}
+	}
+	rows.Close()
+	for _, row := range items {
+		var it model.Item
+		if err := json.Unmarshal([]byte(row.data), &it); err != nil {
+			continue
+		}
+		it.LibraryID = newID
+		if it.ParentID == oldID {
+			it.ParentID = newID
+		}
+		data, err := json.Marshal(&it)
+		if err != nil {
+			continue
+		}
+		if _, err := tx.Exec("UPDATE items SET library_id = ?, data = ? WHERE id = ?", newID, string(data), row.id); err != nil {
+			return err
+		}
+	}
+
+	type userRow struct{ id, libs string }
+	rows, err = tx.Query("SELECT id, allowed_libraries FROM users WHERE allowed_libraries <> ''")
+	if err != nil {
+		return err
+	}
+	var users []userRow
+	for rows.Next() {
+		var row userRow
+		if err := rows.Scan(&row.id, &row.libs); err == nil {
+			users = append(users, row)
+		}
+	}
+	rows.Close()
+	for _, row := range users {
+		libs := decodeLibraries(row.libs)
+		changed := false
+		for i, id := range libs {
+			if id == oldID {
+				libs[i] = newID
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		if _, err := tx.Exec("UPDATE users SET allowed_libraries = ? WHERE id = ?", encodeLibraries(libs), row.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureColumn adds a column to an existing table when it is missing. SQLite
@@ -490,7 +611,7 @@ func (s *Store) AddLibrary(name, kind string, paths []string, demo bool) (*model
 		return nil, errors.New("At least one media folder is required")
 	}
 	l := &model.Library{
-		ID:      randomHex(8),
+		ID:      randomHex(16),
 		Name:    name,
 		Type:    kind,
 		Paths:   paths,

@@ -1,11 +1,63 @@
 package store
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"nuvio/internal/model"
 )
+
+func TestLegacyLibraryIDMigration(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, "Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID := "1234567890abcdef"
+	lib := model.Library{ID: oldID, Name: "Legacy", Type: model.LibraryMovies, Paths: []string{}, AddedAt: time.Now().UTC()}
+	libRaw, _ := json.Marshal(lib)
+	if _, err := s.db.Exec("INSERT INTO libraries(id, data, added_at) VALUES(?, ?, ?)", oldID, string(libRaw), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	item := model.Item{ID: "movie1", Type: model.TypeMovie, Name: "Movie", LibraryID: oldID, ParentID: oldID, AddedAt: time.Now().UTC()}
+	itemRaw, _ := json.Marshal(item)
+	if _, err := s.db.Exec("INSERT INTO items(id, library_id, data, updated_at) VALUES(?, ?, ?, ?)", item.ID, oldID, string(itemRaw), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateUser("alice", "secret", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("UPDATE users SET allowed_libraries = ? WHERE id = ?", `["`+oldID+`"]`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dir, "Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	libs := reopened.Libraries()
+	if len(libs) != 1 || len(libs[0].ID) != 32 {
+		t.Fatalf("library id not migrated: %+v", libs)
+	}
+	newID := libs[0].ID
+	items, err := reopened.Items()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].LibraryID != newID || items[0].ParentID != newID {
+		t.Fatalf("items not migrated: %+v", items)
+	}
+	user, ok := reopened.FindUserByName("alice")
+	if !ok || len(user.AllowedLibraries) != 1 || user.AllowedLibraries[0] != newID {
+		t.Fatalf("allowed libraries not migrated: %+v", user)
+	}
+}
 
 func TestAuthTokensAndPersistence(t *testing.T) {
 	dir := t.TempDir()

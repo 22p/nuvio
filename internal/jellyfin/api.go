@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"runtime"
 	"sort"
@@ -266,12 +267,15 @@ func canSeeItem(u *model.User, it *model.Item) bool {
 
 // Public endpoints --------------------------------------------------------
 
+// rootItemID is a stable, UUID-shaped id for the virtual root item.
+const rootItemID = "00000000000000000000000000000001"
+
 func (a *API) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, itemDTO{
-		Name: "Nuvio", ServerId: a.Store.ServerID(), Id: "root", Type: "CollectionFolder",
+		Name: "Nuvio", ServerId: a.Store.ServerID(), Id: rootItemID, Type: "CollectionFolder",
 		IsFolder: true, ImageTags: map[string]string{}, BackdropImageTags: []string{},
 		ParentBackdropImageTags: []string{}, PlayAccess: "Full", LocationType: "FileSystem",
-		UserData: &userItemData{Key: "root"},
+		UserData: &userItemData{Key: rootItemID},
 	})
 }
 
@@ -390,6 +394,12 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
+	log.Printf("Login: user=%q client=%q device=%q version=%q",
+		u.Name,
+		r.Header.Get("X-Emby-Client"),
+		r.Header.Get("X-Emby-Device-Name"),
+		r.Header.Get("X-Emby-Client-Version"),
+	)
 	writeJSON(w, 200, map[string]any{
 		"User":        buildUserDTO(u, a.Store.ServerID(), a.Store.Settings().ServerName),
 		"AccessToken": token,
@@ -400,12 +410,38 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 			"UserName":              u.Name,
 			"DeviceId":              r.Header.Get("X-Emby-Device-Id"),
 			"DeviceName":            r.Header.Get("X-Emby-Device-Name"),
+			"DeviceType":            "",
 			"Client":                r.Header.Get("X-Emby-Client"),
 			"ApplicationVersion":    r.Header.Get("X-Emby-Client-Version"),
 			"ServerId":              a.Store.ServerID(),
-			"LastActivityDate":      now.Format(time.RFC3339),
+			"RemoteEndPoint":        r.RemoteAddr,
+			"LastActivityDate":      now.Format("2006-01-02T15:04:05.0000000Z"),
+			"LastPlaybackCheckIn":   now.Format("2006-01-02T15:04:05.0000000Z"),
 			"IsActive":              true,
+			"SupportsMediaControl":  true,
 			"SupportsRemoteControl": false,
+			"HasCustomDeviceName":   false,
+			"PlayableMediaTypes":    []string{"Video"},
+			"SupportedCommands":     []string{},
+			"PlayState": map[string]any{
+				"PositionTicks":       0,
+				"CanSeek":             true,
+				"IsPaused":            false,
+				"IsMuted":             false,
+				"VolumeLevel":         100,
+				"AudioStreamIndex":    1,
+				"SubtitleStreamIndex": -1,
+				"MediaSourceId":       "",
+				"PlayMethod":          "DirectPlay",
+				"RepeatMode":          "RepeatNone",
+				"PlaybackOrder":       "Default",
+			},
+			"Capabilities": map[string]any{
+				"PlayableMediaTypes":           []string{"Video"},
+				"SupportedCommands":            []string{},
+				"SupportsMediaControl":         true,
+				"SupportsPersistentIdentifier": true,
+			},
 		},
 	})
 }
@@ -972,6 +1008,7 @@ func (a *API) handleDisplayPreferences(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"Id":                 r.PathValue("id"),
 		"SortBy":             "SortName",
+		"SortOrder":          "Ascending",
 		"RememberIndexing":   false,
 		"PrimaryImageHeight": 250,
 		"PrimaryImageWidth":  250,

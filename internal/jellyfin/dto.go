@@ -30,6 +30,7 @@ type userPolicy struct {
 	EnableAudioPlaybackTranscoding   bool     `json:"EnableAudioPlaybackTranscoding"`
 	EnableVideoPlaybackTranscoding   bool     `json:"EnableVideoPlaybackTranscoding"`
 	EnablePlaybackRemuxing           bool     `json:"EnablePlaybackRemuxing"`
+	ForceRemoteSourceTranscoding     bool     `json:"ForceRemoteSourceTranscoding"`
 	EnableMediaConversion            bool     `json:"EnableMediaConversion"`
 	EnableContentDeletion            bool     `json:"EnableContentDeletion"`
 	EnableContentDeletionFromFolders []string `json:"EnableContentDeletionFromFolders"`
@@ -40,11 +41,16 @@ type userPolicy struct {
 	EnableUserPreferenceAccess       bool     `json:"EnableUserPreferenceAccess"`
 	EnableAllDevices                 bool     `json:"EnableAllDevices"`
 	EnabledDevices                   []string `json:"EnabledDevices"`
+	EnableAllChannels                bool     `json:"EnableAllChannels"`
+	EnabledChannels                  []string `json:"EnabledChannels"`
 	BlockedChannels                  []string `json:"BlockedChannels"`
 	BlockedMediaFolders              []string `json:"BlockedMediaFolders"`
 	BlockedTags                      []string `json:"BlockedTags"`
 	AllowedTags                      []string `json:"AllowedTags"`
 	MaxActiveSessions                int      `json:"MaxActiveSessions"`
+	RemoteClientBitrateLimit         int      `json:"RemoteClientBitrateLimit"`
+	AuthenticationProviderId         string   `json:"AuthenticationProviderId"`
+	PasswordResetProviderId          string   `json:"PasswordResetProviderId"`
 	SyncPlayAccess                   string   `json:"SyncPlayAccess"`
 	InvalidLoginAttemptCount         int      `json:"InvalidLoginAttemptCount"`
 	LoginAttemptsBeforeLockout       int      `json:"LoginAttemptsBeforeLockout"`
@@ -115,11 +121,16 @@ func buildUserDTO(u *model.User, serverID, serverName string) userDTO {
 		EnableUserPreferenceAccess:       true,
 		EnableAllDevices:                 true,
 		EnabledDevices:                   []string{},
+		EnableAllChannels:                true,
+		EnabledChannels:                  []string{},
 		BlockedChannels:                  []string{},
 		BlockedMediaFolders:              []string{},
 		BlockedTags:                      []string{},
 		AllowedTags:                      []string{},
 		MaxActiveSessions:                0,
+		RemoteClientBitrateLimit:         0,
+		AuthenticationProviderId:         "Default",
+		PasswordResetProviderId:          "Default",
 		SyncPlayAccess:                   "None",
 		LoginAttemptsBeforeLockout:       -1,
 	}
@@ -480,7 +491,9 @@ func (a *API) buildUserData(it *model.Item, userID string) *userItemData {
 func buildViewDTO(lib *model.Library, count int, serverID, userID string) itemDTO {
 	collection := lib.Type
 	if collection == model.LibraryMixed {
-		collection = "mixed"
+		// "mixed" is a Nuvio concept, not a Jellyfin CollectionType. Omit it
+		// so native clients do not receive an unknown enum value.
+		collection = ""
 	}
 	dto := itemDTO{
 		Name:                    lib.Name,
