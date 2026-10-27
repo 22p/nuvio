@@ -3,25 +3,46 @@ package media
 import (
 	"bytes"
 	"encoding/xml"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/encoding/traditionalchinese"
+	"golang.org/x/text/transform"
 
 	"nuvio/internal/model"
 )
 
-// nfoData is the subset of Kodi-style .nfo metadata Nuvio understands.
+// nfoData is the subset of Kodi-style .nfo metadata Nuvio understands. Numeric
+// fields are strings so odd values in real-world NFOs do not abort the parse.
 type nfoData struct {
-	Title      string     `xml:"title"`
-	Plot       string     `xml:"plot"`
-	Outline    string     `xml:"outline"`
-	Tagline    string     `xml:"tagline"`
-	Year       int        `xml:"year"`
-	Rating     float64    `xml:"rating"`
-	MPAARating string     `xml:"mpaa"`
-	Runtime    int        `xml:"runtime"`
-	Genres     []string   `xml:"genre"`
-	Actors     []nfoActor `xml:"actor"`
+	Title      string         `xml:"title"`
+	Plot       string         `xml:"plot"`
+	Outline    string         `xml:"outline"`
+	Tagline    string         `xml:"tagline"`
+	Year       string         `xml:"year"`
+	Rating     nfoRatingField `xml:"rating"`
+	Ratings    nfoRatings     `xml:"ratings"`
+	MPAARating string         `xml:"mpaa"`
+	Runtime    string         `xml:"runtime"`
+	Genres     []string       `xml:"genre"`
+	Actors     []nfoActor     `xml:"actor"`
+}
+
+// nfoRatingField accepts both <rating>7.5</rating> and <rating><value>7.5</value></rating>.
+type nfoRatingField struct {
+	Text  string `xml:",chardata"`
+	Value string `xml:"value"`
+}
+
+type nfoRatings struct {
+	Items []struct {
+		Value string `xml:"value"`
+	} `xml:"rating"`
 }
 
 type nfoActor struct {
@@ -32,11 +53,20 @@ type nfoActor struct {
 
 // movieNFO looks for <video>.nfo first and falls back to movie.nfo.
 func movieNFO(ve *videoEntry) *nfoData {
-	name := findNFO(ve.dir, ve.base+".nfo", "movie.nfo")
-	if name == "" {
+	path := findNFO(ve.dir, ve.base+".nfo", "movie.nfo")
+	if path == "" {
 		return nil
 	}
-	return readNFO(name)
+	return readNFO(path)
+}
+
+// episodeNFO looks for an NFO named after the episode file.
+func episodeNFO(ve *videoEntry) *nfoData {
+	path := findNFO(ve.dir, ve.base+".nfo", "episode.nfo")
+	if path == "" {
+		return nil
+	}
+	return readNFO(path)
 }
 
 // seriesNFO looks for <folder name>.nfo, the cleaned series title and the
@@ -55,12 +85,64 @@ func readNFO(path string) *nfoData {
 	if err != nil {
 		return nil
 	}
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	data = decodeNFO(data)
 	var n nfoData
-	if err := xml.Unmarshal(data, &n); err != nil {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	// NFOs are converted to UTF-8 above; accept whatever the declaration says.
+	dec.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) {
+		return input, nil
+	}
+	if err := dec.Decode(&n); err != nil {
 		return nil
 	}
 	return &n
+}
+
+// decodeNFO normalises UTF-8/GBK/GB18030/Big5 NFO files to UTF-8.
+func decodeNFO(data []byte) []byte {
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	switch declaredEncoding(data) {
+	case "gbk", "gb2312", "gb18030", "cp936":
+		if out, _, err := transform.Bytes(simplifiedchinese.GB18030.NewDecoder(), data); err == nil {
+			return out
+		}
+	case "big5", "cp950":
+		if out, _, err := transform.Bytes(traditionalchinese.Big5.NewDecoder(), data); err == nil {
+			return out
+		}
+	}
+	if utf8.Valid(data) {
+		return data
+	}
+	if out, _, err := transform.Bytes(simplifiedchinese.GB18030.NewDecoder(), data); err == nil {
+		return out
+	}
+	if out, _, err := transform.Bytes(traditionalchinese.Big5.NewDecoder(), data); err == nil {
+		return out
+	}
+	return data
+}
+
+func declaredEncoding(data []byte) string {
+	head := data
+	if len(head) > 256 {
+		head = head[:256]
+	}
+	s := strings.ToLower(string(head))
+	i := strings.Index(s, "encoding=")
+	if i < 0 {
+		return ""
+	}
+	s = strings.TrimLeft(s[i+len("encoding="):], " \t\r\n")
+	if len(s) == 0 || (s[0] != '"' && s[0] != '\'') {
+		return ""
+	}
+	q := s[0]
+	s = s[1:]
+	if j := strings.IndexByte(s, q); j >= 0 {
+		return s[:j]
+	}
+	return ""
 }
 
 // applyNFO copies non-empty NFO values onto an item. Local metadata wins over
@@ -83,12 +165,12 @@ func applyNFO(it *model.Item, n *nfoData) {
 		it.Taglines = []string{v}
 		changed = true
 	}
-	if n.Year > 0 {
-		it.Year = n.Year
+	if year := int(nfoNumber(n.Year)); year > 0 {
+		it.Year = year
 		changed = true
 	}
-	if n.Rating > 0 {
-		it.Rating = n.Rating
+	if rating := nfoRating(n); rating > 0 {
+		it.Rating = rating
 		changed = true
 	}
 	if v := strings.TrimSpace(n.MPAARating); v != "" {
@@ -99,8 +181,8 @@ func applyNFO(it *model.Item, n *nfoData) {
 		it.Genres = genres
 		changed = true
 	}
-	if n.Runtime > 0 && it.RuntimeTicks == 0 {
-		it.RuntimeTicks = int64(n.Runtime) * 60 * 10_000_000
+	if minutes := int(nfoNumber(n.Runtime)); minutes > 0 && it.RuntimeTicks == 0 {
+		it.RuntimeTicks = int64(minutes) * 60 * 10_000_000
 		changed = true
 	}
 	if people := nfoPeople(n.Actors); len(people) > 0 {
@@ -110,6 +192,46 @@ func applyNFO(it *model.Item, n *nfoData) {
 	if changed {
 		it.MetadataSource = "nfo"
 	}
+}
+
+// nfoRating handles both <rating>7.5</rating> and the newer nested ratings.
+func nfoRating(n *nfoData) float64 {
+	if v := nfoNumber(n.Rating.Text); v > 0 {
+		return v
+	}
+	if v := nfoNumber(n.Rating.Value); v > 0 {
+		return v
+	}
+	for _, r := range n.Ratings.Items {
+		if v := nfoNumber(r.Value); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func nfoNumber(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		return v
+	}
+	start := strings.IndexAny(s, "0123456789")
+	if start < 0 {
+		return 0
+	}
+	s = s[start:]
+	end := 0
+	for end < len(s) && ((s[end] >= '0' && s[end] <= '9') || s[end] == '.') {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(strings.TrimSuffix(s[:end], "."), 64)
+	return v
 }
 
 func nfoPeople(actors []nfoActor) []model.Person {

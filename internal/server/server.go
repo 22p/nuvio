@@ -306,10 +306,18 @@ func (s *Server) reloadCatalog() error {
 	return nil
 }
 
+// catalogVersion is bumped when a scan can discover new metadata, forcing one
+// automatic rescan for existing libraries after an upgrade.
+const catalogVersion = 1
+
 // ScanIfNeeded performs the one-time scan for an existing library set that has
 // never been persisted. Normal startups only load nuvio.db.
 func (s *Server) ScanIfNeeded() {
 	if len(s.Store.Libraries()) == 0 {
+		return
+	}
+	if s.Store.Settings().ScannerVersion < catalogVersion {
+		s.StartScan()
 		return
 	}
 	if s.Catalog.Status().ItemCount == 0 && s.Store.LastScan().IsZero() {
@@ -400,6 +408,9 @@ func (s *Server) runScan() {
 	}
 	s.Catalog.Replace(current, kept)
 	s.Catalog.SetLastScan(s.Store.LastScan())
+	s.Store.UpdateSettings(func(st *model.ServerSettings) {
+		st.ScannerVersion = catalogVersion
+	})
 	s.scanMu.Lock()
 	s.scanning = false
 	s.lastScanErr = strings.Join(errs, "; ")

@@ -2,7 +2,10 @@ module nuvio
 
 go 1.27.0
 
-require modernc.org/sqlite v1.61.0
+require (
+	golang.org/x/text v0.43.0
+	modernc.org/sqlite v1.61.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect

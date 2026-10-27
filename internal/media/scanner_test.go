@@ -63,6 +63,44 @@ func TestScanReadsSeriesNFOAndArtwork(t *testing.T) {
 	}
 }
 
+func TestScanReadsEpisodeNFO(t *testing.T) {
+	root := t.TempDir()
+	season := filepath.Join(root, "Konosuba", "Season 01")
+	if err := os.MkdirAll(season, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(season, "Konosuba S01E04.mkv"), "")
+	writeTestFile(t, filepath.Join(season, "Konosuba S01E04.nfo"), `<episodedetails>
+  <title>The Crimson Village</title>
+  <plot>Kazuma and the party visit a strange village.</plot>
+  <year>2016</year>
+  <rating>8.1</rating>
+  <genre>Comedy</genre>
+  <actor><name>Jun Fukushima</name><role>Kazuma</role></actor>
+</episodedetails>`)
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryShows, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var episode *model.Item
+	for _, it := range items {
+		if it.Type == model.TypeEpisode {
+			episode = it
+		}
+	}
+	if episode == nil {
+		t.Fatalf("episode missing: %+v", items)
+	}
+	if episode.Name != "The Crimson Village" || episode.Overview == "" || episode.Rating != 8.1 {
+		t.Fatalf("episode nfo fields: %+v", episode)
+	}
+	if len(episode.People) != 1 || episode.People[0].Name != "Jun Fukushima" {
+		t.Fatalf("episode cast: %+v", episode.People)
+	}
+}
+
 func TestScanReadsMovieNFO(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "The Matrix (1999)")

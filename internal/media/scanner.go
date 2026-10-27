@@ -284,6 +284,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			ThumbPath:     agg.landscape,
 			ArtSeed:       md5hex("art:" + ve.path),
 		}
+		applyNFO(ep, episodeNFO(ve))
 		if agg.year == 0 && epYear > 0 {
 			agg.year = epYear
 		}
@@ -296,8 +297,8 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			if title := strings.TrimSpace(n.Title); title != "" {
 				agg.name = title
 			}
-			if n.Year > 0 && agg.year == 0 {
-				agg.year = n.Year
+			if year := int(nfoNumber(n.Year)); year > 0 && agg.year == 0 {
+				agg.year = year
 			}
 		}
 	}
