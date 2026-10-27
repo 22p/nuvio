@@ -309,7 +309,7 @@ func (a *API) rootDTO() itemDTO {
 		ImageTags:         map[string]string{"Primary": imageTag(it, "Primary")},
 		BackdropImageTags: []string{}, ParentBackdropImageTags: []string{},
 		PlayAccess: "Full", LocationType: "Virtual",
-		UserData: &userItemData{Key: rootItemID},
+		UserData: &userItemData{ItemId: rootItemID, Key: rootItemID},
 	}
 }
 

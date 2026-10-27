@@ -343,3 +343,44 @@ func TestGenresPersonsAndDisplayPreferences(t *testing.T) {
 		t.Fatalf("missing client = %d, want 400", rec.Code)
 	}
 }
+
+// The Jellyfin SDK deserializes UserItemDataDto.ItemId as a UUID and throws
+// on an empty string, so every item/view must carry it.
+func TestUserDataItemIDPresent(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	check := func(path string) {
+		rec, data := doJSON(t, h, "GET", path, tok, "")
+		if rec.Code != 200 {
+			t.Fatalf("%s = %d", path, rec.Code)
+		}
+		items, _ := data["Items"].([]any)
+		for _, raw := range items {
+			item, _ := raw.(map[string]any)
+			ud, _ := item["UserData"].(map[string]any)
+			if ud == nil || ud["ItemId"] == "" || ud["ItemId"] == nil {
+				t.Fatalf("%s: empty UserData.ItemId for %v", path, item["Id"])
+			}
+		}
+	}
+	check("/UserViews?userId=" + u.ID)
+	check("/Items?userId=" + u.ID + "&limit=10")
+	check("/Users/" + u.ID + "/Views")
+
+	rec, data := doJSON(t, h, "GET", "/Items/"+demo.Items()[0].ID+"?userId="+u.ID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("item details = %d", rec.Code)
+	}
+	ud, _ := data["UserData"].(map[string]any)
+	if ud == nil || ud["ItemId"] == "" {
+		t.Fatalf("item details: empty UserData.ItemId")
+	}
+
+	rec, data = doJSON(t, h, "GET", "/Items/Root", tok, "")
+	if rec.Code == 200 {
+		if ud, _ := data["UserData"].(map[string]any); ud == nil || ud["ItemId"] == "" {
+			t.Fatal("root item: empty UserData.ItemId")
+		}
+	}
+}

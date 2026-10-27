@@ -461,7 +461,7 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 
 func (a *API) buildUserData(it *model.Item, userID string) *userItemData {
 	if userID == "" {
-		return &userItemData{Key: it.ID}
+		return &userItemData{ItemId: it.ID, Key: it.ID}
 	}
 	ud := a.Store.GetUserData(userID, it.ID)
 	out := &userItemData{
@@ -548,7 +548,7 @@ func buildViewDTO(lib *model.Library, count int, serverID, userID string) itemDT
 		ImageTags:               map[string]string{"Primary": imageTag(viewItem(lib.ID, lib.Name), "Primary")},
 		BackdropImageTags:       []string{},
 		ParentBackdropImageTags: []string{},
-		UserData:                &userItemData{Key: lib.ID},
+		UserData:                &userItemData{ItemId: lib.ID, Key: lib.ID},
 		PlayAccess:              "Full",
 		CanDownload:             false,
 		LocationType:            "FileSystem",
