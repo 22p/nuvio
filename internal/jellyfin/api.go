@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"nuvio/internal/catalog"
 	"nuvio/internal/hls"
@@ -429,8 +430,40 @@ func (a *API) handlePublicUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// indexFoldASCII finds sub in s, ignoring ASCII case. Unlike
+// strings.Index(strings.ToLower(s), ...) it never rewrites the haystack:
+// ToLower expands invalid UTF-8 bytes into U+FFFD, which shifts every offset
+// after them and made values such as Version="1.0.0" parse as ".0.0" whenever
+// an earlier value contained a non-ASCII character.
+func indexFoldASCII(s, sub string) int {
+	if sub == "" {
+		return 0
+	}
+	n := len(sub)
+	for i := 0; i+n <= len(s); i++ {
+		match := true
+		for j := 0; j < n; j++ {
+			c, d := s[i+j], sub[j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if 'A' <= d && d <= 'Z' {
+				d += 'a' - 'A'
+			}
+			if c != d {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
 func mediaBrowserParam(header, name string) string {
-	idx := strings.Index(strings.ToLower(header), strings.ToLower(name)+"=")
+	idx := indexFoldASCII(header, name+"=")
 	if idx < 0 {
 		return ""
 	}
@@ -462,16 +495,59 @@ func ClientAddress(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// repairClientText makes a header value safe to store and emit. Browsers send
+// header values as bytes (Chrome encodes "·" as 0xB7, not UTF-8), so a raw
+// device name can arrive as invalid UTF-8 and later render as U+FFFD. Treat
+// such bytes as Latin-1, which is how they were produced.
+func repairClientText(s string) string {
+	if s == "" || utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		b.WriteRune(rune(s[i]))
+	}
+	return b.String()
+}
+
 // DecodeClientText reverses the percent-encoding some clients apply to
-// user-visible strings such as their device name ("真我GT6" arrives encoded).
+// user-visible strings such as their device name ("真我GT6" arrives encoded)
+// and repairs Latin-1 header bytes. Invalid escapes are left untouched.
 func DecodeClientText(s string) string {
+	s = repairClientText(s)
 	if !strings.Contains(s, "%") {
 		return s
 	}
-	if v, err := url.PathUnescape(s); err == nil && v != "" {
-		return v
+	v, err := url.PathUnescape(s)
+	if err != nil || v == "" {
+		return s
 	}
-	return s
+	return repairClientText(v)
+}
+
+// SessionMetaFromRequest reads the device metadata Jellyfin clients send in
+// their X-Emby-* headers or MediaBrowser authorization header. Values are left
+// empty when the client does not provide them, so callers can decide whether
+// to fall back or keep previously stored data.
+func SessionMetaFromRequest(r *http.Request) store.SessionMeta {
+	auth := r.Header.Get("X-Emby-Authorization")
+	if auth == "" {
+		auth = r.Header.Get("Authorization")
+	}
+	pick := func(header, param string) string {
+		if v := r.Header.Get(header); v != "" {
+			return v
+		}
+		return mediaBrowserParam(auth, param)
+	}
+	return store.SessionMeta{
+		DeviceID:   DecodeClientText(pick("X-Emby-Device-Id", "DeviceId")),
+		DeviceName: DecodeClientText(pick("X-Emby-Device-Name", "Device")),
+		Client:     DecodeClientText(pick("X-Emby-Client", "Client")),
+		Version:    DecodeClientText(pick("X-Emby-Client-Version", "Version")),
+		Address:    ClientAddress(r),
+	}
 }
 
 // DeviceLabel derives a readable device name from the user agent, for clients
@@ -540,37 +616,18 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	auth := r.Header.Get("X-Emby-Authorization")
-	if auth == "" {
-		auth = r.Header.Get("Authorization")
-	}
-	client := r.Header.Get("X-Emby-Client")
-	if client == "" {
-		client = mediaBrowserParam(auth, "Client")
-	}
-	deviceName := r.Header.Get("X-Emby-Device-Name")
-	if deviceName == "" {
-		deviceName = mediaBrowserParam(auth, "Device")
-	}
-	deviceID := r.Header.Get("X-Emby-Device-Id")
-	if deviceID == "" {
-		deviceID = mediaBrowserParam(auth, "DeviceId")
-	}
-	clientVersion := r.Header.Get("X-Emby-Client-Version")
-	if clientVersion == "" {
-		clientVersion = mediaBrowserParam(auth, "Version")
-	}
+	meta := SessionMetaFromRequest(r)
+	client, deviceName, clientVersion := meta.Client, meta.DeviceName, meta.Version
 	if deviceName == "" {
 		deviceName = DeviceLabel(r)
+		meta.DeviceName = deviceName
 	}
-	client = DecodeClientText(client)
-	deviceName = DecodeClientText(deviceName)
 	token, err := a.Store.IssueToken(u.ID, store.SessionMeta{
-		DeviceID:   deviceID,
+		DeviceID:   meta.DeviceID,
 		DeviceName: deviceName,
 		Client:     client,
 		Version:    clientVersion,
-		Address:    ClientAddress(r),
+		Address:    meta.Address,
 	})
 	if err != nil {
 		writeError(w, 500, "Could not create a session")
@@ -587,7 +644,7 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 			"Id":                    randomHex(12),
 			"UserId":                u.ID,
 			"UserName":              u.Name,
-			"DeviceId":              deviceID,
+			"DeviceId":              meta.DeviceID,
 			"DeviceName":            deviceName,
 			"DeviceType":            "",
 			"Client":                client,

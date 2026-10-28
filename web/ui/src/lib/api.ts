@@ -70,7 +70,12 @@ function authHeader(): string {
 
 export async function api<T>(path: string, init: RequestInit = {}, token = getToken()): Promise<T> {
   const headers = new Headers(init.headers)
-  if (token) headers.set('X-Emby-Token', token)
+  if (token) {
+    headers.set('X-Emby-Token', token)
+    // Jellyfin clients identify themselves on every call; the server uses it
+    // to keep the device list up to date.
+    if (!headers.has('Authorization')) headers.set('Authorization', authHeader())
+  }
   if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   const res = await fetch(path, { ...init, headers })
   if (!res.ok) {

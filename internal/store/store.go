@@ -686,6 +686,23 @@ func (s *Store) DescribeToken(token string, meta SessionMeta) {
 		WHERE token = ?`, meta.DeviceName, meta.Client, meta.Address, token)
 }
 
+// RefreshSession replaces the descriptive metadata of a token with what the
+// current request reports. Empty fields are ignored so a client that sends
+// fewer headers never erases what we already know.
+func (s *Store) RefreshSession(token string, meta SessionMeta) {
+	if token == "" {
+		return
+	}
+	_, _ = s.db.Exec(`UPDATE tokens SET
+		device_id = COALESCE(NULLIF(?, ''), device_id),
+		device_name = COALESCE(NULLIF(?, ''), device_name),
+		client = COALESCE(NULLIF(?, ''), client),
+		client_version = COALESCE(NULLIF(?, ''), client_version),
+		remote_address = COALESCE(NULLIF(?, ''), remote_address)
+		WHERE token = ?`,
+		meta.DeviceID, meta.DeviceName, meta.Client, meta.Version, meta.Address, token)
+}
+
 // RevokeSession invalidates one of a user's tokens by its opaque session id.
 func (s *Store) RevokeSession(userID, id string) bool {
 	if id == "" {

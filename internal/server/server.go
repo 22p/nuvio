@@ -562,21 +562,26 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]any{"error": "Not signed in"})
 		return
 	}
-	sessions := s.Store.Sessions(u.ID, tokenOf(r))
+	token := tokenOf(r)
+	if meta := jellyfin.SessionMetaFromRequest(r); meta.DeviceName != "" || meta.Client != "" || meta.Version != "" {
+		s.Store.RefreshSession(token, meta)
+	}
+	sessions := s.Store.Sessions(u.ID, token)
 	for _, sess := range sessions {
 		if sess.Current && sess.DeviceName == "" {
-			s.Store.DescribeToken(tokenOf(r), store.SessionMeta{
+			s.Store.DescribeToken(token, store.SessionMeta{
 				DeviceName: jellyfin.DeviceLabel(r),
 				Client:     "Nuvio Web",
 				Address:    jellyfin.ClientAddress(r),
 			})
-			sessions = s.Store.Sessions(u.ID, tokenOf(r))
+			sessions = s.Store.Sessions(u.ID, token)
 			break
 		}
 	}
 	for i := range sessions {
 		sessions[i].DeviceName = jellyfin.DecodeClientText(sessions[i].DeviceName)
 		sessions[i].Client = jellyfin.DecodeClientText(sessions[i].Client)
+		sessions[i].Version = jellyfin.DecodeClientText(sessions[i].Version)
 	}
 	if sessions == nil {
 		sessions = []store.Session{}

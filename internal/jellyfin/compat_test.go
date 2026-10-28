@@ -460,3 +460,61 @@ func TestLoginDecodesPercentEncodedDeviceName(t *testing.T) {
 		t.Fatalf("device name = %q, want 真我GT6", name)
 	}
 }
+
+// Browsers send header values as bytes: Chrome encodes "·" (U+00B7) as the
+// single byte 0xB7. That is not valid UTF-8, and lowercasing it used to shift
+// every offset after it, so Version="1.0.0" was parsed as ".0.0".
+func TestMediaBrowserHeaderLatin1(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, _ := testUser(t, a)
+
+	req := httptest.NewRequest("POST", "/Users/AuthenticateByName", strings.NewReader(`{"Username":"alice","Pw":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) Chrome/141.0 Safari/537.36")
+	req.Header.Set("X-Emby-Authorization",
+		"MediaBrowser Client=\"Nuvio Web\", Device=\"Linux \xb7 Chrome\", DeviceId=\"dev-1\", Version=\"1.0.0\"")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("login = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		AccessToken string `json:"AccessToken"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var got store.Session
+	for _, s := range a.Store.Sessions(u.ID, body.AccessToken) {
+		if s.Current {
+			got = s
+		}
+	}
+	if got.DeviceName != "Linux · Chrome" {
+		t.Fatalf("device name = %q, want %q", got.DeviceName, "Linux · Chrome")
+	}
+	if got.Client != "Nuvio Web" {
+		t.Fatalf("client = %q", got.Client)
+	}
+	if got.Version != "1.0.0" {
+		t.Fatalf("version = %q, want 1.0.0", got.Version)
+	}
+}
+
+func TestMediaBrowserParamAfterMultibyte(t *testing.T) {
+	header := `MediaBrowser Client="Nuvio Web", Device="Linux · Chrome", DeviceId="d", Version="1.0.0"`
+	for name, want := range map[string]string{
+		"Client":   "Nuvio Web",
+		"Device":   "Linux · Chrome",
+		"DeviceId": "d",
+		"Version":  "1.0.0",
+	} {
+		if got := mediaBrowserParam(header, name); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+	// Invalid escapes must be left alone rather than half-decoded.
+	if got := DecodeClientText("100%+ sure"); got != "100%+ sure" {
+		t.Fatalf("decoded invalid escape: %q", got)
+	}
+}

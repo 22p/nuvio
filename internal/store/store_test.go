@@ -436,3 +436,30 @@ func TestTokenSessionMigration(t *testing.T) {
 		t.Fatalf("DescribeToken did not fill metadata: %+v", list[0])
 	}
 }
+
+func TestRefreshSessionMetadata(t *testing.T) {
+	s, err := Open(t.TempDir(), "Nuvio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	u, err := s.CreateUser("alice", "secret", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := s.IssueToken(u.ID, SessionMeta{
+		DeviceName: "Linux · Chrome", Client: "Nuvio Web", Version: ".0.0", Address: "1.2.3.4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.RefreshSession(tok, SessionMeta{Version: "1.0.0"})
+	got := s.Sessions(u.ID, tok)[0]
+	if got.Version != "1.0.0" {
+		t.Fatalf("version = %q, want 1.0.0", got.Version)
+	}
+	if got.DeviceName != "Linux · Chrome" || got.Client != "Nuvio Web" || got.Address != "1.2.3.4" {
+		t.Fatalf("empty fields clobbered stored data: %+v", got)
+	}
+	s.RefreshSession("missing-token", SessionMeta{Version: "9.9.9"})
+}
