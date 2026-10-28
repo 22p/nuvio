@@ -626,6 +626,7 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 		VideoCodec:     it.Media.VideoCodec,
 		Encoder:        encoder,
 		Codec:          codec,
+		UserID:         u.ID,
 		Copy:           remux,
 	}
 	if remux && it.Media != nil {
@@ -668,6 +669,13 @@ func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if file == "main.m3u8" {
+		// The janitor suspends sessions that stopped receiving requests, so
+		// resume before waiting for output.
+		if sess, ok = a.HLS.Resume(sid, -1); !ok {
+			http.Error(w, "Transcoding session not found", http.StatusNotFound)
+			return
+		}
+		sess.Touch()
 		path, ok := sess.WaitForPlaylist(25 * time.Second)
 		if !ok {
 			if next, retried := a.HLS.FallbackSoftware(sid); retried {
@@ -693,11 +701,32 @@ func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(data)
 		return
 	}
+	if index := hls.SegmentIndex(file); index >= 0 {
+		// A paused client may resume straight into a segment request without
+		// re-reading the playlist first.
+		if sess, ok = a.HLS.Resume(sid, index); !ok {
+			http.Error(w, "Transcoding session not found", http.StatusNotFound)
+			return
+		}
+		sess.TouchSegment(index)
+		path, ok := sess.WaitForSegment(file, 20*time.Second)
+		if !ok {
+			http.Error(w, "Segment not found", http.StatusNotFound)
+			return
+		}
+		serveSessionFile(w, r, file, path)
+		return
+	}
+	sess.Touch()
 	path, ok := sess.SegmentPath(file)
 	if !ok {
 		http.Error(w, "Segment not found", http.StatusNotFound)
 		return
 	}
+	serveSessionFile(w, r, file, path)
+}
+
+func serveSessionFile(w http.ResponseWriter, r *http.Request, name, path string) {
 	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "Segment not found", http.StatusNotFound)
@@ -707,12 +736,12 @@ func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 	st, _ := f.Stat()
 	ct := "video/mp2t"
 	switch {
-	case strings.HasSuffix(file, ".mp4"), strings.HasSuffix(file, ".m4s"):
+	case strings.HasSuffix(name, ".mp4"), strings.HasSuffix(name, ".m4s"):
 		ct = "video/mp4"
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "public, max-age=600")
-	http.ServeContent(w, r, file, st.ModTime(), f)
+	http.ServeContent(w, r, name, st.ModTime(), f)
 }
 
 func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {

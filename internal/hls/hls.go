@@ -34,6 +34,12 @@ type Options struct {
 	// Codec is the output codec: h264 (default), hevc, av1 or vp9. Codecs
 	// other than H.264 are packaged as fragmented MP4 segments.
 	Codec string
+	// StartNumber is the sequence number of the first segment. Resuming a
+	// suspended session keeps numbering aligned with the client's timeline.
+	StartNumber int
+	// UserID owns the session; used to stop a user's streams when a client
+	// omits PlaySessionId from its stop report.
+	UserID string
 	// Copy repackages the existing streams (-c copy) instead of encoding.
 	Copy bool
 }
@@ -49,14 +55,19 @@ type Session struct {
 	Width      int
 	Copy       bool
 	Codec      string
+	UserID     string
 	CreatedAt  time.Time
 
-	mu     sync.Mutex
-	cmd    *exec.Cmd
-	err    string
-	stderr strings.Builder
-	done   chan struct{}
-
+	mu            sync.Mutex
+	cmd           *exec.Cmd
+	err           string
+	stderr        strings.Builder
+	done          chan struct{}
+	lastAccess    time.Time
+	lastSegment   int
+	finished      bool
+	suspended     bool
+	suspendedAt   time.Time
 	opts          Options
 	itemPath      string
 	fallbackTried bool
@@ -64,11 +75,14 @@ type Session struct {
 
 // Manager owns active sessions.
 type Manager struct {
-	mu       sync.Mutex
-	dir      string
-	sessions map[string]*Session
-	ffmpeg   func() string
-	maxAge   time.Duration
+	mu          sync.Mutex
+	restartMu   sync.Mutex
+	dir         string
+	sessions    map[string]*Session
+	ffmpeg      func() string
+	maxAge      time.Duration
+	idleTimeout time.Duration
+	sweep       time.Duration
 }
 
 // New creates a manager rooted at dir. ffmpeg is resolved lazily so the admin
@@ -80,7 +94,14 @@ func New(dir string, ffmpeg func() string) *Manager {
 		}
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	m := &Manager{dir: dir, sessions: map[string]*Session{}, ffmpeg: ffmpeg, maxAge: 3 * time.Hour}
+	m := &Manager{
+		dir:         dir,
+		sessions:    map[string]*Session{},
+		ffmpeg:      ffmpeg,
+		maxAge:      3 * time.Hour,
+		idleTimeout: 90 * time.Second,
+		sweep:       15 * time.Second,
+	}
 	go m.janitor()
 	return m
 }
@@ -95,12 +116,67 @@ func (m *Manager) Start(itemID, itemPath string, opts Options) (*Session, error)
 // can be correlated.
 func (m *Manager) Ensure(sessionID, itemID, itemPath string, opts Options) (*Session, error) {
 	if s, ok := m.Get(sessionID); ok {
-		if s.Err() == "" {
+		if s.Err() == "" && !s.Suspended() {
 			return s, nil
 		}
 		m.Stop(sessionID)
 	}
 	return m.start(sessionID, itemID, itemPath, opts)
+}
+
+// segmentSeconds is the target HLS segment duration set in buildArgs.
+const segmentSeconds = 4
+
+const segmentTicks = int64(segmentSeconds) * 10_000_000
+
+// Resume restarts a session that the janitor suspended for inactivity. from
+// is the first segment number the client needs; a negative value continues
+// after the last segment that was served.
+func (m *Manager) Resume(id string, from int) (*Session, bool) {
+	m.restartMu.Lock()
+	defer m.restartMu.Unlock()
+
+	m.mu.Lock()
+	s := m.sessions[id]
+	m.mu.Unlock()
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	if !s.suspended {
+		s.mu.Unlock()
+		return s, true
+	}
+	opts := s.opts
+	itemID, itemPath := s.ItemID, s.itemPath
+	base, baseNumber, last := s.StartTicks, opts.StartNumber, s.lastSegment
+	s.mu.Unlock()
+
+	opts.StartTicks, opts.StartNumber = resumeTarget(base, baseNumber, last, from)
+
+	m.Stop(id)
+	next, err := m.start(id, itemID, itemPath, opts)
+	if err != nil {
+		return nil, false
+	}
+	return next, true
+}
+
+// resumeTarget maps a segment number to a seek position. base is the current
+// session's start position and baseNumber the first segment number it emits,
+// so numbering stays absolute across repeated suspensions.
+func resumeTarget(base int64, baseNumber, last, from int) (int64, int) {
+	if from < 0 {
+		from = last + 1
+	}
+	if from < baseNumber {
+		from = baseNumber
+	}
+	ticks := base
+	if delta := from - baseNumber; delta > 0 {
+		ticks += int64(delta) * segmentTicks
+	}
+	return ticks, from
 }
 
 func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, error) {
@@ -126,19 +202,22 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 		return nil, err
 	}
 	s := &Session{
-		ID:         id,
-		ItemID:     itemID,
-		Dir:        dir,
-		StartTicks: opts.StartTicks,
-		Bitrate:    opts.BitrateKbps,
-		Height:     opts.Height,
-		Width:      opts.Width,
-		Copy:       opts.Copy,
-		Codec:      opts.Codec,
-		CreatedAt:  time.Now(),
-		done:       make(chan struct{}),
-		opts:       opts,
-		itemPath:   itemPath,
+		ID:          id,
+		ItemID:      itemID,
+		Dir:         dir,
+		StartTicks:  opts.StartTicks,
+		Bitrate:     opts.BitrateKbps,
+		Height:      opts.Height,
+		Width:       opts.Width,
+		Copy:        opts.Copy,
+		Codec:       opts.Codec,
+		UserID:      opts.UserID,
+		CreatedAt:   time.Now(),
+		lastAccess:  time.Now(),
+		lastSegment: opts.StartNumber - 1,
+		done:        make(chan struct{}),
+		opts:        opts,
+		itemPath:    itemPath,
 	}
 	args := buildArgs(opts, itemPath, dir)
 	cmd := exec.Command(ff, args...)
@@ -164,6 +243,7 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	go func() {
 		err := cmd.Wait()
 		s.mu.Lock()
+		s.finished = true
 		if err != nil {
 			s.err = strings.TrimSpace(s.stderr.String())
 			if s.err == "" {
@@ -230,7 +310,7 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		args = append(args, "-c:v", codec+"_vaapi")
 		args = append(args, profileArgs(codec)...)
 		args = append(args,
-			"-force_key_frames", "expr:gte(t,n_forced*4)",
+			"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds),
 			"-vf", fmt.Sprintf("scale_vaapi=w=-2:h=%d:format=nv12", opts.Height),
 			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
 			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
@@ -244,7 +324,7 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		args = append(args, "-c:v", codec+"_qsv")
 		args = append(args, profileArgs(codec)...)
 		args = append(args,
-			"-force_key_frames", "expr:gte(t,n_forced*4)",
+			"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds),
 			"-vf", fmt.Sprintf("scale_qsv=w=%d:h=%d:format=nv12", width, height),
 			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
 			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
@@ -260,7 +340,7 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		}
 		args = append(args, profileArgs(codec)...)
 		args = append(args,
-			"-force_key_frames", "expr:gte(t,n_forced*4)",
+			"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds),
 			"-pix_fmt", "yuv420p",
 			"-vf", fmt.Sprintf("scale=-2:%d", opts.Height),
 			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
@@ -285,11 +365,14 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 	}
 	args = append(args,
 		"-f", "hls",
-		"-hls_time", "4",
+		"-hls_time", strconv.Itoa(segmentSeconds),
 		"-hls_list_size", "0",
 		"-hls_playlist_type", "event",
 		"-hls_flags", "independent_segments",
 	)
+	if opts.StartNumber > 0 {
+		args = append(args, "-start_number", strconv.Itoa(opts.StartNumber))
+	}
 	if opts.Copy || codec == "h264" {
 		args = append(args,
 			"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
@@ -384,6 +467,13 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return s, ok
 }
 
+// Touch refreshes the idle timer for a session, if it exists.
+func (m *Manager) Touch(id string) {
+	if s, ok := m.Get(id); ok {
+		s.Touch()
+	}
+}
+
 // Stop terminates the process and removes its directory.
 func (m *Manager) Stop(id string) {
 	m.mu.Lock()
@@ -412,6 +502,46 @@ func (m *Manager) StopItem(itemID string) {
 	for _, id := range ids {
 		m.Stop(id)
 	}
+}
+
+// StopItemForUser terminates a user's sessions for an item. Some clients omit
+// PlaySessionId from their stop report, so the item and owner are the only
+// reliable handle.
+func (m *Manager) StopItemForUser(itemID, userID string) {
+	m.mu.Lock()
+	ids := []string{}
+	for id, s := range m.sessions {
+		if s.ItemID == itemID && s.UserID == userID {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		m.Stop(id)
+	}
+}
+
+// suspend stops a session's ffmpeg process but keeps its options so the next
+// request can resume transcoding. Keeping the entry also prevents explicit
+// stops from leaking processes.
+func (m *Manager) suspend(id string) {
+	m.mu.Lock()
+	s := m.sessions[id]
+	m.mu.Unlock()
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.suspended || s.finished {
+		s.mu.Unlock()
+		return
+	}
+	s.suspended = true
+	s.suspendedAt = time.Now()
+	s.mu.Unlock()
+	s.stop()
+	_ = os.RemoveAll(s.Dir)
+	_ = os.MkdirAll(s.Dir, 0o755)
 }
 
 // StopAll terminates every session (shutdown).
@@ -463,6 +593,64 @@ func (s *Session) SegmentPath(name string) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+// Touch marks the session as still in use so the janitor leaves it alone.
+func (s *Session) Touch() {
+	s.mu.Lock()
+	s.lastAccess = time.Now()
+	s.mu.Unlock()
+}
+
+// TouchSegment records the last segment served and refreshes the idle timer.
+func (s *Session) TouchSegment(index int) {
+	s.mu.Lock()
+	s.lastAccess = time.Now()
+	if index > s.lastSegment {
+		s.lastSegment = index
+	}
+	s.mu.Unlock()
+}
+
+// Suspended reports whether ffmpeg was stopped for inactivity. The session can
+// be restarted with Manager.Resume.
+func (s *Session) Suspended() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.suspended
+}
+
+// WaitForSegment blocks until ffmpeg has written name. It is used when a
+// suspended session is resumed for a segment the client already asked for.
+func (s *Session) WaitForSegment(name string, timeout time.Duration) (string, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if p, ok := s.SegmentPath(name); ok {
+			if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+				return p, true
+			}
+		}
+		if s.Err() != "" {
+			return "", false
+		}
+		if time.Now().After(deadline) {
+			return "", false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// SegmentIndex extracts the sequence number from seg00042.ts / seg00042.m4s.
+func SegmentIndex(name string) int {
+	if !strings.HasPrefix(name, "seg") {
+		return -1
+	}
+	stem := strings.TrimSuffix(strings.TrimSuffix(name, ".ts"), ".m4s")
+	n, err := strconv.Atoi(strings.TrimPrefix(stem, "seg"))
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
 }
 
 // WaitForPlaylist blocks briefly until ffmpeg has written the media playlist.
@@ -526,19 +714,40 @@ func codecString(codec string) string {
 }
 
 func (m *Manager) janitor() {
-	t := time.NewTicker(10 * time.Minute)
+	sweep := m.sweep
+	if sweep <= 0 {
+		sweep = 15 * time.Second
+	}
+	t := time.NewTicker(sweep)
 	defer t.Stop()
 	for range t.C {
+		now := time.Now()
 		m.mu.Lock()
 		stale := []string{}
+		idle := []string{}
 		for id, s := range m.sessions {
-			if time.Since(s.CreatedAt) > m.maxAge {
-				stale = append(stale, id)
+			s.mu.Lock()
+			switch {
+			case s.suspended:
+				if now.Sub(s.suspendedAt) > m.maxAge {
+					stale = append(stale, id)
+				}
+			case s.finished:
+				// ffmpeg already exited; only the playlist is left to serve.
+				if now.Sub(s.CreatedAt) > m.maxAge {
+					stale = append(stale, id)
+				}
+			case now.Sub(s.lastAccess) > m.idleTimeout:
+				idle = append(idle, id)
 			}
+			s.mu.Unlock()
 		}
 		m.mu.Unlock()
 		for _, id := range stale {
 			m.Stop(id)
+		}
+		for _, id := range idle {
+			m.suspend(id)
 		}
 	}
 }

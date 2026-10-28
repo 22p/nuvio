@@ -1664,6 +1664,11 @@ func (a *API) handlePlaying(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.applyProgress(u.ID, rep)
+	// Progress reports keep a paused session alive; without them the idle
+	// janitor would stop ffmpeg while the client still owns the session.
+	if rep.PlaySessionId != "" {
+		a.HLS.Touch(rep.PlaySessionId)
+	}
 	w.WriteHeader(204)
 }
 
@@ -1680,6 +1685,10 @@ func (a *API) handleStopped(w http.ResponseWriter, r *http.Request) {
 	a.applyProgress(u.ID, rep)
 	if rep.PlaySessionId != "" {
 		a.HLS.Stop(rep.PlaySessionId)
+	} else if rep.ItemId != "" {
+		// Some clients omit the session id; stop the user's streams for the
+		// item so ffmpeg does not keep encoding in the background.
+		a.HLS.StopItemForUser(normalizeID(rep.ItemId), u.ID)
 	}
 	w.WriteHeader(204)
 }
