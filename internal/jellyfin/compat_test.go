@@ -686,3 +686,77 @@ func TestSubtitleSubripRoute(t *testing.T) {
 	}
 	_ = u
 }
+
+// The Jellyfin SDK models declare several MediaSourceInfo/MediaStream fields
+// as required without defaults. kotlinx.serialization throws
+// MissingFieldException when any of them is absent, which left clients stuck
+// on a loading spinner for details and playback.
+func TestSDKRequiredFieldsPresent(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	movie := demo.Items()[0]
+
+	rec, item := doJSON(t, h, "GET", "/Items/"+movie.ID+"?userId="+u.ID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("item = %d", rec.Code)
+	}
+	sources, _ := item["MediaSources"].([]any)
+	if len(sources) == 0 {
+		t.Fatal("item has no MediaSources")
+	}
+	src := sources[0].(map[string]any)
+	for _, key := range []string{
+		"Protocol", "Type", "IsRemote", "ReadAtNativeFramerate", "IgnoreDts",
+		"IgnoreIndex", "GenPtsInput", "SupportsTranscoding", "SupportsDirectStream",
+		"SupportsDirectPlay", "IsInfiniteStream", "RequiresOpening", "RequiresClosing",
+		"RequiresLooping", "SupportsProbing", "TranscodingSubProtocol", "HasSegments",
+	} {
+		if _, ok := src[key]; !ok {
+			t.Fatalf("MediaSourceInfo is missing required field %s: %v", key, src)
+		}
+	}
+	streams, _ := src["MediaStreams"].([]any)
+	if len(streams) == 0 {
+		t.Fatal("media source has no streams")
+	}
+	for _, raw := range streams {
+		stream := raw.(map[string]any)
+		for _, key := range []string{
+			"Type", "Index", "IsInterlaced", "IsDefault", "IsForced",
+			"IsHearingImpaired", "IsOriginal", "IsExternal",
+			"IsTextSubtitleStream", "SupportsExternalStream",
+		} {
+			if _, ok := stream[key]; !ok {
+				t.Fatalf("MediaStream is missing required field %s: %v", key, stream)
+			}
+		}
+	}
+	ud, _ := item["UserData"].(map[string]any)
+	for _, key := range []string{"ItemId", "Key", "PlaybackPositionTicks", "PlayCount", "IsFavorite", "Played"} {
+		if _, ok := ud[key]; !ok {
+			t.Fatalf("UserItemDataDto is missing required field %s: %v", key, ud)
+		}
+	}
+
+	rec, info := doJSON(t, h, "POST", "/Items/"+movie.ID+"/PlaybackInfo?userId="+u.ID, tok, "{}")
+	if rec.Code != 200 {
+		t.Fatalf("playback info = %d", rec.Code)
+	}
+	if _, ok := info["MediaSources"].([]any); !ok {
+		t.Fatal("PlaybackInfoResponse is missing MediaSources")
+	}
+
+	rec, hints := doJSON(t, h, "GET", "/Search/Hints?searchTerm=a&userId="+u.ID, tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("search hints = %d", rec.Code)
+	}
+	list, _ := hints["SearchHints"].([]any)
+	for _, raw := range list {
+		hint := raw.(map[string]any)
+		for _, key := range []string{"ItemId", "Id", "Name", "Type", "Artists"} {
+			if _, ok := hint[key]; !ok {
+				t.Fatalf("SearchHint is missing required field %s: %v", key, hint)
+			}
+		}
+	}
+}

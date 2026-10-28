@@ -1439,6 +1439,8 @@ func (a *API) handleSearchHints(w http.ResponseWriter, r *http.Request) {
 			"RunTimeTicks":    it.RuntimeTicks,
 			"SeriesName":      it.SeriesName,
 			"PrimaryImageTag": imageTag(it, "Primary"),
+			// Required by SearchHint models even when there are no artists.
+			"Artists": []string{},
 		}
 		if it.Type == model.TypeEpisode {
 			h["IndexNumber"] = it.EpisodeNumber

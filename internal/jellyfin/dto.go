@@ -248,6 +248,9 @@ type mediaSourceDTO struct {
 	ETag                       string           `json:"ETag,omitempty"`
 	RunTimeTicks               int64            `json:"RunTimeTicks,omitempty"`
 	ReadAtNativeFramerate      bool             `json:"ReadAtNativeFramerate"`
+	IgnoreDts                  bool             `json:"IgnoreDts"`
+	IgnoreIndex                bool             `json:"IgnoreIndex"`
+	GenPtsInput                bool             `json:"GenPtsInput"`
 	SupportsTranscoding        bool             `json:"SupportsTranscoding"`
 	SupportsDirectStream       bool             `json:"SupportsDirectStream"`
 	SupportsDirectPlay         bool             `json:"SupportsDirectPlay"`
@@ -256,13 +259,14 @@ type mediaSourceDTO struct {
 	RequiresClosing            bool             `json:"RequiresClosing"`
 	RequiresLooping            bool             `json:"RequiresLooping"`
 	SupportsProbing            bool             `json:"SupportsProbing"`
+	HasSegments                bool             `json:"HasSegments"`
 	MediaStreams               []mediaStreamDTO `json:"MediaStreams"`
 	Bitrate                    int64            `json:"Bitrate,omitempty"`
 	DefaultAudioStreamIndex    int              `json:"DefaultAudioStreamIndex,omitempty"`
 	DefaultSubtitleStreamIndex int              `json:"DefaultSubtitleStreamIndex"`
 	DirectStreamUrl            string           `json:"DirectStreamUrl,omitempty"`
 	TranscodingUrl             string           `json:"TranscodingUrl,omitempty"`
-	TranscodingSubProtocol     string           `json:"TranscodingSubProtocol,omitempty"`
+	TranscodingSubProtocol     string           `json:"TranscodingSubProtocol"`
 	TranscodingContainer       string           `json:"TranscodingContainer,omitempty"`
 	Formats                    []string         `json:"Formats,omitempty"`
 }
@@ -278,6 +282,8 @@ type mediaStreamDTO struct {
 	IsInterlaced           bool    `json:"IsInterlaced"`
 	IsDefault              bool    `json:"IsDefault"`
 	IsForced               bool    `json:"IsForced"`
+	IsHearingImpaired      bool    `json:"IsHearingImpaired"`
+	IsOriginal             bool    `json:"IsOriginal"`
 	IsExternal             bool    `json:"IsExternal"`
 	Height                 int     `json:"Height,omitempty"`
 	Width                  int     `json:"Width,omitempty"`
@@ -288,7 +294,7 @@ type mediaStreamDTO struct {
 	DeliveryMethod         string  `json:"DeliveryMethod,omitempty"`
 	DeliveryUrl            string  `json:"DeliveryUrl,omitempty"`
 	SupportsExternalStream bool    `json:"SupportsExternalStream"`
-	IsTextSubtitleStream   bool    `json:"IsTextSubtitleStream,omitempty"`
+	IsTextSubtitleStream   bool    `json:"IsTextSubtitleStream"`
 	PixelFormat            string  `json:"PixelFormat,omitempty"`
 	RealFrameRate          float64 `json:"RealFrameRate,omitempty"`
 	Profile                string  `json:"Profile,omitempty"`

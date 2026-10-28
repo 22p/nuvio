@@ -219,18 +219,21 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 	settings := a.Store.Settings()
 	msid := a.mediaSourceID(it)
 	src := mediaSourceDTO{
-		Protocol:                   "File",
-		Id:                         msid,
-		Path:                       it.Path,
-		Type:                       "Default",
-		Container:                  it.Container,
-		Size:                       it.Size,
-		Name:                       fileName(it.Path),
-		RunTimeTicks:               it.RuntimeTicks,
-		IsRemote:                   false,
-		ETag:                       it.ID,
-		ReadAtNativeFramerate:      false,
-		SupportsProbing:            true,
+		Protocol:              "File",
+		Id:                    msid,
+		Path:                  it.Path,
+		Type:                  "Default",
+		Container:             it.Container,
+		Size:                  it.Size,
+		Name:                  fileName(it.Path),
+		RunTimeTicks:          it.RuntimeTicks,
+		IsRemote:              false,
+		ETag:                  it.ID,
+		ReadAtNativeFramerate: false,
+		SupportsProbing:       true,
+		// Required by the Jellyfin SDK models; "http" is the default used by
+		// the reference server for direct play.
+		TranscodingSubProtocol:     "http",
 		DefaultSubtitleStreamIndex: -1,
 		Formats:                    []string{},
 	}
