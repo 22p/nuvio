@@ -17,11 +17,60 @@ var langNames = map[string]string{
 	"de": "German", "es": "Spanish", "it": "Italian", "ru": "Russian",
 	"pt": "Portuguese", "pt-br": "Portuguese (Brazil)", "ar": "Arabic",
 	"hi": "Hindi", "th": "Thai", "vi": "Vietnamese", "und": "Unknown",
+	"pl": "Polish", "nl": "Dutch", "sv": "Swedish", "no": "Norwegian",
+	"da": "Danish", "fi": "Finnish", "tr": "Turkish", "he": "Hebrew",
+	"el": "Greek", "cs": "Czech", "hu": "Hungarian", "ro": "Romanian",
+	"uk": "Ukrainian", "id": "Indonesian", "ms": "Malay", "ta": "Tamil",
+	"te": "Telugu", "bn": "Bengali", "ur": "Urdu", "fa": "Persian",
+	"sr": "Serbian", "hr": "Croatian", "sk": "Slovak", "bg": "Bulgarian",
+	"ca": "Catalan", "eu": "Basque", "gl": "Galician", "is": "Icelandic",
+	"cy": "Welsh", "et": "Estonian", "lv": "Latvian", "lt": "Lithuanian",
+	"sl": "Slovenian", "sq": "Albanian", "mk": "Macedonian", "ka": "Georgian",
+	"hy": "Armenian", "az": "Azerbaijani", "kk": "Kazakh", "uz": "Uzbek",
+	"mn": "Mongolian", "ne": "Nepali", "si": "Sinhala", "km": "Khmer",
+	"lo": "Lao", "my": "Burmese", "tl": "Filipino", "sw": "Swahili",
+	"af": "Afrikaans", "la": "Latin", "eo": "Esperanto", "yue": "Cantonese",
+}
+
+// langAliases maps ISO 639-2/B and 639-2/T codes (used by ffprobe and many
+// release groups) onto the two letter codes used internally. Fansub suffixes
+// such as "chi" and "chs" are included.
+var langAliases = map[string]string{
+	"chi": "zh", "zho": "zh", "chs": "zh-cn", "cht": "zh-tw",
+	"eng": "en", "jpn": "ja", "kor": "ko",
+	"fre": "fr", "fra": "fr", "ger": "de", "deu": "de",
+	"spa": "es", "ita": "it", "rus": "ru", "por": "pt",
+	"ara": "ar", "hin": "hi", "tha": "th", "vie": "vi",
+	"pol": "pl", "dut": "nl", "nld": "nl", "swe": "sv",
+	"nor": "no", "nob": "no", "nno": "no", "dan": "da",
+	"fin": "fi", "tur": "tr", "heb": "he", "gre": "el", "ell": "el",
+	"cze": "cs", "ces": "cs", "hun": "hu", "rum": "ro", "ron": "ro",
+	"ukr": "uk", "ind": "id", "may": "ms", "msa": "ms",
+	"tam": "ta", "tel": "te", "ben": "bn", "urd": "ur",
+	"per": "fa", "fas": "fa", "srp": "sr", "hrv": "hr",
+	"slo": "sk", "slk": "sk", "bul": "bg", "cat": "ca",
+	"baq": "eu", "eus": "eu", "glg": "gl", "ice": "is", "isl": "is",
+	"wel": "cy", "cym": "cy", "est": "et", "lav": "lv", "lit": "lt",
+	"slv": "sl", "alb": "sq", "sqi": "sq", "mac": "mk", "mkd": "mk",
+	"geo": "ka", "kat": "ka", "arm": "hy", "hye": "hy",
+	"aze": "az", "kaz": "kk", "uzb": "uz", "mon": "mn",
+	"nep": "ne", "sin": "si", "khm": "km", "lao": "lo",
+	"mya": "my", "bur": "my", "tgl": "tl", "fil": "tl",
+	"swa": "sw", "afr": "af", "lat": "la", "epo": "eo",
+}
+
+func normalizeLang(code string) string {
+	c := strings.ToLower(strings.TrimSpace(code))
+	c = strings.ReplaceAll(c, "_", "-")
+	if a, ok := langAliases[c]; ok {
+		return a
+	}
+	return c
 }
 
 // LanguageName returns a human readable label for a language code.
 func LanguageName(code string) string {
-	c := strings.ToLower(strings.TrimSpace(code))
+	c := normalizeLang(code)
 	if n, ok := langNames[c]; ok {
 		return n
 	}
@@ -36,32 +85,94 @@ func LanguageName(code string) string {
 	return c
 }
 
-var langToken = regexp.MustCompile(`(?i)(^|[ ._\-])(zh[-_]?(?:cn|sg|tw|hk|hans|hant)?|en|ja|jp|ko|kr|fr|de|es|it|ru|pt[-_]?br|pt|ar|hi|th|vi|und)([ ._\-]|$)`)
+var langToken = regexp.MustCompile(`(?i)(^|[ ._\-])(zh[-_]?(?:cn|sg|tw|hk|hans|hant)?|en|ja|jp|ko|kr|fr|de|es|it|ru|pt[-_]?br|pt|ar|hi|th|vi|und|chi|zho|chs|cht|eng|jpn|kor|fre|fra|ger|deu|spa|ita|rus|por)([ ._\-]|$)`)
+
+func knownLangToken(token string) string {
+	c := normalizeLang(token)
+	if c == "" {
+		return ""
+	}
+	if c == "und" {
+		return "und"
+	}
+	if _, ok := langNames[c]; ok {
+		return c
+	}
+	return ""
+}
 
 // DetectSubtitleLanguage extracts a language code from a sidecar filename.
 func DetectSubtitleLanguage(filename, base string) string {
 	stem := strings.TrimSuffix(filename, filepathExt(filename))
-	stem = strings.TrimPrefix(stem, base)
+	if base != "" && strings.HasPrefix(strings.ToLower(stem), strings.ToLower(base)) {
+		stem = stem[len(base):]
+	}
 	stem = strings.Trim(stem, " ._-")
 	stem = strings.ReplaceAll(stem, "_", "-")
 	if stem == "" {
 		return "und"
 	}
 	lower := strings.ToLower(stem)
-	if _, ok := langNames[lower]; ok {
-		return lower
+	if code := knownLangToken(lower); code != "" {
+		return code
 	}
 	// Prefer the beginning of the suffix ("en.forced" -> "en").
-	first := strings.FieldsFunc(lower, func(r rune) bool { return r == '.' || r == '-' })
-	if len(first) > 0 {
-		if _, ok := langNames[first[0]]; ok {
-			return first[0]
+	tokens := strings.FieldsFunc(lower, func(r rune) bool { return r == '.' || r == '-' || r == ' ' })
+	for _, token := range tokens {
+		if code := knownLangToken(token); code != "" {
+			return code
 		}
 	}
 	if m := langToken.FindStringSubmatch(" " + lower + " "); len(m) > 1 {
-		return strings.ToLower(strings.ReplaceAll(m[2], "_", "-"))
+		if code := knownLangToken(m[2]); code != "" {
+			return code
+		}
 	}
 	return "und"
+}
+
+// DetectSubtitleTextLanguage guesses the language of a text subtitle from the
+// scripts it uses. Kana and Hangul are unambiguous; Han without kana is
+// treated as Chinese. It returns "" when there is not enough text.
+func DetectSubtitleTextLanguage(data []byte) string {
+	var han, kana, hangul int
+	for _, r := range string(data) {
+		switch {
+		case r >= 0x3040 && r <= 0x30FF:
+			kana++
+		case r >= 0xAC00 && r <= 0xD7AF:
+			hangul++
+		case r >= 0x4E00 && r <= 0x9FFF:
+			han++
+		}
+	}
+	switch {
+	case kana >= 20:
+		return "ja"
+	case hangul >= 20:
+		return "ko"
+	case han >= 20:
+		return "zh"
+	}
+	return ""
+}
+
+// DetectSubtitleFileLanguage reads the head of a text subtitle file and
+// guesses its language. Non-text formats return "".
+func DetectSubtitleFileLanguage(path string) string {
+	switch strings.ToLower(filepathExt(path)) {
+	case ".ass", ".ssa", ".srt", ".vtt":
+	default:
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 128<<10)
+	n, _ := f.Read(buf)
+	return DetectSubtitleTextLanguage(buf[:n])
 }
 
 func filepathExt(name string) string {

@@ -647,6 +647,13 @@ func matchSubtitles(dir, base string, files []string) []model.Subtitle {
 		}
 		ext := strings.ToLower(filepath.Ext(name))
 		lang := DetectSubtitleLanguage(name, base)
+		if lang == "und" {
+			// Sidecars without a language suffix are common; fall back to the
+			// script used by the file itself.
+			if guess := DetectSubtitleFileLanguage(path); guess != "" {
+				lang = guess
+			}
+		}
 		s := model.Subtitle{
 			Language: lang,
 			Title:    LanguageName(lang),
