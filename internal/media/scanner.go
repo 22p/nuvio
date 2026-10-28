@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -27,6 +28,7 @@ type Scanner struct {
 type videoEntry struct {
 	path    string
 	dir     string
+	root    string
 	base    string // filename without extension
 	name    string
 	ext     string
@@ -47,7 +49,8 @@ var (
 	episodeRe   = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])s(\d{1,3})[ ._-]?e(\d{1,3})(?:[^a-z0-9]|$)`)
 	episodeRe2  = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{1,2})x(\d{1,2})(?:[^0-9]|$)`)
 	seasonDirRe = regexp.MustCompile(`(?i)^(?:season|series|s)[ ._-]*0*(\d{1,3})$`)
-	specialsRe  = regexp.MustCompile(`(?i)^(?:specials?|extras?|bonus)$`)
+	cnSeasonRe  = regexp.MustCompile(`^(?:第)?([0-9零〇一二两三四五六七八九十百]{1,3})[季部篇]$`)
+	specialsRe  = regexp.MustCompile(`(?i)^(?:specials?|extras?|bonus|ova|oad|sp|sps|ncop|nced|pv)$`)
 	yearRe      = regexp.MustCompile(`(?:\(|\[|\.|\s)((?:19|20)\d{2})(?:\)|\]|\.|\s|$)`)
 	bracketRe   = regexp.MustCompile(`[\[\(\{][^\]\)\}]*[\]\)\}]`)
 	tokenRe     = regexp.MustCompile(`(?i)\b(2160p|1080p|720p|576p|480p|uhd|bluray|blu-ray|brrip|bdrip|webrip|web-dl|webdl|hdtv|dvdrip|remux|x264|x265|h264|h265|hevc|avc|10bit|8bit|hdr|dv|dolby|vision|atmos|dts(?:-hd)?|truehd|aac|ac3|eac3|ddp?5[ .]1|proper|repack|extended|unrated|remastered|multi|dual|sub|eng|chi)\b`)
@@ -66,6 +69,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 	artByDir := map[string]*artSet{}
 	imagesByDir := map[string]map[string]string{}
 	subsByDir := map[string][]string{}
+	ignoreRules := map[string][]ignoreRule{}
 	seen := map[string]bool{}
 
 	for _, root := range lib.Paths {
@@ -80,14 +84,30 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if d.IsDir() {
-				name := d.Name()
-				if path != root && (strings.HasPrefix(name, ".") || skipDirs[name]) {
+			name := d.Name()
+			if path != root && ignoredByAncestors(ignoreRules, root, path, d.IsDir()) {
+				if d.IsDir() {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			name := d.Name()
+			if d.IsDir() {
+				if path != root && (strings.HasPrefix(name, ".") || skipDirs[name]) {
+					return filepath.SkipDir
+				}
+				// Jellyfin compatible .ignore: an empty file excludes the whole
+				// directory, a non-empty one lists files/subfolders to skip.
+				if rules, ok := readIgnoreFile(path); ok {
+					if len(rules) == 0 {
+						return filepath.SkipDir
+					}
+					ignoreRules[path] = rules
+				}
+				return nil
+			}
+			if strings.HasPrefix(name, ".") {
+				return nil
+			}
 			dir := filepath.Dir(path)
 			ext := strings.ToLower(filepath.Ext(name))
 			if isImageExt(ext) {
@@ -140,6 +160,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			ve := &videoEntry{
 				path: path,
 				dir:  dir,
+				root: root,
 				base: strings.TrimSuffix(name, filepath.Ext(name)),
 				name: name,
 				ext:  ext,
@@ -229,7 +250,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 				continue
 			}
 		}
-		seriesDir := seriesDirFor(ve.dir)
+		seriesDir := seriesDirFor(ve.dir, ve.root)
 		seriesName, seriesYear := cleanTitleYear(filepath.Base(seriesDir))
 		seriesKey := seriesDir
 		if rootSet[seriesDir] {
@@ -530,23 +551,147 @@ func seriesPrefix(base string) (string, int) {
 	return cleanTitleYear(base[:loc[0]])
 }
 
-func seriesDirFor(dir string) string {
-	if _, ok := seasonOfDir(dir); ok {
-		return filepath.Dir(dir)
+// seriesDirFor returns the show folder for a video directory. The first
+// directory below the library root is the show, so unrecognised subfolders
+// (e.g. "第一季", "SPs", "Disc 1") stay inside their series instead of
+// becoming separate top-level entries. A first-level folder that is itself a
+// season means the library root is a single show.
+func seriesDirFor(dir, root string) string {
+	if dir == root {
+		return root
 	}
-	return dir
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return dir
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) == 1 {
+		if _, ok := seasonOfDir(dir); ok {
+			return root
+		}
+		return dir
+	}
+	return filepath.Join(root, parts[0])
 }
 
 func seasonOfDir(dir string) (int, bool) {
-	name := filepath.Base(dir)
+	name := strings.TrimSpace(filepath.Base(dir))
 	if m := seasonDirRe.FindStringSubmatch(name); len(m) == 2 {
 		n, _ := strconv.Atoi(m[1])
 		return n, true
+	}
+	if m := cnSeasonRe.FindStringSubmatch(name); len(m) == 2 {
+		if n := chineseNumber(m[1]); n > 0 {
+			return n, true
+		}
 	}
 	if specialsRe.MatchString(name) {
 		return 0, true
 	}
 	return 0, false
+}
+
+// chineseNumber parses the small Chinese numerals used in season folders
+// ("一", "十", "十二", "第二十" is uncommon and not needed here).
+func chineseNumber(s string) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	digits := map[rune]int{
+		'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+		'五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+	}
+	runes := []rune(strings.TrimSpace(s))
+	switch {
+	case len(runes) == 1:
+		return digits[runes[0]]
+	case len(runes) == 2 && runes[0] == '十':
+		return 10 + digits[runes[1]]
+	case len(runes) == 2 && runes[1] == '十':
+		return digits[runes[0]] * 10
+	case len(runes) == 3 && runes[1] == '十':
+		return digits[runes[0]]*10 + digits[runes[2]]
+	}
+	return 0
+}
+
+type ignoreRule struct {
+	pattern string
+	dirOnly bool
+	negate  bool
+}
+
+// readIgnoreFile looks for a .ignore file in dir. The second return value
+// reports whether the file exists; an existing file with no rules excludes
+// the whole directory, matching Jellyfin.
+func readIgnoreFile(dir string) ([]ignoreRule, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(entry.Name(), ".ignore") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, true
+		}
+		var rules []ignoreRule
+		for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			negate := strings.HasPrefix(line, "!")
+			if negate {
+				line = strings.TrimSpace(line[1:])
+			}
+			dirOnly := strings.HasSuffix(line, "/")
+			line = strings.Trim(strings.TrimPrefix(line, "/"), "/")
+			if line == "" {
+				continue
+			}
+			rules = append(rules, ignoreRule{pattern: line, dirOnly: dirOnly, negate: negate})
+		}
+		return rules, true
+	}
+	return nil, false
+}
+
+// ignoredByAncestors applies every .ignore file between root and path, so a
+// pattern such as "*.mkv" also covers nested season folders.
+func ignoredByAncestors(rules map[string][]ignoreRule, root, path string, isDir bool) bool {
+	name := filepath.Base(path)
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		if rs, ok := rules[dir]; ok && matchesIgnore(rs, name, isDir) {
+			return true
+		}
+		if dir == root || dir == filepath.Dir(dir) {
+			break
+		}
+	}
+	return false
+}
+
+func matchesIgnore(rules []ignoreRule, name string, isDir bool) bool {
+	ignored := false
+	for _, rule := range rules {
+		if rule.dirOnly && !isDir {
+			continue
+		}
+		matched, err := path.Match(rule.pattern, name)
+		if err != nil {
+			continue
+		}
+		if !matched && !strings.ContainsAny(rule.pattern, "*?[") {
+			matched = strings.EqualFold(rule.pattern, name)
+		}
+		if matched {
+			ignored = !rule.negate
+		}
+	}
+	return ignored
 }
 
 func seasonName(n int) string {

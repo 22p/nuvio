@@ -171,3 +171,69 @@ func TestScanReadsPerEpisodeArtwork(t *testing.T) {
 		t.Fatalf("series poster = %q, want %q", series.PosterPath, seriesArt)
 	}
 }
+
+// Unrecognised season folders ("第一季", "SPs", "Disc 1") belong to their show
+// instead of becoming separate top-level series.
+func TestScanKeepsNonStandardSubfoldersInSeries(t *testing.T) {
+	root := t.TempDir()
+	show := filepath.Join(root, "Konosuba")
+	writeTestFile(t, filepath.Join(show, "第一季", "Konosuba 01.mkv"), "")
+	writeTestFile(t, filepath.Join(show, "第二季", "Konosuba 01.mkv"), "")
+	writeTestFile(t, filepath.Join(show, "SPs", "Konosuba SP1.mkv"), "")
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryShows, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var series []*model.Item
+	seasons := map[int]string{}
+	for _, it := range items {
+		switch it.Type {
+		case model.TypeSeries:
+			series = append(series, it)
+		case model.TypeSeason:
+			seasons[it.SeasonNumber] = it.Name
+		}
+	}
+	if len(series) != 1 || series[0].Name != "Konosuba" {
+		t.Fatalf("series = %+v, want one Konosuba entry", series)
+	}
+	if _, ok := seasons[1]; !ok {
+		t.Fatalf("missing season 1: %v", seasons)
+	}
+	if _, ok := seasons[2]; !ok {
+		t.Fatalf("missing season 2: %v", seasons)
+	}
+	if _, ok := seasons[0]; !ok {
+		t.Fatalf("missing specials season: %v", seasons)
+	}
+}
+
+// Jellyfin's .ignore: an empty file excludes the directory, a non-empty file
+// lists children to skip.
+func TestScanHonoursIgnoreFiles(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "Keep", "Season 1", "Keep S01E01.mkv"), "")
+	writeTestFile(t, filepath.Join(root, "Skip", "Season 1", "Skip S01E01.mkv"), "")
+	writeTestFile(t, filepath.Join(root, "Skip", ".ignore"), "")
+	writeTestFile(t, filepath.Join(root, "Patterns", "Season 1", "Patterns S01E01.mkv"), "")
+	writeTestFile(t, filepath.Join(root, "Patterns", ".ignore"), "*.mkv\n")
+	writeTestFile(t, filepath.Join(root, ".hidden", "Season 1", "Hidden S01E01.mkv"), "")
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryShows, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, it := range items {
+		if it.Type == model.TypeSeries {
+			names[it.Name] = true
+		}
+	}
+	if !names["Keep"] || len(names) != 1 {
+		t.Fatalf("series = %v, want only Keep", names)
+	}
+}

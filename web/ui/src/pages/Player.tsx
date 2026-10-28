@@ -648,12 +648,6 @@ export function PlayerPage() {
     return () => window.clearTimeout(hideTimer.current)
   }, [wake])
 
-  useEffect(() => {
-    const onFs = () => setFullscreen(Boolean(document.fullscreenElement))
-    document.addEventListener('fullscreenchange', onFs)
-    return () => document.removeEventListener('fullscreenchange', onFs)
-  }, [])
-
   // Progress reporting.
   const sendReport = (path: string, s: typeof stateRef.current, isPaused: boolean) => {
     const video = videoRef.current
@@ -907,6 +901,30 @@ export function PlayerPage() {
     if (!document.fullscreenElement) el.requestFullscreen?.().catch(() => {})
     else document.exitFullscreen?.().catch(() => {})
   }
+
+  // Phones should switch to landscape when the player goes fullscreen.
+  useEffect(() => {
+    const onFs = () => {
+      const active = Boolean(document.fullscreenElement)
+      setFullscreen(active)
+      const orientation = screen.orientation as ScreenOrientation & {
+        lock?: (mode: string) => Promise<void>
+      }
+      if (!orientation) return
+      if (active) {
+        const coarse = window.matchMedia?.('(pointer: coarse)').matches
+        if (coarse) orientation.lock?.('landscape').catch(() => {})
+      } else {
+        try {
+          orientation.unlock?.()
+        } catch {
+          /* not supported */
+        }
+      }
+    }
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
 
   const togglePip = async () => {
     const video = videoRef.current
@@ -1440,10 +1458,6 @@ export function PlayerPage() {
           </button>
         </div>
       )}
-
-      <button className="player-back-floating" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })} aria-label={t("Back to details")}>
-        <IconClose size={18} />
-      </button>
     </div>
   )
 }

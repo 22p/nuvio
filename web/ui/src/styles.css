@@ -3294,23 +3294,6 @@ select option:disabled {
   font-size: 11px !important;
   color: var(--dim) !important;
 }
-.player-back-floating {
-  position: absolute;
-  right: 26px;
-  top: 24px;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  display: none;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(10, 11, 17, 0.6);
-  color: #fff;
-  z-index: 16;
-}
-.controls-off .player-back-floating {
-  display: grid;
-}
 .hide-sm {
   display: grid;
 }
