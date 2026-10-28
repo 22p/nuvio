@@ -88,6 +88,8 @@ http://<服务器地址>:8096
 
 接口以 Jellyfin **12.4.0** 路由为主，同时保留 10.x 的 `/Users/{id}/Views`、`/Users/{id}/Items`、`/Users/{id}/PlayedItems`、`/Users/{id}/FavoriteItems` 等兼容别名，旧版客户端（Filebar、JellyWatch 等）可继续使用；内置 Web 客户端使用新路径。
 
+路由大小写不敏感（`/items/{id}/Images/Primary` 与 `/Items/...` 等价），未实现的 API 路径返回 404 JSON 而不是网页。与官方一致，`/Videos/{id}/stream` 允许匿名访问（客户端会把 URL 直接交给播放器，Findroid 等不会附带 token），`/Videos/{id}/master.m3u8` 和字幕仍需鉴权；知道条目 ID 即可拉流，公网部署请自行加访问控制。
+
 **未实现**：插件、Live TV、音乐库、Quick Connect、远程控制/投屏、部分高级筛选参数（如 `studioIds`、`tags`、`officialRatings`）。如果你的客户端依赖其中某项，会得到 404 或空结果，但登录、浏览和视频播放不依赖它们。
 
 ## 媒体目录约定

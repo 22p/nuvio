@@ -245,12 +245,84 @@ func (s *Server) Handler() http.Handler {
 		"/Items", "/Items/", "/Videos/", "/videos/", "/Sessions/", "/System/", "/Shows/", "/Search/", "/Branding/",
 		"/DisplayPreferences/", "/UserViews", "/Genres", "/Persons", "/Audio/", "/api/"} {
 		mux.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, `{"error":"endpoint not implemented"}`, http.StatusNotFound)
+			writeJSON(w, 404, map[string]string{"error": "endpoint not implemented"})
 		})
 	}
 	mux.HandleFunc("/", s.handleSPA)
 
-	return s.withCORS(s.withLogging(mux))
+	// Jellyfin matches route paths case-insensitively, so clients are free to
+	// send their own casing (Findroid builds /items/{id}/Images/...). Normalise
+	// before dispatch so Go's case-sensitive patterns still apply.
+	return s.withCORS(s.withLogging(withAPIPathCase(mux)))
+}
+
+// canonicalSegments maps lower-case route literals back to the casing used by
+// the registered patterns.
+var canonicalSegments = func() map[string]string {
+	names := []string{
+		"System", "Info", "Public", "Configuration", "Branding",
+		"Users", "AuthenticateByName", "Me", "UserViews", "Views",
+		"Items", "Resume", "Latest", "Root", "Suggestions", "Similar",
+		"PlaybackInfo", "Images", "Shows", "Seasons", "Episodes", "NextUp",
+		"Search", "Hints", "UserItems", "UserData", "UserPlayedItems",
+		"UserFavoriteItems", "PlayedItems", "FavoriteItems", "PlayingItems",
+		"Genres", "Persons", "DisplayPreferences", "Sessions", "Playing",
+		"Progress", "Stopped", "Ping", "Capabilities", "Full", "Videos",
+		"Audio", "stream", "master.m3u8", "hls", "Subtitles",
+	}
+	m := make(map[string]string, len(names))
+	for _, n := range names {
+		m[strings.ToLower(n)] = n
+	}
+	return m
+}()
+
+// singleSegmentAPIRoutes is the set of one-segment paths that only exist in
+// the API. Paths such as /users and /search are also SPA routes, so they are
+// deliberately excluded.
+var singleSegmentAPIRoutes = map[string]bool{
+	"items": true, "userviews": true, "genres": true, "persons": true,
+}
+
+// canonicalAPIPath rewrites the API literals in p to their registered casing.
+// Path values (item ids, image types, file names) are left untouched.
+func canonicalAPIPath(p string) string {
+	if p == "" || p == "/" {
+		return p
+	}
+	segments := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	if len(segments) == 1 {
+		lower := strings.ToLower(segments[0])
+		if !singleSegmentAPIRoutes[lower] {
+			return p
+		}
+		if c, ok := canonicalSegments[lower]; ok {
+			return "/" + c
+		}
+		return p
+	}
+	changed := false
+	for i, seg := range segments {
+		if c, ok := canonicalSegments[strings.ToLower(seg)]; ok && c != seg {
+			segments[i] = c
+			changed = true
+		}
+	}
+	if !changed {
+		return p
+	}
+	return "/" + strings.Join(segments, "/")
+}
+
+func withAPIPathCase(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p := canonicalAPIPath(r.URL.Path); p != r.URL.Path {
+			r = r.Clone(r.Context())
+			r.URL.Path = p
+			r.URL.RawPath = ""
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) withCORS(next http.Handler) http.Handler {

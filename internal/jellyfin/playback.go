@@ -411,15 +411,30 @@ func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
 		if title == "" {
 			title = media.LanguageName(s.Language)
 		}
+		// Nuvio converts every sidecar subtitle to WebVTT or SubRip, so report
+		// the codec of what the delivery URL actually returns. Clients pick
+		// their parser from this value ("srt"/"vtt" are not Jellyfin codecs).
+		codec := subtitleDeliveryCodec(s.Codec)
 		out = append(out, mediaStreamDTO{
-			Type: "Subtitle", Index: s.Index, Codec: s.Codec, Language: s.Language,
-			DisplayTitle: title, DisplayLanguage: media.LanguageName(s.Language),
+			Type: "Subtitle", Index: s.Index, Codec: codec, Language: s.Language,
+			Title: title, DisplayTitle: title, DisplayLanguage: media.LanguageName(s.Language),
 			IsExternal: true, IsForced: s.Forced, IsDefault: s.Default,
-			DeliveryMethod: "External", DeliveryUrl: a.subtitleURL(it, s.Index, token),
-			SupportsExternalStream: true,
+			DeliveryMethod: "External", DeliveryUrl: a.subtitleURL(it, s.Index, codec, token),
+			SupportsExternalStream: true, IsTextSubtitleStream: true,
 		})
 	}
 	return out
+}
+
+// subtitleDeliveryCodec maps a source subtitle codec to the format the
+// subtitle endpoint serves. Anything that is not already WebVTT is converted
+// to SubRip.
+func subtitleDeliveryCodec(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "vtt", "webvtt":
+		return "webvtt"
+	}
+	return "subrip"
 }
 
 // Media access ------------------------------------------------------------
@@ -474,13 +489,25 @@ func (a *API) handleStreamFile(w http.ResponseWriter, r *http.Request) {
 	a.handleStream(w, r)
 }
 
+// streamUser resolves the caller for direct streaming. Jellyfin serves
+// /Videos/{itemId}/stream without authentication (clients such as Findroid
+// open the URL with no credentials), so a missing token is allowed while a
+// supplied token is still validated.
+func (a *API) streamUser(r *http.Request) (*model.User, bool) {
+	if a.tokenFromRequest(r) == "" {
+		return nil, true
+	}
+	return a.userFromRequest(r)
+}
+
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
+	u, ok := a.streamUser(r)
 	if !ok {
+		writeError(w, 401, "Not signed in")
 		return
 	}
 	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
-	if !ok || !canSeeItem(u, it) {
+	if !ok || (u != nil && !canSeeItem(u, it)) {
 		writeError(w, 404, "Item does not exist")
 		return
 	}
@@ -689,11 +716,12 @@ func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitle unavailable", http.StatusNotFound)
 		return
 	}
-	format := strings.ToLower(strings.TrimPrefix(r.PathValue("file"), "Stream."))
+	format := strings.ToLower(r.PathValue("file"))
+	format = strings.TrimPrefix(format, "stream.")
 	contentType := "text/vtt; charset=utf-8"
 	switch format {
-	case "vtt", "":
-	case "srt":
+	case "vtt", "webvtt", "":
+	case "srt", "subrip":
 		data = vttToSRT(data)
 		contentType = "application/x-subrip; charset=utf-8"
 	default:

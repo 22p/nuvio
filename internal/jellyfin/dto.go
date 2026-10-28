@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -270,6 +271,7 @@ type mediaStreamDTO struct {
 	Type                   string  `json:"Type"`
 	Index                  int     `json:"Index"`
 	Codec                  string  `json:"Codec,omitempty"`
+	Title                  string  `json:"Title,omitempty"`
 	Language               string  `json:"Language,omitempty"`
 	DisplayTitle           string  `json:"DisplayTitle"`
 	DisplayLanguage        string  `json:"DisplayLanguage,omitempty"`
@@ -286,6 +288,7 @@ type mediaStreamDTO struct {
 	DeliveryMethod         string  `json:"DeliveryMethod,omitempty"`
 	DeliveryUrl            string  `json:"DeliveryUrl,omitempty"`
 	SupportsExternalStream bool    `json:"SupportsExternalStream"`
+	IsTextSubtitleStream   bool    `json:"IsTextSubtitleStream,omitempty"`
 	PixelFormat            string  `json:"PixelFormat,omitempty"`
 	RealFrameRate          float64 `json:"RealFrameRate,omitempty"`
 	Profile                string  `json:"Profile,omitempty"`
@@ -569,10 +572,14 @@ func (a *API) mediaSourceID(it *model.Item) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *API) subtitleURL(it *model.Item, index int, token string) string {
-	u := fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/Stream.vtt", it.ID, a.mediaSourceID(it), index)
+func (a *API) subtitleURL(it *model.Item, index int, codec, token string) string {
+	format := "srt"
+	if codec == "webvtt" {
+		format = "vtt"
+	}
+	u := fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/Stream.%s", it.ID, a.mediaSourceID(it), index, format)
 	if token != "" {
-		u += "?api_key=" + token
+		u += "?api_key=" + url.QueryEscape(token)
 	}
 	return u
 }

@@ -518,3 +518,171 @@ func TestMediaBrowserParamAfterMultibyte(t *testing.T) {
 		t.Fatalf("decoded invalid escape: %q", got)
 	}
 }
+
+// Jellyfin's direct stream endpoint is anonymous: clients such as Findroid
+// hand the URL straight to the player without any credentials.
+func TestDirectStreamIsAnonymous(t *testing.T) {
+	_, h := newTestAPI(t)
+	movie := demo.Items()[0]
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true", nil))
+	if rec.Code != 200 {
+		t.Fatalf("anonymous stream = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "video/") {
+		t.Fatalf("anonymous stream content type = %q", ct)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream.mp4", nil))
+	if rec.Code != 200 {
+		t.Fatalf("anonymous stream.{container} = %d", rec.Code)
+	}
+
+	// An explicitly supplied token is still checked.
+	req := httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true", nil)
+	req.Header.Set("X-Emby-Token", "definitely-not-a-token")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("invalid token stream = %d, want 401", rec.Code)
+	}
+
+	// HLS stays protected, matching the reference server.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/master.m3u8", nil))
+	if rec.Code != 401 {
+		t.Fatalf("anonymous master playlist = %d, want 401", rec.Code)
+	}
+}
+
+// Subtitle streams must advertise a Jellyfin codec and a delivery URL that
+// returns that format, otherwise clients pick the wrong parser.
+func TestSubtitleDeliveryMatchesCodec(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	movie := demo.Items()[0]
+
+	req := httptest.NewRequest("POST", "/Items/"+movie.ID+"/PlaybackInfo?userId="+u.ID, strings.NewReader(`{}`))
+	req.Header.Set("X-Emby-Token", tok)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("playback info = %d", rec.Code)
+	}
+	var body struct {
+		MediaSources []struct {
+			MediaStreams []struct {
+				Type                 string `json:"Type"`
+				Codec                string `json:"Codec"`
+				Title                string `json:"Title"`
+				IsExternal           bool   `json:"IsExternal"`
+				DeliveryMethod       string `json:"DeliveryMethod"`
+				DeliveryUrl          string `json:"DeliveryUrl"`
+				IsTextSubtitleStream bool   `json:"IsTextSubtitleStream"`
+			} `json:"MediaStreams"`
+		} `json:"MediaSources"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.MediaSources) == 0 {
+		t.Fatal("no media sources")
+	}
+	var sub *struct {
+		Type                 string `json:"Type"`
+		Codec                string `json:"Codec"`
+		Title                string `json:"Title"`
+		IsExternal           bool   `json:"IsExternal"`
+		DeliveryMethod       string `json:"DeliveryMethod"`
+		DeliveryUrl          string `json:"DeliveryUrl"`
+		IsTextSubtitleStream bool   `json:"IsTextSubtitleStream"`
+	}
+	for i := range body.MediaSources[0].MediaStreams {
+		if body.MediaSources[0].MediaStreams[i].Type == "Subtitle" {
+			sub = &body.MediaSources[0].MediaStreams[i]
+			break
+		}
+	}
+	if sub == nil {
+		t.Fatal("no subtitle stream")
+	}
+	if sub.Codec != "subrip" && sub.Codec != "webvtt" {
+		t.Fatalf("codec = %q, want a Jellyfin subtitle codec", sub.Codec)
+	}
+	if !sub.IsExternal || sub.DeliveryMethod != "External" || !sub.IsTextSubtitleStream {
+		t.Fatalf("subtitle stream flags = %+v", sub)
+	}
+	if sub.Title == "" {
+		t.Fatal("subtitle stream has no Title")
+	}
+	want := "/Stream.srt"
+	if sub.Codec == "webvtt" {
+		want = "/Stream.vtt"
+	}
+	if !strings.Contains(sub.DeliveryUrl, want) {
+		t.Fatalf("delivery url = %q, want suffix %q", sub.DeliveryUrl, want)
+	}
+	if !strings.Contains(sub.DeliveryUrl, "api_key=") {
+		t.Fatalf("delivery url has no api key: %q", sub.DeliveryUrl)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", sub.DeliveryUrl, nil))
+	if rec.Code != 200 {
+		t.Fatalf("subtitle fetch = %d: %s", rec.Code, rec.Body.String())
+	}
+	ct := rec.Header().Get("Content-Type")
+	if sub.Codec == "subrip" && !strings.HasPrefix(ct, "application/x-subrip") {
+		t.Fatalf("subrip delivery content type = %q", ct)
+	}
+	if sub.Codec == "webvtt" && !strings.HasPrefix(ct, "text/vtt") {
+		t.Fatalf("webvtt delivery content type = %q", ct)
+	}
+
+	// The legacy ".vtt" spelling still resolves.
+	legacy := strings.Replace(sub.DeliveryUrl, "Stream.srt", "Stream.vtt", 1)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", legacy, nil))
+	if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/vtt") {
+		t.Fatalf("legacy vtt = %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestSubtitleDeliveryCodec(t *testing.T) {
+	cases := map[string]string{
+		"srt": "subrip", "subrip": "subrip", "ass": "subrip", "ssa": "subrip",
+		"vtt": "webvtt", "webvtt": "webvtt", "VTT": "webvtt", "": "subrip",
+	}
+	for in, want := range cases {
+		if got := subtitleDeliveryCodec(in); got != want {
+			t.Fatalf("subtitleDeliveryCodec(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The endpoint must serve SubRip for both the Jellyfin codec name and the
+// familiar extension.
+func TestSubtitleSubripRoute(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	movie := demo.Items()[0]
+	url := a.subtitleURL(movie, 2, "subrip", tok)
+	if !strings.HasSuffix(strings.Split(url, "?")[0], "/Stream.srt") {
+		t.Fatalf("subrip url = %q", url)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
+	if rec.Code != 200 {
+		t.Fatalf("subrip = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/x-subrip") {
+		t.Fatalf("subrip content type = %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "-->") || strings.HasPrefix(rec.Body.String(), "WEBVTT") {
+		t.Fatalf("subrip body is not SubRip: %q", rec.Body.String()[:min(40, rec.Body.Len())])
+	}
+	_ = u
+}
