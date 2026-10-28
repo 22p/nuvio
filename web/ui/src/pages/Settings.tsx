@@ -470,6 +470,13 @@ function DeviceList() {
   )
 }
 
+const CODEC_LABELS: Record<string, string> = {
+  h264: 'H.264',
+  hevc: 'HEVC',
+  av1: 'AV1',
+  vp9: 'VP9',
+}
+
 function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknown> }) {
   const [overview, setOverview] = useState<AdminOverview | null>(null)
   const [loading, setLoading] = useState(true)
@@ -479,6 +486,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   const [transcode, setTranscode] = useState(true)
   const [remux, setRemux] = useState(true)
   const [hardwareAccel, setHardwareAccel] = useState('auto')
+  const [codec, setCodec] = useState('h264')
   const [maxBitrate, setMaxBitrate] = useState(20)
   const [preset, setPreset] = useState('veryfast')
   const [ffmpegPath, setFfmpegPath] = useState('')
@@ -502,6 +510,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       setTranscode(data.settings.transcodeEnabled)
       setRemux(data.settings.remuxEnabled !== false)
       setHardwareAccel(data.settings.hardwareAccel || 'auto')
+      setCodec(data.settings.transcodeCodec || 'h264')
       setMaxBitrate(data.settings.maxBitrateMbps)
       setPreset(data.settings.transcodePreset || 'veryfast')
       setFfmpegPath(data.settings.ffmpegPath || '')
@@ -550,6 +559,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
         transcodeEnabled: transcode,
         remuxEnabled: remux,
         hardwareAccel,
+        transcodeCodec: selectedCodec,
         maxBitrateMbps: maxBitrate,
         transcodePreset: preset,
         ffmpegPath,
@@ -621,6 +631,21 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   }
 
   const totalItems = overview.counts.Total || 0
+  const capabilities = overview.capabilities || []
+  const softwareCodecs = new Set(
+    capabilities.find((cap) => cap.backend === 'software')?.encoders || [],
+  )
+  const hardwareCodecs = new Set<string>()
+  for (const cap of capabilities) {
+    if (cap.backend === 'software') continue
+    if (hardwareAccel !== 'auto' && hardwareAccel !== 'none' && cap.backend !== hardwareAccel) continue
+    cap.encoders.forEach((name) => hardwareCodecs.add(name))
+  }
+  const codecAvailable = (name: string) => softwareCodecs.has(name) || hardwareCodecs.has(name)
+  const codecOptions = ['h264', 'hevc', 'av1', 'vp9']
+    .filter(codecAvailable)
+    .map((value) => ({ value, label: CODEC_LABELS[value] || value }))
+  const selectedCodec = codecOptions.some((option) => option.value === codec) ? codec : 'h264'
 
   return (
     <>
@@ -734,13 +759,29 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               </span>
             </div>
           </div>
+          {capabilities.length > 0 && (
+            <div className="hw-caps">
+              {capabilities.map((cap) => (
+                <div className="hw-cap" key={cap.backend}>
+                  <div className="hw-cap-title">
+                    <span>{cap.backend === 'software' ? t("Software encoding") : cap.backend.toUpperCase()}</span>
+                    {cap.device && <code>{cap.device}</code>}
+                  </div>
+                  <div className="hw-cap-codes">
+                    <span>{t("Encode")} <b>{cap.encoders.length ? cap.encoders.map((c) => CODEC_LABELS[c] || c).join(' · ') : '—'}</b></span>
+                    <span>{t("Decode")} <b>{cap.decoders.length ? cap.decoders.map((c) => CODEC_LABELS[c] || c).join(' · ') : '—'}</b></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {!overview.ffmpeg && (
             <p className="hint-box">{t("Without ffmpeg only direct play is possible. Formats the browser cannot play, such as MKV/HEVC, need transcoding. Install ffmpeg on the server (e.g.")}{ ' '}<code>apt install ffmpeg</code>{t(") and enter the path here.")}</p>
           )}
           <div className="setting-row">
             <div>
               <div className="setting-label">{t("Enable transcoding")}</div>
-              <div className="setting-hint">{t("HLS with H.264 + AAC for clients that need it.")}</div>
+              <div className="setting-hint">{t("HLS with AAC audio for clients that need it. The video codec is chosen below.")}</div>
             </div>
             <Switch checked={transcode} onChange={setTranscode} />
           </div>
@@ -767,6 +808,15 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               onChange={setHardwareAccel}
             />
           </div>
+          {codecOptions.length > 0 && (
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">{t("Video codec")}</div>
+                <div className="setting-hint">{t("HEVC, AV1 and VP9 are packaged as fragmented MP4 segments. The client must support the selected codec; H.264 is the safest choice.")}</div>
+              </div>
+              <Select value={selectedCodec} options={codecOptions} onChange={setCodec} />
+            </div>
+          )}
           <div className="form-grid-3">
             <label className="field">
               <span>{t("Default bitrate (Mbps)")}</span>

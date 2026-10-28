@@ -100,105 +100,10 @@ func New(cfg Config) (*Server, error) {
 		Started:  time.Now(),
 	}
 	s.API.SetTools(ffmpeg, ffprobe)
-	s.API.SetEncoder(detectEncoder(ffmpeg))
-	vaapi, qsv := detectHardware(ffmpeg)
-	s.API.SetHardware(vaapi, qsv)
-	switch {
-	case vaapi != "" && qsv != "":
-		log.Printf("Hardware acceleration: vaapi (%s), qsv (%s)", vaapi, qsv)
-	case vaapi != "":
-		log.Printf("Hardware acceleration: vaapi (%s)", vaapi)
-	case qsv != "":
-		log.Printf("Hardware acceleration: qsv (%s)", qsv)
-	default:
-		log.Printf("Hardware acceleration: not available, using software")
-	}
+	applyHardware(s.API, ffmpeg)
 	s.HLS = hls.New(filepath.Join(cfg.DataDir, "transcode"), s.API.FFmpeg)
 	s.API.HLS = s.HLS
 	return s, nil
-}
-
-func detectEncoder(ffmpeg string) string {
-	if ffmpeg == "" {
-		return ""
-	}
-	out, err := exec.Command(ffmpeg, "-hide_banner", "-encoders").Output()
-	if err != nil {
-		return "libx264"
-	}
-	text := string(out)
-	for _, name := range []string{"libx264", "libopenh264", "h264_v4l2m2m"} {
-		if strings.Contains(text, " "+name+" ") {
-			return name
-		}
-	}
-	return "libx264"
-}
-
-// detectHardware finds a usable VAAPI device. Intel and AMD GPUs on Linux are
-// both exposed through /dev/dri/renderD*, and ffmpeg's h264_vaapi encoder is
-// available in the Alpine package used by the container image.
-func detectHardware(ffmpeg string) (string, string) {
-	if ffmpeg == "" {
-		return "", ""
-	}
-	device := detectRenderDevice()
-	if device == "" {
-		return "", ""
-	}
-	var vaapi, qsv string
-	if ffmpegHas(ffmpeg, "-hwaccels", "vaapi") && ffmpegHas(ffmpeg, "-encoders", "h264_vaapi") && vaapiWorks(ffmpeg, device) {
-		vaapi = device
-	}
-	if ffmpegHas(ffmpeg, "-hwaccels", "qsv") && ffmpegHas(ffmpeg, "-encoders", "h264_qsv") && qsvWorks(ffmpeg, device) {
-		qsv = device
-	}
-	return vaapi, qsv
-}
-
-func vaapiWorks(ffmpeg, device string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, ffmpeg,
-		"-hide_banner", "-loglevel", "error",
-		"-vaapi_device", device,
-		"-f", "lavfi", "-i", "testsrc2=size=160x120:rate=1",
-		"-frames:v", "1",
-		"-vf", "format=nv12,hwupload",
-		"-c:v", "h264_vaapi",
-		"-f", "null", "-",
-	).Run() == nil
-}
-
-func qsvWorks(ffmpeg, device string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, ffmpeg,
-		"-hide_banner", "-loglevel", "error",
-		"-qsv_device", device,
-		"-init_hw_device", "qsv=hw",
-		"-filter_hw_device", "hw",
-		"-f", "lavfi", "-i", "testsrc2=size=160x120:rate=1",
-		"-frames:v", "1",
-		"-vf", "format=nv12,hwupload=extra_hw_frames=64,format=qsv",
-		"-c:v", "h264_qsv",
-		"-f", "null", "-",
-	).Run() == nil
-}
-
-func ffmpegHas(ffmpeg, flag, needle string) bool {
-	out, err := exec.Command(ffmpeg, "-hide_banner", flag).Output()
-	return err == nil && strings.Contains(string(out), needle)
-}
-
-func detectRenderDevice() string {
-	for i := 128; i < 140; i++ {
-		p := fmt.Sprintf("/dev/dri/renderD%d", i)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p
-		}
-	}
-	return ""
 }
 
 func resolveTool(explicit, saved, env, name string) string {
@@ -722,22 +627,23 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		userOut = append(userOut, userPayload(u))
 	}
 	writeJSON(w, 200, map[string]any{
-		"serverName": s.Store.Settings().ServerName,
-		"version":    jellyfin.Version,
-		"apiVersion": jellyfin.ApiVersion,
-		"dataPath":   s.cfg.DataDir,
-		"dbPath":     s.Store.Path(),
-		"demo":       s.cfg.Demo,
-		"tmdb":       s.Store.Settings().TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "",
-		"ffmpeg":     s.API.FFmpeg(),
-		"ffprobe":    s.API.FFprobe(),
-		"encoder":    s.API.Encoder(),
-		"hardware":   s.API.HardwareMode(),
-		"scan":       status,
-		"counts":     s.Catalog.Counts(),
-		"libraries":  libs,
-		"users":      userOut,
-		"settings":   s.Store.Settings(),
+		"serverName":   s.Store.Settings().ServerName,
+		"version":      jellyfin.Version,
+		"apiVersion":   jellyfin.ApiVersion,
+		"dataPath":     s.cfg.DataDir,
+		"dbPath":       s.Store.Path(),
+		"demo":         s.cfg.Demo,
+		"tmdb":         s.Store.Settings().TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "",
+		"ffmpeg":       s.API.FFmpeg(),
+		"ffprobe":      s.API.FFprobe(),
+		"encoder":      s.API.Encoder(),
+		"hardware":     s.API.HardwareMode(),
+		"capabilities": s.API.Capabilities(),
+		"scan":         status,
+		"counts":       s.Catalog.Counts(),
+		"libraries":    libs,
+		"users":        userOut,
+		"settings":     s.Store.Settings(),
 	})
 }
 
@@ -974,6 +880,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		RemuxEnabled     *bool   `json:"remuxEnabled"`
 		MaxBitrateMbps   *int    `json:"maxBitrateMbps"`
 		TranscodePreset  *string `json:"transcodePreset"`
+		TranscodeCodec   *string `json:"transcodeCodec"`
 		HardwareAccel    *string `json:"hardwareAccel"`
 		FFmpegPath       *string `json:"ffmpegPath"`
 		FFprobePath      *string `json:"ffprobePath"`
@@ -1002,6 +909,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if body.TranscodeCodec != nil {
+		switch strings.ToLower(strings.TrimSpace(*body.TranscodeCodec)) {
+		case "h264", "hevc", "av1", "vp9":
+		default:
+			writeJSON(w, 400, map[string]any{"error": "Invalid transcoding video codec"})
+			return
+		}
+	}
 	oldProbe := s.API.FFprobe()
 	oldSettings := s.Store.Settings()
 	settings := s.Store.UpdateSettings(func(st *model.ServerSettings) {
@@ -1019,6 +934,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.TranscodePreset != nil {
 			st.TranscodePreset = *body.TranscodePreset
+		}
+		if body.TranscodeCodec != nil {
+			st.TranscodeCodec = strings.ToLower(strings.TrimSpace(*body.TranscodeCodec))
 		}
 		if body.HardwareAccel != nil {
 			st.HardwareAccel = strings.ToLower(strings.TrimSpace(*body.HardwareAccel))
@@ -1039,8 +957,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	ffmpeg := resolveTool("", settings.FFmpegPath, "NUVIO_FFMPEG", "ffmpeg")
 	ffprobe := resolveTool("", settings.FFprobePath, "NUVIO_FFPROBE", "ffprobe")
 	s.API.SetTools(ffmpeg, ffprobe)
-	s.API.SetEncoder(detectEncoder(ffmpeg))
-	s.API.SetHardware(detectHardware(ffmpeg))
+	applyHardware(s.API, ffmpeg)
 	metadataChanged := oldSettings.TMDBAPIKey != settings.TMDBAPIKey || oldSettings.MetadataLanguage != settings.MetadataLanguage
 	if ffprobe != oldProbe || (metadataChanged && (settings.TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "")) {
 		go s.StartScan()

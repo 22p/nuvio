@@ -167,6 +167,13 @@ export interface DeviceSession {
   current: boolean
 }
 
+export interface HardwareCapability {
+  backend: string
+  device?: string
+  encoders: string[]
+  decoders: string[]
+}
+
 export interface AdminOverview {
   serverName: string
   version: string
@@ -179,6 +186,7 @@ export interface AdminOverview {
   ffprobe: string
   encoder?: string
   hardware?: string
+  capabilities?: HardwareCapability[]
   scan: ScanStatus
   counts: Record<string, number>
   libraries: LibraryInfo[]
@@ -189,6 +197,7 @@ export interface AdminOverview {
     remuxEnabled: boolean
     maxBitrateMbps: number
     transcodePreset: string
+    transcodeCodec?: string
     hardwareAccel: string
     ffmpegPath?: string
     ffprobePath?: string

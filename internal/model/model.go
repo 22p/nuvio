@@ -162,6 +162,7 @@ type ServerSettings struct {
 	RemuxEnabled     bool   `json:"remuxEnabled"`
 	MaxBitrateMbps   int    `json:"maxBitrateMbps"`
 	TranscodePreset  string `json:"transcodePreset"`
+	TranscodeCodec   string `json:"transcodeCodec"`
 	HardwareAccel    string `json:"hardwareAccel"`
 	FFmpegPath       string `json:"ffmpegPath,omitempty"`
 	FFprobePath      string `json:"ffprobePath,omitempty"`
@@ -180,6 +181,7 @@ func DefaultServerSettings(name string) ServerSettings {
 		RemuxEnabled:     true,
 		MaxBitrateMbps:   20,
 		TranscodePreset:  "veryfast",
+		TranscodeCodec:   "h264",
 		HardwareAccel:    "auto",
 		MetadataLanguage: "zh-CN",
 	}

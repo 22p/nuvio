@@ -315,7 +315,8 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		q := url.Values{}
 		q.Set("MediaSourceId", msid)
 		q.Set("PlaySessionId", psid)
-		q.Set("VideoCodec", "h264")
+		codec := TranscodeCodec(settings.TranscodeCodec)
+		q.Set("VideoCodec", codec)
 		q.Set("AudioCodec", "aac")
 		q.Set("AudioStreamIndex", strconv.Itoa(audio))
 		q.Set("MaxStreamingBitrate", strconv.FormatInt(bitrate, 10))
@@ -333,6 +334,9 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		src.TranscodingUrl = "/Videos/" + it.ID + "/master.m3u8?" + q.Encode()
 		src.TranscodingSubProtocol = "hls"
 		src.TranscodingContainer = "ts"
+		if !remux && codec != "h264" {
+			src.TranscodingContainer = "mp4"
+		}
 	}
 	return src
 }
@@ -533,6 +537,37 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, name, mod, rs)
 }
 
+// transcodeTarget resolves the hardware backend, render device, output codec
+// and software encoder for a session. A hardware backend is only used when it
+// can actually encode the selected codec; otherwise the codec's software
+// encoder is used, and finally H.264 when no software encoder exists either.
+func (a *API) transcodeTarget(mode, codec string) (string, string, string, string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" || mode == "auto" {
+		mode = a.HardwareMode()
+	}
+	device := a.HardwareDevice(mode)
+	if device == "" {
+		mode = ""
+	}
+	codec = TranscodeCodec(codec)
+	if mode != "" && !a.SupportsEncode(mode, codec) {
+		mode, device = "", ""
+	}
+	encoder := a.SoftwareEncoder(codec)
+	if mode == "" && encoder == "" && codec != "h264" {
+		codec = "h264"
+		encoder = a.SoftwareEncoder("h264")
+		if encoder == "" {
+			encoder = a.Encoder()
+		}
+	}
+	if mode == "" && codec == "h264" && encoder == "" {
+		encoder = a.Encoder()
+	}
+	return mode, device, codec, encoder
+}
+
 func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 	u, ok := a.requireUser(w, r)
 	if !ok {
@@ -578,14 +613,7 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 	if psid == "" {
 		psid = randomHex(12)
 	}
-	mode := strings.ToLower(strings.TrimSpace(settings.HardwareAccel))
-	if mode == "" || mode == "auto" {
-		mode = a.HardwareMode()
-	}
-	device := a.HardwareDevice(mode)
-	if device == "" {
-		mode = ""
-	}
+	mode, device, codec, encoder := a.transcodeTarget(settings.HardwareAccel, settings.TranscodeCodec)
 	opts := hls.Options{
 		BitrateKbps:    int(hls.ParseInt(q.Get("MaxStreamingBitrate"), 8_000_000) / 1000),
 		AudioIndex:     hls.ParseInt(q.Get("AudioStreamIndex"), 1),
@@ -596,7 +624,8 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 		Hardware:       mode,
 		HardwareDevice: device,
 		VideoCodec:     it.Media.VideoCodec,
-		Encoder:        a.Encoder(),
+		Encoder:        encoder,
+		Codec:          codec,
 		Copy:           remux,
 	}
 	if remux && it.Media != nil {
@@ -677,7 +706,8 @@ func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	st, _ := f.Stat()
 	ct := "video/mp2t"
-	if strings.HasSuffix(file, ".mp4") {
+	switch {
+	case strings.HasSuffix(file, ".mp4"), strings.HasSuffix(file, ".m4s"):
 		ct = "video/mp4"
 	}
 	w.Header().Set("Content-Type", ct)

@@ -31,6 +31,9 @@ type Options struct {
 	// VideoCodec is the source codec, used to pick a QSV decoder.
 	VideoCodec string
 	Encoder    string
+	// Codec is the output codec: h264 (default), hevc, av1 or vp9. Codecs
+	// other than H.264 are packaged as fragmented MP4 segments.
+	Codec string
 	// Copy repackages the existing streams (-c copy) instead of encoding.
 	Copy bool
 }
@@ -45,6 +48,7 @@ type Session struct {
 	Height     int
 	Width      int
 	Copy       bool
+	Codec      string
 	CreatedAt  time.Time
 
 	mu     sync.Mutex
@@ -116,6 +120,7 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	if opts.Preset == "" {
 		opts.Preset = "veryfast"
 	}
+	opts.Codec = NormalizeCodec(opts.Codec)
 	dir := filepath.Join(m.dir, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -129,6 +134,7 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 		Height:     opts.Height,
 		Width:      opts.Width,
 		Copy:       opts.Copy,
+		Codec:      opts.Codec,
 		CreatedAt:  time.Now(),
 		done:       make(chan struct{}),
 		opts:       opts,
@@ -209,6 +215,7 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 	if encoder == "" {
 		encoder = "libx264"
 	}
+	codec := NormalizeCodec(opts.Codec)
 	args = append(args, "-i", itemPath,
 		"-map", "0:v:0",
 		"-map", fmt.Sprintf("0:a:%d?", max(opts.AudioIndex-1, 0)),
@@ -220,10 +227,10 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 			"-avoid_negative_ts", "make_zero",
 		)
 	case vaapi:
+		args = append(args, "-c:v", codec+"_vaapi")
+		args = append(args, profileArgs(codec)...)
 		args = append(args,
-			"-c:v", "h264_vaapi",
 			"-force_key_frames", "expr:gte(t,n_forced*4)",
-			"-profile:v", "high",
 			"-vf", fmt.Sprintf("scale_vaapi=w=-2:h=%d:format=nv12", opts.Height),
 			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
 			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
@@ -234,10 +241,10 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		)
 	case qsv:
 		width, height := evenDimensions(opts.Width, opts.Height)
+		args = append(args, "-c:v", codec+"_qsv")
+		args = append(args, profileArgs(codec)...)
 		args = append(args,
-			"-c:v", "h264_qsv",
 			"-force_key_frames", "expr:gte(t,n_forced*4)",
-			"-profile:v", "high",
 			"-vf", fmt.Sprintf("scale_qsv=w=%d:h=%d:format=nv12", width, height),
 			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
 			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
@@ -248,21 +255,33 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		)
 	default:
 		args = append(args, "-c:v", encoder)
-		if encoder == "libx264" {
+		if encoder == "libx264" || encoder == "libx265" {
 			args = append(args, "-preset", opts.Preset)
 		}
+		args = append(args, profileArgs(codec)...)
 		args = append(args,
 			"-force_key_frames", "expr:gte(t,n_forced*4)",
-			"-profile:v", "high",
 			"-pix_fmt", "yuv420p",
 			"-vf", fmt.Sprintf("scale=-2:%d", opts.Height),
 			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
-			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
-			"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),
+		)
+		// SVT-AV1 only accepts maxrate together with CRF rate control.
+		if encoder != "libsvtav1" {
+			args = append(args,
+				"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
+				"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),
+			)
+		}
+		args = append(args,
 			"-c:a", "aac",
 			"-b:a", "160k",
 			"-ac", "2",
 		)
+	}
+	if !opts.Copy {
+		if tag := objectTag(codec); tag != "" {
+			args = append(args, "-tag:v", tag)
+		}
 	}
 	args = append(args,
 		"-f", "hls",
@@ -270,10 +289,59 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		"-hls_list_size", "0",
 		"-hls_playlist_type", "event",
 		"-hls_flags", "independent_segments",
-		"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
-		filepath.Join(dir, "main.m3u8"),
 	)
+	if opts.Copy || codec == "h264" {
+		args = append(args,
+			"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
+			filepath.Join(dir, "main.m3u8"),
+		)
+	} else {
+		args = append(args,
+			"-hls_segment_type", "fmp4",
+			"-hls_fmp4_init_filename", "init.mp4",
+			"-hls_segment_filename", filepath.Join(dir, "seg%05d.m4s"),
+			filepath.Join(dir, "main.m3u8"),
+		)
+	}
 	return args
+}
+
+// NormalizeCodec maps user/ffprobe spellings to the short names used for
+// encoder selection. Unknown values fall back to H.264.
+func NormalizeCodec(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "hevc", "h265", "hvc1", "hev1":
+		return "hevc"
+	case "av1", "av01":
+		return "av1"
+	case "vp9", "vp09":
+		return "vp9"
+	default:
+		return "h264"
+	}
+}
+
+// profileArgs keeps encoder profiles valid: AV1/VP9 have no "high" profile and
+// their encoders reject the H.264 values.
+func profileArgs(codec string) []string {
+	switch codec {
+	case "h264":
+		return []string{"-profile:v", "high"}
+	case "hevc":
+		return []string{"-profile:v", "main"}
+	}
+	return nil
+}
+
+// objectTag sets the MP4 sample entry so players recognise HEVC and AV1.
+func objectTag(codec string) string {
+	switch codec {
+	case "hevc":
+		return "hvc1"
+	case "av1":
+		return "av01"
+	}
+	return ""
 }
 
 // FallbackSoftware restarts a failed hardware session with software encoding.
@@ -296,6 +364,10 @@ func (m *Manager) FallbackSoftware(id string) (*Session, bool) {
 	s.mu.Unlock()
 
 	opts.Hardware = ""
+	// A hardware-only codec has no software encoder to fall back to.
+	if opts.Codec != "" && opts.Codec != "h264" && opts.Encoder == "" {
+		opts.Codec = "h264"
+	}
 	m.Stop(id)
 	next, err := m.start(id, itemID, itemPath, opts)
 	if err != nil {
@@ -381,7 +453,8 @@ func (s *Session) SegmentPath(name string) (string, bool) {
 	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
 		return "", false
 	}
-	if !strings.HasSuffix(name, ".ts") && !strings.HasSuffix(name, ".m3u8") && !strings.HasSuffix(name, ".mp4") {
+	if !strings.HasSuffix(name, ".ts") && !strings.HasSuffix(name, ".m3u8") &&
+		!strings.HasSuffix(name, ".mp4") && !strings.HasSuffix(name, ".m4s") {
 		return "", false
 	}
 	p := filepath.Join(s.Dir, name)
@@ -421,16 +494,35 @@ func (s *Session) Master(token string) string {
 		width = s.Height * 16 / 9
 	}
 	var b strings.Builder
-	b.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n")
+	b.WriteString("#EXTM3U\n")
+	if !s.Copy && s.Codec != "" && s.Codec != "h264" {
+		b.WriteString("#EXT-X-VERSION:7\n")
+	} else {
+		b.WriteString("#EXT-X-VERSION:3\n")
+	}
 	if s.Copy {
 		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n",
 			s.Bitrate*1000, width, s.Height))
 	} else {
-		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"avc1.4d401f,mp4a.40.2\"\n",
-			s.Bitrate*1000, width, s.Height))
+		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"%s,mp4a.40.2\"\n",
+			s.Bitrate*1000, width, s.Height, codecString(s.Codec)))
 	}
 	b.WriteString("hls/" + s.ID + "/main.m3u8" + query + "\n")
 	return b.String()
+}
+
+// codecString is the RFC 6381 identifier for the master playlist.
+func codecString(codec string) string {
+	switch NormalizeCodec(codec) {
+	case "hevc":
+		return "hvc1.1.6.L93.B0"
+	case "av1":
+		return "av01.0.05M.08"
+	case "vp9":
+		return "vp09.00.10.08"
+	default:
+		return "avc1.4d401f"
+	}
 }
 
 func (m *Manager) janitor() {

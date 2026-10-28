@@ -832,3 +832,45 @@ func TestExternalASSServedUnchanged(t *testing.T) {
 		t.Fatalf("ass body was modified:\n%q", body)
 	}
 }
+
+func TestTranscodeTarget(t *testing.T) {
+	build := func() *API {
+		a := &API{}
+		a.SetEncoder("libx264")
+		a.SetSoftwareEncoders(map[string]string{"h264": "libx264", "av1": "libsvtav1"})
+		a.SetHardware("/dev/dri/renderD128", "")
+		a.SetCapabilities([]HardwareCapability{
+			{Backend: "software", Encoders: []string{"h264", "av1"}},
+			{Backend: "vaapi", Device: "/dev/dri/renderD128", Encoders: []string{"h264", "hevc"}},
+		})
+		return a
+	}
+
+	// AV1 is not available through VAAPI, so the software AV1 encoder wins.
+	mode, device, codec, encoder := build().transcodeTarget("auto", "av1")
+	if mode != "" || device != "" || codec != "av1" || encoder != "libsvtav1" {
+		t.Fatalf("auto/av1 = %q %q %q %q", mode, device, codec, encoder)
+	}
+
+	// H.264 stays on the hardware backend.
+	mode, device, codec, encoder = build().transcodeTarget("auto", "h264")
+	if mode != "vaapi" || device != "/dev/dri/renderD128" || codec != "h264" || encoder != "libx264" {
+		t.Fatalf("auto/h264 = %q %q %q %q", mode, device, codec, encoder)
+	}
+
+	// An explicit backend that has no render node must not be used.
+	a := build()
+	a.SetHardware("", "")
+	mode, device, codec, _ = a.transcodeTarget("vaapi", "h264")
+	if mode != "" || device != "" || codec != "h264" {
+		t.Fatalf("missing device = %q %q %q", mode, device, codec)
+	}
+
+	// With neither hardware nor software support for HEVC, fall back to H.264.
+	a = build()
+	a.SetHardware("", "")
+	mode, device, codec, encoder = a.transcodeTarget("none", "hevc")
+	if mode != "" || device != "" || codec != "h264" || encoder != "libx264" {
+		t.Fatalf("hevc fallback = %q %q %q %q", mode, device, codec, encoder)
+	}
+}

@@ -43,14 +43,25 @@ type API struct {
 	DemoFile string
 	Started  time.Time
 
-	toolsMu     sync.RWMutex
-	ffmpeg      string
-	ffprobe     string
-	encoder     string
-	vaapiDevice string
-	qsvDevice   string
-	imageMu     sync.Mutex
-	imageHTTP   *http.Client
+	toolsMu      sync.RWMutex
+	ffmpeg       string
+	ffprobe      string
+	encoder      string
+	vaapiDevice  string
+	qsvDevice    string
+	software     map[string]string
+	capabilities []HardwareCapability
+	imageMu      sync.Mutex
+	imageHTTP    *http.Client
+}
+
+// HardwareCapability is one backend's probed encoder and decoder support.
+// Codec names are short ("h264", "hevc", "av1", "vp9").
+type HardwareCapability struct {
+	Backend  string   `json:"backend"`
+	Device   string   `json:"device,omitempty"`
+	Encoders []string `json:"encoders"`
+	Decoders []string `json:"decoders"`
 }
 
 // SetTools updates ffmpeg/ffprobe paths at runtime.
@@ -73,6 +84,80 @@ func (a *API) SetHardware(vaapiDevice, qsvDevice string) {
 	a.toolsMu.Lock()
 	a.vaapiDevice, a.qsvDevice = vaapiDevice, qsvDevice
 	a.toolsMu.Unlock()
+}
+
+// SetCapabilities records the probed per-backend encoder/decoder support.
+func (a *API) SetCapabilities(caps []HardwareCapability) {
+	out := make([]HardwareCapability, len(caps))
+	for i, cap := range caps {
+		out[i] = HardwareCapability{
+			Backend:  cap.Backend,
+			Device:   cap.Device,
+			Encoders: cloneCodecList(cap.Encoders),
+			Decoders: cloneCodecList(cap.Decoders),
+		}
+	}
+	a.toolsMu.Lock()
+	a.capabilities = out
+	a.toolsMu.Unlock()
+}
+
+// Capabilities returns a copy of the probed backend support.
+func (a *API) Capabilities() []HardwareCapability {
+	a.toolsMu.RLock()
+	defer a.toolsMu.RUnlock()
+	out := make([]HardwareCapability, len(a.capabilities))
+	for i, cap := range a.capabilities {
+		out[i] = HardwareCapability{
+			Backend:  cap.Backend,
+			Device:   cap.Device,
+			Encoders: cloneCodecList(cap.Encoders),
+			Decoders: cloneCodecList(cap.Decoders),
+		}
+	}
+	return out
+}
+
+// cloneCodecList always returns a non-nil slice so the JSON payload contains
+// [] rather than null; the web client maps over it directly.
+func cloneCodecList(in []string) []string {
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+// SetSoftwareEncoders records the working software encoder for each codec.
+func (a *API) SetSoftwareEncoders(encoders map[string]string) {
+	out := make(map[string]string, len(encoders))
+	for codec, name := range encoders {
+		out[codec] = name
+	}
+	a.toolsMu.Lock()
+	a.software = out
+	a.toolsMu.Unlock()
+}
+
+// SoftwareEncoder returns the software encoder for codec, or "".
+func (a *API) SoftwareEncoder(codec string) string {
+	a.toolsMu.RLock()
+	defer a.toolsMu.RUnlock()
+	return a.software[codec]
+}
+
+// SupportsEncode reports whether backend was probed with a working encoder for
+// codec. The backend may be "software" or a hardware backend name.
+func (a *API) SupportsEncode(backend, codec string) bool {
+	for _, cap := range a.Capabilities() {
+		if cap.Backend != backend {
+			continue
+		}
+		for _, name := range cap.Encoders {
+			if name == codec {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // HardwareDevice returns the render node for the requested backend.
@@ -106,6 +191,11 @@ func (a *API) Encoder() string {
 	a.toolsMu.RLock()
 	defer a.toolsMu.RUnlock()
 	return a.encoder
+}
+
+// TranscodeCodec normalises a configured output codec name.
+func TranscodeCodec(codec string) string {
+	return hls.NormalizeCodec(codec)
 }
 
 // FFmpeg returns the configured ffmpeg binary (may be empty).

@@ -97,3 +97,19 @@ func TestAPIPathCaseLeavesPrivateAPIAlone(t *testing.T) {
 		t.Fatalf("DELETE /api/app/sessions/abc = %d", rec.Code)
 	}
 }
+
+func TestCodecListed(t *testing.T) {
+	out := ` V....D libx264              libx264 H.264 (codec h264)
+ V....D h264_vaapi           H.264/AVC (VAAPI) (codec h264)
+ V....D libsvtav1            SVT-AV1 encoder (codec av1)`
+	for _, name := range []string{"libx264", "h264_vaapi", "libsvtav1"} {
+		if !codecListed(out, name) {
+			t.Fatalf("%s should be listed", name)
+		}
+	}
+	for _, name := range []string{"h264_qsv", "libx265", ""} {
+		if codecListed(out, name) {
+			t.Fatalf("%s should not be listed", name)
+		}
+	}
+}
