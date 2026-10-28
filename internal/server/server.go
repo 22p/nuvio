@@ -290,6 +290,13 @@ func canonicalAPIPath(p string) string {
 	if p == "" || p == "/" {
 		return p
 	}
+	// /api/... is Nuvio's own frontend API, not the Jellyfin API. It is
+	// matched exactly, and rewriting segments here used to turn
+	// /api/app/sessions into /api/app/Sessions (404 "endpoint not
+	// implemented") because "sessions" is also a Jellyfin route literal.
+	if p == "/api" || strings.HasPrefix(p, "/api/") {
+		return p
+	}
 	segments := strings.Split(strings.TrimPrefix(p, "/"), "/")
 	if len(segments) == 1 {
 		lower := strings.ToLower(segments[0])

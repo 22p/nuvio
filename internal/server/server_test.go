@@ -26,6 +26,11 @@ func TestCanonicalAPIPath(t *testing.T) {
 		"/genres":                                                    "/Genres",
 		"/persons":                                                   "/Persons",
 		"/sessions/playing":                                          "/Sessions/Playing",
+		// The private frontend API must not be rewritten: "sessions" is also a
+		// Jellyfin literal, and /api/app/Sessions does not exist.
+		"/api/app/sessions":     "/api/app/sessions",
+		"/api/app/sessions/abc": "/api/app/sessions/abc",
+		"/api/setup":            "/api/setup",
 		// SPA routes keep their casing, otherwise client side routing breaks.
 		"/users":  "/users",
 		"/search": "/search",
@@ -65,5 +70,30 @@ func TestAPIPathCaseMiddleware(t *testing.T) {
 		if rec.Code != 200 || rec.Body.String() != want {
 			t.Fatalf("%s = %d %q, want 200 %q", path, rec.Code, rec.Body.String(), want)
 		}
+	}
+}
+
+// Regression: the path normaliser turned /api/app/sessions into
+// /api/app/Sessions, so the device list fell through to the 404 handler.
+func TestAPIPathCaseLeavesPrivateAPIAlone(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/app/sessions", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("sessions"))
+	})
+	mux.HandleFunc("DELETE /api/app/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(204)
+	})
+	h := withAPIPathCase(mux)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/app/sessions", nil))
+	if rec.Code != 200 || rec.Body.String() != "sessions" {
+		t.Fatalf("GET /api/app/sessions = %d %q", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("DELETE", "/api/app/sessions/abc", nil))
+	if rec.Code != 204 {
+		t.Fatalf("DELETE /api/app/sessions/abc = %d", rec.Code)
 	}
 }
