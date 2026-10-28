@@ -132,3 +132,42 @@ func TestScanReadsMovieNFO(t *testing.T) {
 		t.Fatalf("movie cast: %+v", it.People)
 	}
 }
+
+func TestScanReadsPerEpisodeArtwork(t *testing.T) {
+	root := t.TempDir()
+	show := filepath.Join(root, "Konosuba")
+	season := filepath.Join(show, "S1")
+	meta := filepath.Join(season, "metadata")
+	if err := os.MkdirAll(meta, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(season, "Konosuba S1E01.mkv"), "")
+	epArt := filepath.Join(meta, "Konosuba S1E01.jpg")
+	writeTestFile(t, epArt, "episode image")
+	seriesArt := filepath.Join(show, "folder.jpg")
+	writeTestFile(t, seriesArt, "series image")
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryShows, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var series, episode *model.Item
+	for _, it := range items {
+		switch it.Type {
+		case model.TypeSeries:
+			series = it
+		case model.TypeEpisode:
+			episode = it
+		}
+	}
+	if series == nil || episode == nil {
+		t.Fatalf("series or episode missing: %+v", items)
+	}
+	if episode.PosterPath != epArt || episode.ThumbPath != epArt {
+		t.Fatalf("episode art = %q/%q, want %q", episode.PosterPath, episode.ThumbPath, epArt)
+	}
+	if series.PosterPath != seriesArt {
+		t.Fatalf("series poster = %q, want %q", series.PosterPath, seriesArt)
+	}
+}

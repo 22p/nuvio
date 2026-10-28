@@ -64,6 +64,7 @@ var skipDirs = map[string]bool{
 func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, error) {
 	videos := []*videoEntry{}
 	artByDir := map[string]*artSet{}
+	imagesByDir := map[string]map[string]string{}
 	subsByDir := map[string][]string{}
 	seen := map[string]bool{}
 
@@ -89,6 +90,15 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			name := d.Name()
 			dir := filepath.Dir(path)
 			ext := strings.ToLower(filepath.Ext(name))
+			if isImageExt(ext) {
+				stem := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+				if imagesByDir[dir] == nil {
+					imagesByDir[dir] = map[string]string{}
+				}
+				if imagesByDir[dir][stem] == "" {
+					imagesByDir[dir][stem] = path
+				}
+			}
 			if kind := artKind(name); kind != "" {
 				set := artByDir[dir]
 				if set == nil {
@@ -259,6 +269,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 		if epYear == 0 {
 			epYear = agg.year
 		}
+		epArt := episodeArt(ve.dir, ve.base, seriesDir, imagesByDir)
 		ep := &model.Item{
 			ID:            md5hex("episode:" + ve.path),
 			Type:          model.TypeEpisode,
@@ -278,10 +289,10 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			Size:          ve.size,
 			AddedAt:       ve.modTime,
 			Media:         &ve.media,
-			PosterPath:    agg.poster,
-			BackdropPath:  agg.backdrop,
+			PosterPath:    firstNonEmpty(epArt, agg.poster),
+			BackdropPath:  firstNonEmpty(epArt, agg.backdrop),
 			LogoPath:      agg.logo,
-			ThumbPath:     agg.landscape,
+			ThumbPath:     firstNonEmpty(epArt, agg.landscape),
 			ArtSeed:       md5hex("art:" + ve.path),
 		}
 		applyNFO(ep, episodeNFO(ve))
@@ -419,11 +430,59 @@ func (s *Scanner) movieItem(lib *model.Library, ve *videoEntry, artByDir map[str
 	return item
 }
 
+func isImageExt(ext string) bool {
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp":
+		return true
+	}
+	return false
+}
+
+// episodeArt finds per-episode artwork. The common layout is
+// Show/Season 01/metadata/Show S01E01.jpg, next to the episode file or in a
+// Series/metadata folder.
+func episodeArt(dir, base, seriesDir string, images map[string]map[string]string) string {
+	base = strings.ToLower(base)
+	keys := []string{
+		base,
+		base + "-thumb",
+		base + "_thumb",
+		base + ".thumb",
+		base + "-poster",
+	}
+	dirs := []string{filepath.Join(dir, "metadata"), dir}
+	if seriesDir != "" && seriesDir != dir {
+		dirs = append(dirs, filepath.Join(seriesDir, "metadata"), seriesDir)
+	}
+	for _, d := range dirs {
+		for _, key := range keys {
+			if path := images[d][key]; path != "" {
+				return path
+			}
+		}
+	}
+	// Fall back to images whose SxxExx numbers match the episode even when the
+	// separator or title spelling differs from the video filename.
+	season, episode, ok := parseEpisode(base, dir)
+	if !ok {
+		return ""
+	}
+	best := ""
+	for _, d := range dirs {
+		for stem, path := range images[d] {
+			if s, e, ok := parseEpisode(stem, dir); ok && s == season && e == episode {
+				if best == "" || path < best {
+					best = path
+				}
+			}
+		}
+	}
+	return best
+}
+
 func artKind(name string) string {
 	stem := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg", ".png", ".webp":
-	default:
+	if !isImageExt(strings.ToLower(filepath.Ext(name))) {
 		return ""
 	}
 	switch stem {

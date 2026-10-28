@@ -648,6 +648,7 @@ img {
 }
 .media-art {
   position: relative;
+  width: 100%;
   aspect-ratio: 2 / 3;
   border-radius: 14px;
   overflow: hidden;
@@ -655,7 +656,16 @@ img {
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32);
   transition: transform 0.28s cubic-bezier(0.2, 0.7, 0.3, 1), box-shadow 0.28s ease;
 }
+/* Keeps every card the same height even in browsers without aspect-ratio,
+   where differing poster aspect ratios used to resize the cards. */
+.media-art::before {
+  content: '';
+  display: block;
+  padding-top: 150%;
+}
 .media-art img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -765,6 +775,7 @@ img {
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 .media-info {
+  min-width: 0;
   padding: 10px 2px 0;
 }
 .media-title {
@@ -791,6 +802,9 @@ img {
 .media-card.is-wide .media-art {
   aspect-ratio: 16 / 9;
   border-radius: 13px;
+}
+.media-card.is-wide .media-art::before {
+  padding-top: 56.25%;
 }
 .media-card.is-wide .art-fallback span {
   font-size: 44px;
@@ -893,9 +907,11 @@ img {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(162px, 1fr));
   gap: 28px 18px;
+  align-items: start;
 }
 .grid .media-card {
   width: 100%;
+  min-width: 0;
 }
 .load-more {
   display: flex;
@@ -3714,7 +3730,7 @@ select option:disabled {
     width: 122px;
   }
   .grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .detail-poster {
     width: 96px;
