@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"nuvio/internal/demo"
 	"nuvio/internal/hls"
@@ -414,30 +415,36 @@ func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
 		if title == "" {
 			title = media.LanguageName(s.Language)
 		}
-		// Nuvio converts every sidecar subtitle to WebVTT or SubRip, so report
-		// the codec of what the delivery URL actually returns. Clients pick
-		// their parser from this value ("srt"/"vtt" are not Jellyfin codecs).
-		codec := subtitleDeliveryCodec(s.Codec)
+		// Report the format the delivery URL actually returns. External ASS
+		// files are served untouched so clients with a real ASS renderer keep
+		// their typesetting; everything else is converted on demand.
+		codec, format := subtitleDelivery(s)
 		out = append(out, mediaStreamDTO{
 			Type: "Subtitle", Index: s.Index, Codec: codec, Language: s.Language,
 			Title: title, DisplayTitle: title, DisplayLanguage: media.LanguageName(s.Language),
 			IsExternal: true, IsForced: s.Forced, IsDefault: s.Default,
-			DeliveryMethod: "External", DeliveryUrl: a.subtitleURL(it, s.Index, codec, token),
+			DeliveryMethod: "External", DeliveryUrl: a.subtitleURL(it, s.Index, format, token),
 			SupportsExternalStream: true, IsTextSubtitleStream: true,
 		})
 	}
 	return out
 }
 
-// subtitleDeliveryCodec maps a source subtitle codec to the format the
-// subtitle endpoint serves. Anything that is not already WebVTT is converted
-// to SubRip.
-func subtitleDeliveryCodec(codec string) string {
-	switch strings.ToLower(strings.TrimSpace(codec)) {
+// subtitleDelivery returns the Jellyfin codec name and the file extension the
+// subtitle endpoint serves for a stream. External ASS/SSA sidecars keep their
+// native format so effects and positioning survive; embedded ASS has to be
+// converted (the extraction pipeline produces WebVTT) and is delivered as
+// SubRip.
+func subtitleDelivery(s model.Subtitle) (codec, format string) {
+	switch strings.ToLower(strings.TrimSpace(s.Codec)) {
+	case "ass", "ssa":
+		if s.Path != "" {
+			return "ass", "ass"
+		}
 	case "vtt", "webvtt":
-		return "webvtt"
+		return "webvtt", "vtt"
 	}
-	return "subrip"
+	return "subrip", "srt"
 }
 
 // Media access ------------------------------------------------------------
@@ -700,6 +707,33 @@ func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitle not found", http.StatusNotFound)
 		return
 	}
+	format := strings.ToLower(r.PathValue("file"))
+	format = strings.TrimPrefix(format, "stream.")
+
+	// Serve external ASS/SSA files untouched so capable players (MPV, libass)
+	// keep the original typesetting instead of a flattened SubRip conversion.
+	if format == "ass" || format == "ssa" {
+		if sub.Path == "" || sub.Embedded {
+			http.Error(w, "unsupported subtitle format", http.StatusNotFound)
+			return
+		}
+		data, err := os.ReadFile(sub.Path)
+		if err != nil {
+			http.Error(w, "subtitle unavailable", http.StatusNotFound)
+			return
+		}
+		data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+		contentType := "text/x-ssa"
+		if utf8.Valid(data) {
+			contentType += "; charset=utf-8"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Cache-Control", "public, max-age=600")
+		_, _ = w.Write(data)
+		return
+	}
+
 	var data []byte
 	var err error
 	switch {
@@ -719,8 +753,6 @@ func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitle unavailable", http.StatusNotFound)
 		return
 	}
-	format := strings.ToLower(r.PathValue("file"))
-	format = strings.TrimPrefix(format, "stream.")
 	contentType := "text/vtt; charset=utf-8"
 	switch format {
 	case "vtt", "webvtt", "":

@@ -1,5 +1,5 @@
 import { t } from '../lib/i18n'
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Hls from 'hls.js'
 import {
@@ -59,6 +59,10 @@ interface Cue {
   start: number
   end: number
   text: string
+  line?: number
+  lineAlign?: 'start' | 'center' | 'end'
+  position?: number
+  align?: 'start' | 'center' | 'end'
 }
 
 function parseVTT(input: string): Cue[] {
@@ -69,7 +73,14 @@ function parseVTT(input: string): Cue[] {
     const lines = block.split('\n')
     const timingIndex = lines.findIndex((l) => l.includes('-->'))
     if (timingIndex < 0) continue
-    const [from, to] = lines[timingIndex].split('-->')
+    const [from, toRaw = ''] = lines[timingIndex].split('-->')
+    const toParts = toRaw.trim().split(/\s+/)
+    const to = toParts[0] || ''
+    const settings: Record<string, string> = {}
+    for (const part of toParts.slice(1)) {
+      const comma = part.indexOf(':')
+      if (comma > 0) settings[part.slice(0, comma)] = part.slice(comma + 1)
+    }
     const parse = (v: string) => {
       const m = v.trim().match(/(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/)
       if (!m) return 0
@@ -89,9 +100,53 @@ function parseVTT(input: string): Cue[] {
       .replace(/&nbsp;/g, ' ')
       .trim()
     if (!text) continue
-    cues.push({ start: parse(from), end: parse(to), text })
+    const cue: Cue = { start: parse(from), end: parse(to), text }
+    const line = Number.parseFloat(settings.line)
+    const position = Number.parseFloat(settings.position)
+    if (Number.isFinite(line)) cue.line = line
+    if (Number.isFinite(position)) cue.position = position
+    if (settings.align === 'start' || settings.align === 'center' || settings.align === 'end') {
+      cue.align = settings.align
+    }
+    if (
+      settings['line-align'] === 'start' ||
+      settings['line-align'] === 'center' ||
+      settings['line-align'] === 'end'
+    ) {
+      cue.lineAlign = settings['line-align']
+    }
+    cues.push(cue)
   }
   return cues
+}
+
+function cueTextStyle(prefs: ReturnType<typeof usePrefs>['prefs']): CSSProperties {
+  return {
+    color: prefs.cueColor,
+    background: `rgba(0,0,0,${prefs.cueBg})`,
+    textShadow: prefs.cueOutline
+      ? '0 1px 2px #000, 0 2px 12px rgba(0,0,0,.95), 0 0 2px #000'
+      : 'none',
+    fontSize: `clamp(15px, calc(1.15vw * ${prefs.cueScale} + 9px), 38px)`,
+  }
+}
+
+// Cue settings come from the ASS converter, which maps \an / \pos and the
+// style margins onto line / position / align.
+function cuePositionStyle(cue: Cue): CSSProperties {
+  const x = cue.position ?? 50
+  const y = cue.line ?? 88
+  const align = cue.align ?? 'center'
+  const lineAlign = cue.lineAlign ?? 'center'
+  const tx = align === 'start' ? '0' : align === 'end' ? '-100%' : '-50%'
+  const ty = lineAlign === 'start' ? '0' : lineAlign === 'end' ? '-100%' : '-50%'
+  return {
+    left: `${x}%`,
+    top: `${y}%`,
+    bottom: 'auto',
+    transform: `translate(${tx}, ${ty})`,
+    textAlign: align === 'start' ? 'left' : align === 'end' ? 'right' : 'center',
+  }
 }
 
 const QUALITIES = [
@@ -262,9 +317,12 @@ export function PlayerPage() {
       setCues([])
       return
     }
+    // The player draws cues itself, so ask the server for WebVTT even when the
+    // track is delivered as native ASS for libass based clients.
+    const fetchUrl = url.replace(/Stream\.(ass|ssa)(\?|$)/i, 'Stream.vtt$2')
     let alive = true
     const controller = new AbortController()
-    fetch(url, { signal: controller.signal })
+    fetch(fetchUrl, { signal: controller.signal })
       .then((res) => (res.ok ? res.text() : ''))
       .then((text) => {
         if (alive) setCues(parseVTT(text))
@@ -895,10 +953,12 @@ export function PlayerPage() {
   }
 
   const displayCurrent = dragging ? seekPreview : current
-  const activeCue =
+  const activeCues =
     !ended && cues.length
-      ? cues.filter((c) => displayCurrent >= c.start - 0.02 && displayCurrent <= c.end).map((c) => c.text).join('\n')
-      : ''
+      ? cues.filter((c) => displayCurrent >= c.start - 0.02 && displayCurrent <= c.end)
+      : []
+  const plainCues = activeCues.filter((c) => c.line === undefined && c.position === undefined)
+  const positionedCues = activeCues.filter((c) => c.line !== undefined || c.position !== undefined)
   const playedPct = duration > 0 ? Math.min(100, (displayCurrent / duration) * 100) : 0
   const bufferedPct =
     duration > 0
@@ -948,21 +1008,17 @@ export function PlayerPage() {
         onDoubleClick={toggleFullscreen}
       />
 
-      {activeCue && !error && (
-        <div
-          className="subtitle-layer"
-          style={{
-            color: prefs.cueColor,
-            background: `rgba(0,0,0,${prefs.cueBg})`,
-            textShadow: prefs.cueOutline
-              ? '0 1px 2px #000, 0 2px 12px rgba(0,0,0,.95), 0 0 2px #000'
-              : 'none',
-            fontSize: `clamp(15px, calc(1.15vw * ${prefs.cueScale} + 9px), 38px)`,
-          }}
-        >
-          {activeCue}
+      {!error && plainCues.length > 0 && (
+        <div className="subtitle-layer" style={cueTextStyle(prefs)}>
+          {plainCues.map((c) => c.text).join('\n')}
         </div>
       )}
+      {!error &&
+        positionedCues.map((cue, i) => (
+          <div key={i} className="subtitle-layer" style={{ ...cueTextStyle(prefs), ...cuePositionStyle(cue) }}>
+            {cue.text}
+          </div>
+        ))}
 
       <div className="player-shade top" />
       <div className="player-shade bottom" />
@@ -1193,9 +1249,13 @@ export function PlayerPage() {
               <span>
                 {s.DisplayTitle || s.Language}
                 <em>
-                  {s.Language?.toUpperCase()}
-                  {s.IsForced ? t(" · forced") : ''}
-                  {s.Codec ? ` · ${s.Codec.toUpperCase()}` : ''}
+                  {[
+                    s.Language && s.Language.toLowerCase() !== 'und' ? s.Language.toUpperCase() : '',
+                    s.IsForced ? t('forced') : '',
+                    s.Codec ? s.Codec.toUpperCase() : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </em>
               </span>
               {activeSubtitle === s.Index && <IconCheck size={16} />}

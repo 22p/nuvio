@@ -578,11 +578,7 @@ func (a *API) mediaSourceID(it *model.Item) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *API) subtitleURL(it *model.Item, index int, codec, token string) string {
-	format := "srt"
-	if codec == "webvtt" {
-		format = "vtt"
-	}
+func (a *API) subtitleURL(it *model.Item, index int, format, token string) string {
 	u := fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/Stream.%s", it.ID, a.mediaSourceID(it), index, format)
 	if token != "" {
 		u += "?api_key=" + url.QueryEscape(token)

@@ -174,68 +174,209 @@ func parseSRTTime(s string) (string, bool) {
 var assTime = regexp.MustCompile(`^\s*(\d+):(\d{2}):(\d{2})[.:](\d{1,3})\s*$`)
 var assTag = regexp.MustCompile(`\{[^}]*\}`)
 
-// ASSBytesToVTT converts an Advanced SubStation Alpha script to WebVTT,
-// discarding styling while keeping the dialogue and timings.
+var (
+	assPosRe   = regexp.MustCompile(`\\pos\(\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*\)`)
+	assMoveRe  = regexp.MustCompile(`\\move\(\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)`)
+	assAlignRe = regexp.MustCompile(`\\an([1-9])`)
+	assDrawRe  = regexp.MustCompile(`\\p[1-9]`)
+)
+
+type assStyle struct {
+	alignment                 int
+	marginL, marginR, marginV float64
+}
+
+// ASSBytesToVTT converts an ASS/SSA script to WebVTT. Styling that WebVTT can
+// express is kept: alignment and position are mapped to cue settings so signs
+// stay where the typesetter put them instead of collapsing to the bottom
+// centre. Karaoke and drawing commands cannot be represented and are dropped.
 func ASSBytesToVTT(raw []byte) []byte {
 	text := strings.ReplaceAll(string(stripBOM(raw)), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
-	inEvents := false
-	format := []string{}
+	playW, playH := 384.0, 288.0
+	section := ""
+	styles := map[string]assStyle{}
+	var styleFormat, eventFormat []string
 	var out strings.Builder
 	out.WriteString("WEBVTT\n\n")
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
 		if strings.HasPrefix(trimmed, "[") {
-			inEvents = strings.EqualFold(trimmed, "[Events]")
+			section = strings.ToLower(strings.Trim(trimmed, "[]"))
 			continue
 		}
-		if !inEvents {
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(trimmed), "format:") {
-			format = splitCSV(strings.TrimSpace(trimmed[len("format:"):]))
-			continue
-		}
-		if !strings.HasPrefix(strings.ToLower(trimmed), "dialogue:") {
-			continue
-		}
-		fields := splitCSVLimit(trimmed[len("dialogue:"):], len(format))
-		if len(format) == 0 {
-			format = []string{"Layer", "Start", "End", "Style", "Name", "MarginL", "MarginR", "MarginV", "Effect", "Text"}
-		}
-		get := func(name string) string {
-			for i, f := range format {
-				if strings.EqualFold(strings.TrimSpace(f), name) && i < len(fields) {
-					return strings.TrimSpace(fields[i])
-				}
+		lower := strings.ToLower(trimmed)
+		switch section {
+		case "script info":
+			switch {
+			case strings.HasPrefix(lower, "playresx:"):
+				playW = parseFloatDefault(trimmed[len("playresx:"):], playW)
+			case strings.HasPrefix(lower, "playresy:"):
+				playH = parseFloatDefault(trimmed[len("playresy:"):], playH)
 			}
-			return ""
+		case "v4+ styles", "v4 styles":
+			if strings.HasPrefix(lower, "format:") {
+				styleFormat = splitCSV(trimmed[len("format:"):])
+				continue
+			}
+			if !strings.HasPrefix(lower, "style:") {
+				continue
+			}
+			fields := splitCSVLimit(trimmed[len("style:"):], len(styleFormat))
+			field := assField(styleFormat, fields)
+			styles[field("Name")] = assStyle{
+				alignment: atoiDefault(field("Alignment"), 2),
+				marginL:   parseFloatDefault(field("MarginL"), 10),
+				marginR:   parseFloatDefault(field("MarginR"), 10),
+				marginV:   parseFloatDefault(field("MarginV"), 10),
+			}
+		case "events":
+			if strings.HasPrefix(lower, "format:") {
+				eventFormat = splitCSV(trimmed[len("format:"):])
+				continue
+			}
+			if !strings.HasPrefix(lower, "dialogue:") {
+				continue
+			}
+			if cue, ok := assCueVTT(trimmed[len("dialogue:"):], eventFormat, styles, playW, playH); ok {
+				out.WriteString(cue)
+			}
 		}
-		start, ok1 := parseASSTime(get("Start"))
-		end, ok2 := parseASSTime(get("End"))
-		if !ok1 || !ok2 || end <= start {
-			continue
-		}
-		body := get("Text")
-		body = strings.ReplaceAll(body, `\N`, "\n")
-		body = strings.ReplaceAll(body, `\n`, "\n")
-		body = strings.ReplaceAll(body, `\h`, " ")
-		body = assTag.ReplaceAllString(body, "")
-		body = strings.TrimSpace(body)
-		if body == "" {
-			continue
-		}
-		body = strings.ReplaceAll(body, "&", "&amp;")
-		body = strings.ReplaceAll(body, "<", "&lt;")
-		body = strings.ReplaceAll(body, ">", "&gt;")
-		out.WriteString(vttTime(start))
-		out.WriteString(" --> ")
-		out.WriteString(vttTime(end))
-		out.WriteString("\n")
-		out.WriteString(body)
-		out.WriteString("\n\n")
 	}
 	return []byte(out.String())
+}
+
+func assField(format, fields []string) func(string) string {
+	return func(name string) string {
+		for i, f := range format {
+			if strings.EqualFold(strings.TrimSpace(f), name) && i < len(fields) {
+				return strings.TrimSpace(fields[i])
+			}
+		}
+		return ""
+	}
+}
+
+func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, playH float64) (string, bool) {
+	if len(format) == 0 {
+		format = []string{"Layer", "Start", "End", "Style", "Name", "MarginL", "MarginR", "MarginV", "Effect", "Text"}
+	}
+	field := assField(format, splitCSVLimit(raw, len(format)))
+	start, ok1 := parseASSTime(field("Start"))
+	end, ok2 := parseASSTime(field("End"))
+	if !ok1 || !ok2 || end <= start {
+		return "", false
+	}
+	body := field("Text")
+	if body == "" || assDrawRe.MatchString(body) {
+		// Vector drawings cannot be rendered as text.
+		return "", false
+	}
+
+	st := styles[field("Style")]
+	if st.alignment == 0 {
+		st = assStyle{alignment: 2, marginL: 10, marginR: 10, marginV: 10}
+	}
+	align := st.alignment
+	if m := assAlignRe.FindStringSubmatch(body); m != nil {
+		align = int(m[1][0] - '0')
+	}
+	ml, mr, mv := st.marginL, st.marginR, st.marginV
+	if v := parseFloatDefault(field("MarginL"), 0); v > 0 {
+		ml = v
+	}
+	if v := parseFloatDefault(field("MarginR"), 0); v > 0 {
+		mr = v
+	}
+	if v := parseFloatDefault(field("MarginV"), 0); v > 0 {
+		mv = v
+	}
+
+	x, y, positioned := 0.0, 0.0, false
+	if m := assPosRe.FindStringSubmatch(body); m != nil {
+		x, y, positioned = parseFloatDefault(m[1], 0), parseFloatDefault(m[2], 0), true
+	} else if m := assMoveRe.FindStringSubmatch(body); m != nil {
+		x, y, positioned = parseFloatDefault(m[1], 0), parseFloatDefault(m[2], 0), true
+	}
+	col := (align - 1) % 3
+	row := (align - 1) / 3
+	if !positioned {
+		switch col {
+		case 0:
+			x = ml
+		case 1:
+			x = playW / 2
+		case 2:
+			x = playW - mr
+		}
+		switch row {
+		case 0:
+			y = playH - mv
+		case 1:
+			y = playH / 2
+		default:
+			y = mv
+		}
+	}
+
+	body = strings.ReplaceAll(body, `\N`, "\n")
+	body = strings.ReplaceAll(body, `\n`, "\n")
+	body = strings.ReplaceAll(body, `\h`, " ")
+	body = assTag.ReplaceAllString(body, "")
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return "", false
+	}
+	body = strings.ReplaceAll(body, "&", "&amp;")
+	body = strings.ReplaceAll(body, "<", "&lt;")
+	body = strings.ReplaceAll(body, ">", "&gt;")
+
+	alignName := "center"
+	switch col {
+	case 0:
+		alignName = "start"
+	case 2:
+		alignName = "end"
+	}
+	// The anchor point the ASS alignment refers to: bottom rows sit above the
+	// line, top rows below it, middle rows are centred.
+	lineAlign := "center"
+	switch row {
+	case 0:
+		lineAlign = "end"
+	case 2:
+		lineAlign = "start"
+	}
+	return fmt.Sprintf("%s --> %s line:%.1f%% line-align:%s position:%.1f%% align:%s\n%s\n\n",
+		vttTime(start), vttTime(end), clampPercent(y/playH*100), lineAlign, clampPercent(x/playW*100), alignName, body), true
+}
+
+func parseFloatDefault(s string, def float64) float64 {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+		return v
+	}
+	return def
+}
+
+func atoiDefault(s string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		return v
+	}
+	return def
+}
+
+func clampPercent(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }
 
 func splitCSV(s string) []string {

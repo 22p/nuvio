@@ -198,3 +198,41 @@ func (r *sliceReadSeeker) Seek(off int64, whence int) (int64, error) {
 	}
 	return int64(r.pos), nil
 }
+
+func TestASSBytesToVTTKeepsPositioning(t *testing.T) {
+	script := `[Script Info]
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,40,1
+Style: Sign,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,8,10,10,20,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello\Nworld
+Dialogue: 0,0:00:04.00,0:00:06.00,Sign,,0,0,0,,{\pos(960,100)}Top sign
+Dialogue: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,{\an8}Another top
+Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\p1}m 0 0 l 100 0 100 100 0 100{\p0}
+`
+	got := string(ASSBytesToVTT([]byte(script)))
+	for _, want := range []string{
+		"line:96.3% line-align:end position:50.0% align:center",  // bottom, MarginV 40 of 1080
+		"line:9.3% line-align:start position:50.0% align:center", // \pos(960,100) on the top-aligned Sign style
+		"line:3.7% line-align:start position:50.0% align:center", // \an8 (top centre)
+		"Hello\nworld",
+		"Top sign",
+		"Another top",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("converted VTT missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\\pos") || strings.Contains(got, "\\an8") {
+		t.Fatalf("override tags leaked into VTT:\n%s", got)
+	}
+	if strings.Contains(got, "m 0 0 l 100") {
+		t.Fatalf("vector drawing leaked into VTT:\n%s", got)
+	}
+}

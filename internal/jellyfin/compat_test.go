@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -651,14 +653,23 @@ func TestSubtitleDeliveryMatchesCodec(t *testing.T) {
 	}
 }
 
-func TestSubtitleDeliveryCodec(t *testing.T) {
-	cases := map[string]string{
-		"srt": "subrip", "subrip": "subrip", "ass": "subrip", "ssa": "subrip",
-		"vtt": "webvtt", "webvtt": "webvtt", "VTT": "webvtt", "": "subrip",
+func TestSubtitleDelivery(t *testing.T) {
+	cases := []struct {
+		sub         model.Subtitle
+		codec, form string
+	}{
+		{model.Subtitle{Codec: "ass", Path: "/media/a.ass"}, "ass", "ass"},
+		{model.Subtitle{Codec: "ssa", Path: "/media/a.ssa"}, "ass", "ass"},
+		// Embedded ASS goes through the extraction pipeline, which yields VTT.
+		{model.Subtitle{Codec: "ass", Embedded: true}, "subrip", "srt"},
+		{model.Subtitle{Codec: "srt", Path: "/media/a.srt"}, "subrip", "srt"},
+		{model.Subtitle{Codec: "vtt", Path: "/media/a.vtt"}, "webvtt", "vtt"},
+		{model.Subtitle{Codec: ""}, "subrip", "srt"},
 	}
-	for in, want := range cases {
-		if got := subtitleDeliveryCodec(in); got != want {
-			t.Fatalf("subtitleDeliveryCodec(%q) = %q, want %q", in, got, want)
+	for _, c := range cases {
+		codec, form := subtitleDelivery(c.sub)
+		if codec != c.codec || form != c.form {
+			t.Fatalf("subtitleDelivery(%+v) = %q/%q, want %q/%q", c.sub, codec, form, c.codec, c.form)
 		}
 	}
 }
@@ -669,7 +680,7 @@ func TestSubtitleSubripRoute(t *testing.T) {
 	a, h := newTestAPI(t)
 	u, tok := testUser(t, a)
 	movie := demo.Items()[0]
-	url := a.subtitleURL(movie, 2, "subrip", tok)
+	url := a.subtitleURL(movie, 2, "srt", tok)
 	if !strings.HasSuffix(strings.Split(url, "?")[0], "/Stream.srt") {
 		t.Fatalf("subrip url = %q", url)
 	}
@@ -758,5 +769,66 @@ func TestSDKRequiredFieldsPresent(t *testing.T) {
 				t.Fatalf("SearchHint is missing required field %s: %v", key, hint)
 			}
 		}
+	}
+}
+
+// External ASS subtitles must be reported as ASS and served untouched, so
+// players with a libass renderer keep the original typesetting.
+func TestExternalASSServedUnchanged(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "movie.zh.ass")
+	script := "[Script Info]\nTitle: test\nPlayResX: 1920\nPlayResY: 1080\n\n" +
+		"[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+		"Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\\pos(960,100)\\fad(0,200)}Sign\n"
+	if err := os.WriteFile(path, []byte("\xEF\xBB\xBF"+script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item := &model.Item{
+		ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Type: model.TypeMovie, Name: "ASS",
+		LibraryID: demo.MovieLibraryID, ParentID: demo.MovieLibraryID,
+		Media: &model.MediaInfo{
+			Container: "mp4", VideoCodec: "h264", AudioCodec: "aac",
+			Subtitles: []model.Subtitle{{Index: 0, Codec: "ass", Path: path, Language: "zh"}},
+		},
+	}
+	a.Catalog.Replace(demo.Libraries(), []*model.Item{item})
+
+	rec, info := doJSON(t, h, "POST", "/Items/"+item.ID+"/PlaybackInfo?userId="+u.ID, tok, "{}")
+	if rec.Code != 200 {
+		t.Fatalf("playback info = %d", rec.Code)
+	}
+	streams := info["MediaSources"].([]any)[0].(map[string]any)["MediaStreams"].([]any)
+	var sub map[string]any
+	for _, raw := range streams {
+		stream := raw.(map[string]any)
+		if stream["Type"] == "Subtitle" {
+			sub = stream
+			break
+		}
+	}
+	if sub == nil {
+		t.Fatal("no subtitle stream")
+	}
+	if sub["Codec"] != "ass" {
+		t.Fatalf("codec = %v, want ass", sub["Codec"])
+	}
+	url, _ := sub["DeliveryUrl"].(string)
+	if !strings.Contains(url, "/Stream.ass") {
+		t.Fatalf("delivery url = %q, want Stream.ass", url)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
+	if rec.Code != 200 {
+		t.Fatalf("ass fetch = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/x-ssa") {
+		t.Fatalf("ass content type = %q", ct)
+	}
+	if body := rec.Body.String(); body != script {
+		t.Fatalf("ass body was modified:\n%q", body)
 	}
 }
