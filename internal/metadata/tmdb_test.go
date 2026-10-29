@@ -51,6 +51,28 @@ func TestEnrichMovieAndInheritSeriesArt(t *testing.T) {
 			},
 		})
 	})
+	mux.HandleFunc("/movie/603/images", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"logos": []map[string]any{
+			{"file_path": "/matrix-en.png", "iso_639_1": "en", "vote_average": 6, "width": 600},
+			{"file_path": "/matrix-zh.png", "iso_639_1": "zh", "vote_average": 5, "width": 700},
+			{"file_path": "/matrix.svg", "iso_639_1": "zh", "vote_average": 9, "width": 900},
+		}})
+	})
+	mux.HandleFunc("/tv/95396/images", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"logos": []map[string]any{
+			{"file_path": "/severance-en.png", "iso_639_1": "en", "vote_average": 4, "width": 500},
+		}})
+	})
+	mux.HandleFunc("/tv/95396/season/1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"poster_path": "/season1.jpg",
+			"episodes": []map[string]any{{
+				"episode_number": 1, "name": "Good News",
+				"overview": "Mark returns to work.", "still_path": "/still1.jpg",
+				"air_date": "2022-02-18", "vote_average": 8.1,
+			}},
+		})
+	})
 	mux.HandleFunc("/genre/movie/list", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"genres": []map[string]any{
 			{"id": 28, "name": "Action"}, {"id": 878, "name": "Science Fiction"},
@@ -70,8 +92,8 @@ func TestEnrichMovieAndInheritSeriesArt(t *testing.T) {
 
 	seriesID := "series1"
 	series := &model.Item{ID: seriesID, Type: model.TypeSeries, Name: "Severance", Year: 2022, LibraryID: "lib"}
-	episode := &model.Item{ID: "ep1", Type: model.TypeEpisode, Name: "Good News", SeriesID: seriesID, ParentID: "s1", LibraryID: "lib"}
-	season := &model.Item{ID: "s1", Type: model.TypeSeason, Name: "Season 1", SeriesID: seriesID, LibraryID: "lib"}
+	episode := &model.Item{ID: "ep1", Type: model.TypeEpisode, Name: "Good News", SeriesID: seriesID, ParentID: "s1", SeasonNumber: 1, EpisodeNumber: 1, LibraryID: "lib"}
+	season := &model.Item{ID: "s1", Type: model.TypeSeason, Name: "Season 1", SeriesID: seriesID, SeasonNumber: 1, LibraryID: "lib"}
 	movie := &model.Item{ID: "matrix", Type: model.TypeMovie, Name: "The Matrix", Year: 1999, LibraryID: "lib"}
 	demo := &model.Item{ID: "demo", Type: model.TypeMovie, Name: "Demo", Demo: true, LibraryID: "lib"}
 
@@ -101,6 +123,24 @@ func TestEnrichMovieAndInheritSeriesArt(t *testing.T) {
 	}
 	if series.TMDBID != 95396 || episode.PosterURL != series.PosterURL || season.BackdropURL != series.BackdropURL {
 		t.Fatalf("series inheritance failed: series=%q ep=%q season=%q", series.PosterURL, episode.PosterURL, season.BackdropURL)
+	}
+	if !strings.HasSuffix(movie.LogoURL, "/w500/matrix-zh.png") {
+		t.Fatalf("movie logo should prefer the configured language: %q", movie.LogoURL)
+	}
+	if !strings.HasSuffix(series.LogoURL, "/w500/severance-en.png") {
+		t.Fatalf("series logo: %q", series.LogoURL)
+	}
+	if !strings.HasSuffix(season.PosterURL, "/w500/season1.jpg") {
+		t.Fatalf("season poster: %q", season.PosterURL)
+	}
+	if !strings.HasSuffix(episode.ThumbURL, "/w300/still1.jpg") {
+		t.Fatalf("episode still: %q", episode.ThumbURL)
+	}
+	if episode.Overview != "Mark returns to work." {
+		t.Fatalf("episode overview: %q", episode.Overview)
+	}
+	if episode.PremiereDate != "2022-02-18T00:00:00.0000000Z" || episode.Rating != 8.1 {
+		t.Fatalf("episode air date/rating: %q %v", episode.PremiereDate, episode.Rating)
 	}
 	if demo.TMDBID != 0 || demo.PosterURL != "" {
 		t.Fatal("demo item should not be enriched")

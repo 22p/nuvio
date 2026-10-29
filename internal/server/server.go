@@ -295,7 +295,7 @@ func (s *Server) reloadCatalog() error {
 
 // catalogVersion is bumped when a scan can discover new metadata, forcing one
 // automatic rescan for existing libraries after an upgrade.
-const catalogVersion = 2
+const catalogVersion = 3
 
 // ScanIfNeeded performs the one-time scan for an existing library set that has
 // never been persisted. Normal startups only load nuvio.db.

@@ -41,24 +41,37 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := strings.ToLower(r.PathValue("imageType"))
-	var path string
+	var path, remoteURL string
 	widescreen := false
 	switch kind {
 	case "primary", "poster":
 		path = it.PosterPath
+		remoteURL = it.PosterURL
+		// TMDb-only libraries have no local poster; use the episode still
+		// rather than the inherited series poster.
+		if it.Type == model.TypeEpisode && path == "" && it.ThumbURL != "" {
+			remoteURL = it.ThumbURL
+		}
 	case "backdrop", "background":
 		path = it.BackdropPath
+		remoteURL = it.BackdropURL
 		widescreen = true
 	case "thumb":
 		path = it.ThumbPath
 		if path == "" {
 			path = it.BackdropPath
 		}
+		remoteURL = it.ThumbURL
+		if remoteURL == "" {
+			remoteURL = it.BackdropURL
+		}
 		widescreen = true
 	case "logo":
 		path = it.LogoPath
+		remoteURL = it.LogoURL
 	case "banner", "art":
 		path = it.BackdropPath
+		remoteURL = it.BackdropURL
 		widescreen = true
 	default:
 		http.Error(w, "unsupported image type", http.StatusNotFound)
@@ -98,12 +111,6 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	remoteURL := ""
-	if widescreen {
-		remoteURL = it.BackdropURL
-	} else if kind == "primary" || kind == "poster" {
-		remoteURL = it.PosterURL
-	}
 	if remoteURL != "" && a.serveRemoteImage(w, r, remoteURL) {
 		return
 	}

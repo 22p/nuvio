@@ -1,6 +1,9 @@
 package jellyfin
 
 import (
+	"bytes"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -872,5 +875,84 @@ func TestTranscodeTarget(t *testing.T) {
 	mode, device, codec, encoder = a.transcodeTarget("none", "hevc")
 	if mode != "" || device != "" || codec != "h264" || encoder != "libx264" {
 		t.Fatalf("hevc fallback = %q %q %q %q", mode, device, codec, encoder)
+	}
+}
+
+// TMDb artwork is served through the item image endpoints. The remote fetch is
+// cached on disk, so the test pre-populates the cache and never hits the CDN.
+func TestRemoteLogoAndEpisodeStill(t *testing.T) {
+	a, h := newTestAPI(t)
+	_, tok := testUser(t, a)
+	a.ImageDir = t.TempDir()
+
+	const logoURL = "https://image.tmdb.org/t/p/w500/logo.png"
+	const stillURL = "https://image.tmdb.org/t/p/w300/still.jpg"
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+	jpeg := []byte{0xff, 0xd8, 0xff, 0xd9}
+	cache := func(rawURL string, data []byte) {
+		sum := md5.Sum([]byte(rawURL))
+		path := filepath.Join(a.ImageDir, hex.EncodeToString(sum[:])+".img")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cache(logoURL, png)
+	cache(stillURL, jpeg)
+
+	seriesID := "logicalseries"
+	episodeID := "logicalepisode"
+	items := append(demo.Items(),
+		&model.Item{ID: seriesID, Type: model.TypeSeries, Name: "Logo Show", LibraryID: demo.ShowLibraryID, LogoURL: logoURL},
+		&model.Item{ID: episodeID, Type: model.TypeEpisode, Name: "Episode 1", SeriesID: seriesID,
+			LibraryID: demo.ShowLibraryID, SeasonNumber: 1, EpisodeNumber: 1, ThumbURL: stillURL},
+	)
+	a.Catalog.Replace(demo.Libraries(), items)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("X-Emby-Token", tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get("/Items/" + seriesID)
+	if rec.Code != 200 {
+		t.Fatalf("series status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var series itemDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &series); err != nil {
+		t.Fatal(err)
+	}
+	if series.ImageTags["Logo"] == "" {
+		t.Fatalf("series has no logo tag: %+v", series.ImageTags)
+	}
+
+	rec = get("/Items/" + episodeID)
+	if rec.Code != 200 {
+		t.Fatalf("episode status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var episode itemDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &episode); err != nil {
+		t.Fatal(err)
+	}
+	if episode.ImageTags["Thumb"] == "" {
+		t.Fatalf("episode has no thumb tag: %+v", episode.ImageTags)
+	}
+	if episode.PrimaryImageAspectRatio != 1.7778 {
+		t.Fatalf("episode still aspect ratio = %v", episode.PrimaryImageAspectRatio)
+	}
+
+	if rec = get("/Items/" + seriesID + "/Images/Logo"); rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), png) {
+		t.Fatalf("logo image = %d, %d bytes", rec.Code, rec.Body.Len())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("logo content type = %q", ct)
+	}
+	if rec = get("/Items/" + episodeID + "/Images/Thumb"); rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), jpeg) {
+		t.Fatalf("thumb image = %d, %d bytes", rec.Code, rec.Body.Len())
+	}
+	if rec = get("/Items/" + episodeID + "/Images/Primary"); rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), jpeg) {
+		t.Fatalf("episode primary should use the still: %d", rec.Code)
 	}
 }

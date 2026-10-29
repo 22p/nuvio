@@ -441,7 +441,7 @@ function EpisodeRow({
     <div className="episode-row">
       <button className="episode-main" onClick={onPlay}>
         <div className="episode-thumb">
-          <img src={imageUrl(episode.Id, 'Backdrop', 480)} alt="" loading="lazy" />
+          <img src={imageUrl(episode.Id, episode.ImageTags?.Thumb ? 'Thumb' : 'Backdrop', 480)} alt="" loading="lazy" />
           <span className="episode-number">{episode.IndexNumber ?? '·'}</span>
           <span className="episode-play">
             <IconPlay size={15} />

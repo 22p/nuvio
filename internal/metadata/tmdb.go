@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,7 @@ func (e *Enricher) Enrich(ctx context.Context, items []*model.Item) error {
 		if it.Type != model.TypeMovie && it.Type != model.TypeSeries {
 			continue
 		}
-		if it.TMDBID > 0 && it.PosterURL != "" && it.MetadataLanguage == e.Language {
+		if it.TMDBID > 0 && it.PosterURL != "" && it.LogoURL != "" && it.MetadataLanguage == e.Language {
 			continue
 		}
 		if e.isDisabled() {
@@ -112,6 +113,7 @@ func (e *Enricher) Enrich(ctx context.Context, items []*model.Item) error {
 		}
 	}
 	e.inheritSeriesArt(items)
+	e.enrichEpisodes(ctx, items)
 	return firstErr
 }
 
@@ -281,9 +283,207 @@ func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
 	if r.BackdropPath != "" {
 		it.BackdropURL = e.ImageBase + "/w1280" + r.BackdropPath
 	}
+	if it.LogoURL == "" {
+		it.LogoURL = e.logoURL(ctx, kindOfItem(it), r.ID)
+	}
 	if len(it.People) == 0 {
 		it.People = e.credits(ctx, kindOfItem(it), r.ID)
 	}
+}
+
+// imageLanguage is TMDb's two-letter form of the configured language.
+func (e *Enricher) imageLanguage() string {
+	lang := strings.ToLower(strings.TrimSpace(e.Language))
+	if i := strings.IndexAny(lang, "-_"); i > 0 {
+		lang = lang[:i]
+	}
+	return lang
+}
+
+type imagesResponse struct {
+	Logos []struct {
+		FilePath    string  `json:"file_path"`
+		Language    string  `json:"iso_639_1"`
+		VoteAverage float64 `json:"vote_average"`
+		Width       int     `json:"width"`
+	} `json:"logos"`
+}
+
+// logoURL picks the best transparent logo for a title. Only PNGs are used:
+// TMDb also serves SVG logos, which the image cache cannot label reliably.
+func (e *Enricher) logoURL(ctx context.Context, kind string, id int) string {
+	if id <= 0 {
+		return ""
+	}
+	lang := e.imageLanguage()
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("include_image_language", lang+",en,null")
+	var out imagesResponse
+	if err := e.getJSON(ctx, fmt.Sprintf("/%s/%d/images?%s", kind, id, q.Encode()), &out); err != nil {
+		return ""
+	}
+	best, bestScore := "", -1.0
+	for _, logo := range out.Logos {
+		if logo.FilePath == "" || !strings.HasSuffix(strings.ToLower(logo.FilePath), ".png") {
+			continue
+		}
+		score := logo.VoteAverage
+		switch {
+		case lang != "" && strings.EqualFold(logo.Language, lang):
+			score += 100
+		case strings.EqualFold(logo.Language, "en"):
+			score += 50
+		case logo.Language == "":
+			score += 10
+		}
+		if logo.Width >= 500 {
+			score++
+		}
+		if score > bestScore {
+			best, bestScore = logo.FilePath, score
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return e.ImageBase + "/w500" + best
+}
+
+type seasonDetails struct {
+	PosterPath string `json:"poster_path"`
+	Episodes   []struct {
+		EpisodeNumber int     `json:"episode_number"`
+		Overview      string  `json:"overview"`
+		StillPath     string  `json:"still_path"`
+		AirDate       string  `json:"air_date"`
+		VoteAverage   float64 `json:"vote_average"`
+	} `json:"episodes"`
+}
+
+// enrichEpisodes fills episode stills, overviews and air dates from TMDb.
+// Season details are fetched once per season and only when something is
+// missing, so a steady-state rescan makes no extra requests.
+func (e *Enricher) enrichEpisodes(ctx context.Context, items []*model.Item) {
+	series := map[string]*model.Item{}
+	seasons := map[string]map[int]*model.Item{}
+	episodes := map[string]map[int][]*model.Item{}
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		switch it.Type {
+		case model.TypeSeries:
+			series[it.ID] = it
+		case model.TypeSeason:
+			if it.SeriesID == "" || it.SeasonNumber < 0 {
+				continue
+			}
+			m := seasons[it.SeriesID]
+			if m == nil {
+				m = map[int]*model.Item{}
+				seasons[it.SeriesID] = m
+			}
+			m[it.SeasonNumber] = it
+		case model.TypeEpisode:
+			if it.SeriesID == "" {
+				continue
+			}
+			m := episodes[it.SeriesID]
+			if m == nil {
+				m = map[int][]*model.Item{}
+				episodes[it.SeriesID] = m
+			}
+			m[it.SeasonNumber] = append(m[it.SeasonNumber], it)
+		}
+	}
+
+	for seriesID, bySeason := range episodes {
+		s := series[seriesID]
+		if s == nil || s.TMDBID <= 0 {
+			continue
+		}
+		numbers := make([]int, 0, len(bySeason))
+		for number := range bySeason {
+			numbers = append(numbers, number)
+		}
+		sort.Ints(numbers)
+		for _, number := range numbers {
+			group := bySeason[number]
+			season := seasons[seriesID][number]
+			if !e.needsSeason(ctx, group, season) {
+				continue
+			}
+			details, err := e.fetchSeason(ctx, s.TMDBID, number)
+			if err != nil {
+				continue
+			}
+			if season != nil {
+				// A dedicated season poster beats the inherited series one.
+				if season.PosterPath == "" && details.PosterPath != "" {
+					season.PosterURL = e.ImageBase + "/w500" + details.PosterPath
+				}
+				season.MetadataLanguage = e.Language
+			}
+			byNumber := make(map[int]int, len(details.Episodes))
+			for i, ep := range details.Episodes {
+				byNumber[ep.EpisodeNumber] = i
+			}
+			for _, ep := range group {
+				i, ok := byNumber[ep.EpisodeNumber]
+				if !ok {
+					continue
+				}
+				info := details.Episodes[i]
+				if ep.Overview == "" || ep.MetadataSource != "nfo" {
+					if info.Overview != "" {
+						ep.Overview = info.Overview
+					}
+				}
+				if info.StillPath != "" {
+					ep.ThumbURL = e.ImageBase + "/w300" + info.StillPath
+				}
+				if ep.PremiereDate == "" && info.AirDate != "" {
+					ep.PremiereDate = info.AirDate + "T00:00:00.0000000Z"
+				}
+				if ep.Rating == 0 && info.VoteAverage > 0 {
+					ep.Rating = info.VoteAverage
+				}
+				ep.MetadataLanguage = e.Language
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(90 * time.Millisecond):
+			}
+		}
+	}
+}
+
+func (e *Enricher) needsSeason(ctx context.Context, episodes []*model.Item, season *model.Item) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if season != nil && season.MetadataLanguage != e.Language {
+		return true
+	}
+	for _, ep := range episodes {
+		if ep.MetadataLanguage != e.Language || ep.Overview == "" || ep.ThumbURL == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Enricher) fetchSeason(ctx context.Context, seriesID, season int) (*seasonDetails, error) {
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("language", e.Language)
+	var out seasonDetails
+	if err := e.getJSON(ctx, fmt.Sprintf("/tv/%d/season/%d?%s", seriesID, season, q.Encode()), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 type creditsResponse struct {

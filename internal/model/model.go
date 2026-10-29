@@ -59,6 +59,8 @@ type Item struct {
 	ThumbPath    string   `json:"thumbPath,omitempty"`
 	PosterURL    string   `json:"posterUrl,omitempty"`
 	BackdropURL  string   `json:"backdropUrl,omitempty"`
+	LogoURL      string   `json:"logoUrl,omitempty"`
+	ThumbURL     string   `json:"thumbUrl,omitempty"`
 	ArtSeed      string   `json:"artSeed,omitempty"`
 	Demo         bool     `json:"demo,omitempty"`
 	People       []Person `json:"people,omitempty"`

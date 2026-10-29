@@ -324,6 +324,10 @@ func imageTag(it *model.Item, kind string) string {
 		if it.PosterURL != "" {
 			seed += ":url:" + it.PosterURL
 		}
+		// Episodes without local artwork use the TMDb still as their poster.
+		if it.Type == model.TypeEpisode && it.PosterPath == "" && it.ThumbURL != "" {
+			seed += ":still:" + it.ThumbURL
+		}
 	case "backdrop":
 		if it.BackdropPath == "" {
 			seed += ":backdrop"
@@ -335,10 +339,17 @@ func imageTag(it *model.Item, kind string) string {
 		if it.LogoPath != "" {
 			seed += ":logo-file"
 		}
+		if it.LogoURL != "" {
+			seed += ":url:" + it.LogoURL
+		}
 	case "thumb":
 		if it.ThumbPath != "" {
 			seed += ":thumb-file"
-		} else if it.BackdropURL != "" {
+		}
+		if it.ThumbURL != "" {
+			seed += ":url:" + it.ThumbURL
+		}
+		if it.ThumbPath == "" && it.ThumbURL == "" && it.BackdropURL != "" {
 			seed += ":url:" + it.BackdropURL
 		}
 	}
@@ -396,14 +407,17 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 		if it.Type == model.TypeMovie || it.Type == model.TypeSeries || it.Type == model.TypeSeason || it.Type == model.TypeEpisode || it.Type == "Genre" {
 			dto.PrimaryImageAspectRatio = 0.6667
 		}
+		if it.Type == model.TypeEpisode && it.PosterPath == "" && it.ThumbURL != "" {
+			dto.PrimaryImageAspectRatio = 1.7778
+		}
 	}
 	if it.BackdropPath != "" || it.Type == model.TypeMovie || it.Type == model.TypeSeries {
 		dto.BackdropImageTags = append(dto.BackdropImageTags, imageTag(it, "Backdrop"))
 	}
-	if it.LogoPath != "" {
+	if it.LogoPath != "" || it.LogoURL != "" {
 		dto.ImageTags["Logo"] = imageTag(it, "Logo")
 	}
-	if it.ThumbPath != "" {
+	if it.ThumbPath != "" || it.ThumbURL != "" {
 		dto.ImageTags["Thumb"] = imageTag(it, "Thumb")
 	}
 	// Seasons and episodes inherit the series artwork so native clients can
