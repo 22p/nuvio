@@ -2,7 +2,10 @@
 // scanner and the Jellyfin-compatible API layer.
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Item types. The values are part of the Jellyfin wire format, keep them stable.
 const (
@@ -66,8 +69,21 @@ type Item struct {
 	People       []Person `json:"people,omitempty"`
 
 	TMDBID           int    `json:"tmdbId,omitempty"`
+	TMDBVersion      int    `json:"tmdbVersion,omitempty"`
 	MetadataSource   string `json:"metadataSource,omitempty"`
 	MetadataLanguage string `json:"metadataLanguage,omitempty"`
+}
+
+// SortName returns the alphabetical sort key. Leading English articles are
+// ignored so "The Matrix" sorts under M.
+func SortName(name string) string {
+	lower := strings.ToLower(name)
+	for _, prefix := range []string{"the ", "a ", "an "} {
+		if strings.HasPrefix(lower, prefix) {
+			return name[len(prefix):]
+		}
+	}
+	return name
 }
 
 // Person is a cast or crew member attached to an item. ImageURL is an optional

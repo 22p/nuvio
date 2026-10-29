@@ -94,13 +94,6 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
-func boolOr(p *bool, def bool) bool {
-	if p == nil {
-		return def
-	}
-	return *p
-}
-
 func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {

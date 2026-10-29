@@ -190,10 +190,15 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	if opts.BitrateKbps <= 0 {
 		opts.BitrateKbps = 8000
 	}
+	// The client supplies this value; keep a bad request from asking ffmpeg
+	// for an absurd bitrate.
+	if opts.BitrateKbps > 200_000 {
+		opts.BitrateKbps = 200_000
+	}
 	if opts.Height <= 0 || opts.Height > 2160 {
 		opts.Height = 1080
 	}
-	if opts.Preset == "" {
+	if !validPreset(opts.Preset) {
 		opts.Preset = "veryfast"
 	}
 	opts.Codec = NormalizeCodec(opts.Codec)
@@ -752,13 +757,6 @@ func (m *Manager) janitor() {
 	}
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // qsvDecoder maps a source codec to its Intel QSV decoder.
 func qsvDecoder(codec string) string {
 	switch strings.ToLower(strings.TrimSpace(codec)) {
@@ -797,6 +795,16 @@ func evenDimensions(width, height int) (int, int) {
 		height = 2
 	}
 	return width, height
+}
+
+var presets = map[string]bool{
+	"ultrafast": true, "superfast": true, "veryfast": true, "faster": true,
+	"fast": true, "medium": true, "slow": true, "slower": true,
+	"veryslow": true, "placebo": true,
+}
+
+func validPreset(name string) bool {
+	return presets[strings.ToLower(strings.TrimSpace(name))]
 }
 
 func randomID() string {

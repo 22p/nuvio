@@ -3,7 +3,9 @@ package jellyfin
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -171,7 +173,12 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 // the caller fall back to generated artwork when the CDN is unreachable.
 func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model.Item, rawURL string) bool {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" || !strings.HasSuffix(strings.ToLower(u.Hostname()), "tmdb.org") {
+	host := ""
+	if err == nil {
+		host = strings.ToLower(u.Hostname())
+	}
+	if err != nil || u.Scheme != "https" || (host != "tmdb.org" && !strings.HasSuffix(host, ".tmdb.org")) {
+		a.imageFailed(rawURL, fmt.Errorf("unsupported image URL"))
 		return false
 	}
 	if a.ImageDir == "" {
@@ -209,21 +216,36 @@ func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model
 	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
 	if err != nil {
+		a.imageFailed(rawURL, err)
 		return false
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		// A browser that navigates away cancels the request; that is not a
+		// download failure worth logging.
+		if r.Context().Err() == nil {
+			a.imageFailed(rawURL, err)
+		}
 		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		a.imageFailed(rawURL, fmt.Errorf("HTTP %d", resp.StatusCode))
 		return false
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "image/") {
+		a.imageFailed(rawURL, fmt.Errorf("unexpected content type %q", ct))
 		return false
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 25<<20))
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		if r.Context().Err() == nil {
+			a.imageFailed(rawURL, err)
+		}
+		return false
+	}
+	if len(data) == 0 {
+		a.imageFailed(rawURL, fmt.Errorf("empty response"))
 		return false
 	}
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err == nil {
@@ -234,6 +256,14 @@ func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model
 	}
 	writeImageBytes(w, data)
 	return true
+}
+
+// imageFailed logs a download error once per URL. A library page can request
+// dozens of images, so repeat failures must not flood the log.
+func (a *API) imageFailed(rawURL string, err error) {
+	if _, loaded := a.imageFail.LoadOrStore(rawURL, struct{}{}); !loaded {
+		log.Printf("Image fetch failed: %s: %v", rawURL, err)
+	}
 }
 
 // imageCategory groups the on-disk artwork cache by media type.

@@ -51,7 +51,8 @@ interface CardProps {
 export function PosterCard({ item, wide = false }: CardProps) {
   const [failed, setFailed] = useState(false)
   const progress = playProgress(item)
-  const img = imageUrl(item.Id, wide ? 'Backdrop' : 'Primary', wide ? 800 : 440)
+  const tag = wide ? item.BackdropImageTags?.[0] : item.ImageTags?.Primary
+  const img = imageUrl(item.Id, wide ? 'Backdrop' : 'Primary', wide ? 800 : 440, tag)
 
   return (
     <Link to={`/item/${item.Id}`} className={`media-card ${wide ? 'is-wide' : ''}`}>
@@ -105,7 +106,7 @@ export function ContinueCard({ item }: { item: JFItem }) {
       : primaryMeta(item)
   return (
     <Link to={`/watch/${item.Id}`} className="continue-card">
-      <img src={imageUrl(item.Id, 'Backdrop', 700)} alt="" loading="lazy" />
+      <img src={imageUrl(item.Id, 'Backdrop', 700, item.BackdropImageTags?.[0])} alt="" loading="lazy" />
       <div className="continue-shade" />
       <div className="continue-body">
         <div className="continue-label">{label}</div>
@@ -231,7 +232,7 @@ export function Hero({ items }: { items: JFItem[] }) {
         <div
           key={it.Id}
           className={`hero-bg ${i === index ? 'active' : ''}`}
-          style={{ backgroundImage: `url(${imageUrl(it.Id, 'Backdrop', 1800)})` }}
+          style={{ backgroundImage: `url(${imageUrl(it.Id, 'Backdrop', 1800, it.BackdropImageTags?.[0])})` }}
         />
       ))}
       <div className="hero-scrim" />

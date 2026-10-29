@@ -386,3 +386,48 @@ func TestResumeRestartsSuspendedSession(t *testing.T) {
 		t.Fatalf("resumed StartNumber = %d, want 5", next.opts.StartNumber)
 	}
 }
+
+func TestStartClampsBitrateAndPreset(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-ffmpeg.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	media := filepath.Join(dir, "movie.mkv")
+	if err := os.WriteFile(media, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transcode := filepath.Join(dir, "transcode")
+	if err := os.MkdirAll(transcode, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{dir: transcode, sessions: map[string]*Session{}, ffmpeg: func() string { return script }}
+	defer m.StopAll()
+
+	sess, err := m.start("clamp", "item", media, Options{
+		BitrateKbps: 10_000_000,
+		Preset:      "definitely-not-a-preset",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Bitrate != 200_000 {
+		t.Fatalf("bitrate = %d, want 200000", sess.Bitrate)
+	}
+	if sess.opts.Preset != "veryfast" {
+		t.Fatalf("preset = %q, want veryfast", sess.opts.Preset)
+	}
+}
+
+func TestValidPreset(t *testing.T) {
+	for _, name := range []string{"ultrafast", "VERYFAST", "veryslow"} {
+		if !validPreset(name) {
+			t.Fatalf("%q should be valid", name)
+		}
+	}
+	for _, name := range []string{"", "turbo", "-preset"} {
+		if validPreset(name) {
+			t.Fatalf("%q should be rejected", name)
+		}
+	}
+}

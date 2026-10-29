@@ -18,6 +18,10 @@ import (
 	"nuvio/internal/model"
 )
 
+// metadataVersion marks items enriched with the current field set. Bump it
+// when a new TMDb field is added so existing libraries refresh once.
+const metadataVersion = 2
+
 // Enricher resolves TMDb matches sequentially to stay within the public API
 // rate limits. A nil or empty APIKey makes it a no-op.
 type Enricher struct {
@@ -83,7 +87,7 @@ func (e *Enricher) Enrich(ctx context.Context, items []*model.Item) error {
 		if it.Type != model.TypeMovie && it.Type != model.TypeSeries {
 			continue
 		}
-		if it.TMDBID > 0 && it.PosterURL != "" && it.LogoURL != "" && it.MetadataLanguage == e.Language {
+		if it.TMDBID > 0 && it.MetadataLanguage == e.Language && it.TMDBVersion >= metadataVersion {
 			continue
 		}
 		if e.isDisabled() {
@@ -315,7 +319,7 @@ func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
 		}
 		if title != "" {
 			it.Name = title
-			it.SortName = sortTitle(title)
+			it.SortName = model.SortName(title)
 		}
 	}
 	if local {
@@ -363,23 +367,22 @@ func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
 	if r.BackdropPath != "" {
 		it.BackdropURL = e.ImageBase + "/w1280" + r.BackdropPath
 	}
+	logoChecked := true
 	if it.LogoURL == "" {
-		it.LogoURL = e.logoURL(ctx, kindOfItem(it), r.ID)
+		logo, err := e.logoURL(ctx, kindOfItem(it), r.ID)
+		if err != nil {
+			// Leave the version unset so the next scan retries the lookup.
+			logoChecked = false
+		} else {
+			it.LogoURL = logo
+		}
+	}
+	if logoChecked {
+		it.TMDBVersion = metadataVersion
 	}
 	if len(it.People) == 0 {
 		it.People = e.credits(ctx, kindOfItem(it), r.ID)
 	}
-}
-
-// sortTitle mirrors the scanner's sort key: leading articles are ignored.
-func sortTitle(name string) string {
-	lower := strings.ToLower(name)
-	for _, prefix := range []string{"the ", "a ", "an "} {
-		if strings.HasPrefix(lower, prefix) {
-			return name[len(prefix):]
-		}
-	}
-	return name
 }
 
 // imageLanguage is TMDb's two-letter form of the configured language.
@@ -402,9 +405,9 @@ type imagesResponse struct {
 
 // logoURL picks the best transparent logo for a title. Only PNGs are used:
 // TMDb also serves SVG logos, which the image cache cannot label reliably.
-func (e *Enricher) logoURL(ctx context.Context, kind string, id int) string {
+func (e *Enricher) logoURL(ctx context.Context, kind string, id int) (string, error) {
 	if id <= 0 {
-		return ""
+		return "", nil
 	}
 	lang := e.imageLanguage()
 	q := url.Values{}
@@ -412,7 +415,7 @@ func (e *Enricher) logoURL(ctx context.Context, kind string, id int) string {
 	q.Set("include_image_language", lang+",en,null")
 	var out imagesResponse
 	if err := e.getJSON(ctx, fmt.Sprintf("/%s/%d/images?%s", kind, id, q.Encode()), &out); err != nil {
-		return ""
+		return "", err
 	}
 	best, bestScore := "", -1.0
 	for _, logo := range out.Logos {
@@ -436,9 +439,9 @@ func (e *Enricher) logoURL(ctx context.Context, kind string, id int) string {
 		}
 	}
 	if best == "" {
-		return ""
+		return "", nil
 	}
-	return e.ImageBase + "/w500" + best
+	return e.ImageBase + "/w500" + best, nil
 }
 
 type seasonDetails struct {
@@ -516,12 +519,16 @@ func (e *Enricher) enrichEpisodes(ctx context.Context, items []*model.Item) {
 					season.PosterURL = e.ImageBase + "/w500" + details.PosterPath
 				}
 				season.MetadataLanguage = e.Language
+				season.MetadataSource = "tmdb"
 			}
 			byNumber := make(map[int]int, len(details.Episodes))
 			for i, ep := range details.Episodes {
 				byNumber[ep.EpisodeNumber] = i
 			}
 			for _, ep := range group {
+				// Mark the season as fetched even when TMDb has no entry for
+				// this episode, otherwise it would be requested every scan.
+				ep.MetadataLanguage = e.Language
 				i, ok := byNumber[ep.EpisodeNumber]
 				if !ok {
 					continue
@@ -529,7 +536,8 @@ func (e *Enricher) enrichEpisodes(ctx context.Context, items []*model.Item) {
 				info := details.Episodes[i]
 				if ep.MetadataSource != "nfo" && strings.TrimSpace(info.Name) != "" {
 					ep.Name = strings.TrimSpace(info.Name)
-					ep.SortName = sortTitle(ep.Name)
+					ep.SortName = model.SortName(ep.Name)
+					ep.MetadataSource = "tmdb"
 				}
 				if ep.Overview == "" || ep.MetadataSource != "nfo" {
 					if info.Overview != "" {
@@ -545,7 +553,6 @@ func (e *Enricher) enrichEpisodes(ctx context.Context, items []*model.Item) {
 				if ep.Rating == 0 && info.VoteAverage > 0 {
 					ep.Rating = info.VoteAverage
 				}
-				ep.MetadataLanguage = e.Language
 			}
 			select {
 			case <-ctx.Done():
@@ -564,7 +571,7 @@ func (e *Enricher) needsSeason(ctx context.Context, episodes []*model.Item, seas
 		return true
 	}
 	for _, ep := range episodes {
-		if ep.MetadataLanguage != e.Language || ep.Overview == "" || ep.ThumbURL == "" {
+		if ep.MetadataLanguage != e.Language {
 			return true
 		}
 	}
@@ -695,6 +702,84 @@ func (e *Enricher) getJSON(ctx context.Context, path string, out any) error {
 	return nil
 }
 
+// MergeCached copies TMDb fields from a previous scan into freshly scanned
+// items. Scans rebuild items from disk, so without this every rescan would
+// query TMDb for the whole library again, and a temporary outage would erase
+// metadata that was already stored.
+func MergeCached(items, cached []*model.Item) {
+	if len(items) == 0 || len(cached) == 0 {
+		return
+	}
+	previous := make(map[string]*model.Item, len(cached))
+	for _, it := range cached {
+		if it != nil {
+			previous[it.ID] = it
+		}
+	}
+	for _, it := range items {
+		if it == nil || it.Demo {
+			continue
+		}
+		if old := previous[it.ID]; old != nil {
+			mergeItem(it, old)
+		}
+	}
+}
+
+func mergeItem(it, old *model.Item) {
+	// Local .nfo metadata always wins; only fill what it did not provide.
+	local := it.MetadataSource == "nfo"
+	if !local && old.MetadataSource == "tmdb" && old.Name != "" {
+		it.Name, it.SortName = old.Name, old.SortName
+		it.MetadataSource = "tmdb"
+	}
+	if it.TMDBID == 0 {
+		it.TMDBID = old.TMDBID
+	}
+	if it.TMDBVersion == 0 {
+		it.TMDBVersion = old.TMDBVersion
+	}
+	if it.MetadataLanguage == "" {
+		it.MetadataLanguage = old.MetadataLanguage
+	}
+	if it.Overview == "" {
+		it.Overview = old.Overview
+	}
+	if it.PosterURL == "" {
+		it.PosterURL = old.PosterURL
+	}
+	if it.BackdropURL == "" {
+		it.BackdropURL = old.BackdropURL
+	}
+	if it.LogoURL == "" {
+		it.LogoURL = old.LogoURL
+	}
+	if it.ThumbURL == "" {
+		it.ThumbURL = old.ThumbURL
+	}
+	if it.Rating == 0 {
+		it.Rating = old.Rating
+	}
+	if it.Year == 0 {
+		it.Year = old.Year
+	}
+	if it.PremiereDate == "" {
+		it.PremiereDate = old.PremiereDate
+	}
+	if it.OfficialRating == "" {
+		it.OfficialRating = old.OfficialRating
+	}
+	if len(it.Genres) == 0 {
+		it.Genres = old.Genres
+	}
+	if len(it.People) == 0 {
+		it.People = old.People
+	}
+	if len(it.Taglines) == 0 {
+		it.Taglines = old.Taglines
+	}
+}
+
 func (e *Enricher) inheritSeriesArt(items []*model.Item) {
 	series := map[string]*model.Item{}
 	for _, it := range items {
@@ -726,13 +811,6 @@ func (e *Enricher) inheritSeriesArt(items []*model.Item) {
 			it.People = s.People
 		}
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func abs(v int) int {

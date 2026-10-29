@@ -266,9 +266,17 @@ export function reportStopped(report: PlaybackReport) {
   )
 }
 
-export function imageUrl(id: string, kind: 'Primary' | 'Backdrop' | 'Thumb' | 'Logo' = 'Primary', width = 500) {
-  const token = getToken()
-  return `/Items/${id}/Images/${kind}?maxWidth=${width}${token ? `&api_key=${encodeURIComponent(token)}` : ''}`
+export function imageUrl(
+  id: string,
+  kind: 'Primary' | 'Backdrop' | 'Thumb' | 'Logo' = 'Primary',
+  width = 500,
+  tag?: string,
+) {
+  // Images are readable without a token, so the URL carries only the image
+  // version: a cached poster must not survive a metadata refresh.
+  const params = new URLSearchParams({ maxWidth: String(width) })
+  if (tag) params.set('tag', tag)
+  return `/Items/${id}/Images/${kind}?${params.toString()}`
 }
 
 export const getScanStatus = () => api<ScanStatus>('/api/app/scan')

@@ -295,7 +295,7 @@ func (s *Server) reloadCatalog() error {
 
 // catalogVersion is bumped when a scan can discover new metadata, forcing one
 // automatic rescan for existing libraries after an upgrade.
-const catalogVersion = 4
+const catalogVersion = 5
 
 // ScanIfNeeded performs the one-time scan for an existing library set that has
 // never been persisted. Normal startups only load nuvio.db.
@@ -377,6 +377,10 @@ func (s *Server) runScan() {
 			kept = append(kept, it)
 		}
 	}
+	// Carry TMDb metadata over from the previous catalog: a rescan rebuilds
+	// items from disk and a failed lookup must not erase what we already had.
+	metadata.MergeCached(kept, oldItems)
+
 	settings := s.Store.Settings()
 	tmdbKey := settings.TMDBAPIKey
 	if tmdbKey == "" {
@@ -917,7 +921,17 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if body.TranscodePreset != nil {
+		switch strings.ToLower(strings.TrimSpace(*body.TranscodePreset)) {
+		case "ultrafast", "superfast", "veryfast", "faster", "fast", "medium",
+			"slow", "slower", "veryslow", "placebo":
+		default:
+			writeJSON(w, 400, map[string]any{"error": "Invalid encoder preset"})
+			return
+		}
+	}
 	oldProbe := s.API.FFprobe()
+	oldFFmpeg := s.API.FFmpeg()
 	oldSettings := s.Store.Settings()
 	settings := s.Store.UpdateSettings(func(st *model.ServerSettings) {
 		if body.ServerName != nil && strings.TrimSpace(*body.ServerName) != "" {
@@ -933,7 +947,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			st.MaxBitrateMbps = *body.MaxBitrateMbps
 		}
 		if body.TranscodePreset != nil {
-			st.TranscodePreset = *body.TranscodePreset
+			st.TranscodePreset = strings.ToLower(strings.TrimSpace(*body.TranscodePreset))
 		}
 		if body.TranscodeCodec != nil {
 			st.TranscodeCodec = strings.ToLower(strings.TrimSpace(*body.TranscodeCodec))
@@ -957,7 +971,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	ffmpeg := resolveTool("", settings.FFmpegPath, "NUVIO_FFMPEG", "ffmpeg")
 	ffprobe := resolveTool("", settings.FFprobePath, "NUVIO_FFPROBE", "ffprobe")
 	s.API.SetTools(ffmpeg, ffprobe)
-	applyHardware(s.API, ffmpeg)
+	// Probing spawns a dozen ffmpeg processes; only redo it when the binary
+	// actually changed. A restart re-detects after driver updates.
+	if ffmpeg != oldFFmpeg {
+		applyHardware(s.API, ffmpeg)
+	}
 	metadataChanged := oldSettings.TMDBAPIKey != settings.TMDBAPIKey || oldSettings.MetadataLanguage != settings.MetadataLanguage
 	if ffprobe != oldProbe || (metadataChanged && (settings.TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "")) {
 		go s.StartScan()

@@ -979,3 +979,12 @@ func TestRemoteLogoAndEpisodeStill(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteImageRejectsLookalikeHost(t *testing.T) {
+	a := &API{ImageDir: t.TempDir()}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	if a.serveRemoteImage(rec, req, &model.Item{Type: model.TypeMovie}, "https://eviltmdb.org/t/p/w500/x.jpg") {
+		t.Fatal("lookalike host must be rejected")
+	}
+}

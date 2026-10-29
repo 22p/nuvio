@@ -148,12 +148,12 @@ export function DetailPage() {
   const playItem = isShowLike ? nextTarget : item
   const progress = playProgress(item)
   const backdrop = item.BackdropImageTags?.length
-    ? imageUrl(item.Id, 'Backdrop', 1920)
+    ? imageUrl(item.Id, 'Backdrop', 1920, item.BackdropImageTags[0])
     : item.ImageTags?.Thumb
-      ? imageUrl(item.Id, 'Thumb', 1920)
-      : imageUrl(item.Id, 'Primary', 1200)
-  const poster = imageUrl(item.Id, 'Primary', 600)
-  const logo = item.ImageTags?.Logo ? imageUrl(item.Id, 'Logo', 900) : ''
+      ? imageUrl(item.Id, 'Thumb', 1920, item.ImageTags.Thumb)
+      : imageUrl(item.Id, 'Primary', 1200, item.ImageTags?.Primary)
+  const poster = imageUrl(item.Id, 'Primary', 600, item.ImageTags?.Primary)
+  const logo = item.ImageTags?.Logo ? imageUrl(item.Id, 'Logo', 900, item.ImageTags.Logo) : ''
   const source = item.MediaSources?.[0]
   const video = source?.MediaStreams?.find((s) => s.Type === 'Video')
   const audio = source?.MediaStreams?.find((s) => s.Type === 'Audio')
@@ -441,7 +441,16 @@ function EpisodeRow({
     <div className="episode-row">
       <button className="episode-main" onClick={onPlay}>
         <div className="episode-thumb">
-          <img src={imageUrl(episode.Id, episode.ImageTags?.Thumb ? 'Thumb' : 'Backdrop', 480)} alt="" loading="lazy" />
+          <img
+            src={imageUrl(
+              episode.Id,
+              episode.ImageTags?.Thumb ? 'Thumb' : 'Backdrop',
+              480,
+              episode.ImageTags?.Thumb || episode.BackdropImageTags?.[0],
+            )}
+            alt=""
+            loading="lazy"
+          />
           <span className="episode-number">{episode.IndexNumber ?? '·'}</span>
           <span className="episode-play">
             <IconPlay size={15} />

@@ -295,7 +295,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			ID:            md5hex("episode:" + ve.path),
 			Type:          model.TypeEpisode,
 			Name:          epName,
-			SortName:      sortName(epName),
+			SortName:      model.SortName(epName),
 			Year:          epYear,
 			LibraryID:     lib.ID,
 			ParentID:      seasonID,
@@ -341,7 +341,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			ID:           seriesID,
 			Type:         model.TypeSeries,
 			Name:         agg.name,
-			SortName:     sortName(agg.name),
+			SortName:     model.SortName(agg.name),
 			Year:         agg.year,
 			LibraryID:    lib.ID,
 			ParentID:     lib.ID,
@@ -429,7 +429,7 @@ func (s *Scanner) movieItem(lib *model.Library, ve *videoEntry, artByDir map[str
 		ID:           md5hex("movie:" + ve.path),
 		Type:         model.TypeMovie,
 		Name:         title,
-		SortName:     sortName(title),
+		SortName:     model.SortName(title),
 		Year:         year,
 		LibraryID:    lib.ID,
 		ParentID:     lib.ID,
@@ -770,16 +770,6 @@ func cleanTitle(s string) string {
 	s = tokenRe.ReplaceAllString(s, " ")
 	s = multiSpace.ReplaceAllString(s, " ")
 	return strings.TrimSpace(strings.Trim(s, "-–—[](){}"))
-}
-
-func sortName(name string) string {
-	l := strings.ToLower(name)
-	for _, prefix := range []string{"the ", "a ", "an "} {
-		if strings.HasPrefix(l, prefix) {
-			return name[len(prefix):]
-		}
-	}
-	return name
 }
 
 func matchSubtitles(dir, base string, files []string) []model.Subtitle {

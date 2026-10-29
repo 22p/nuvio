@@ -154,7 +154,7 @@ func applyNFO(it *model.Item, n *nfoData) {
 	changed := false
 	if v := strings.TrimSpace(n.Title); v != "" {
 		it.Name = v
-		it.SortName = sortName(v)
+		it.SortName = model.SortName(v)
 		changed = true
 	}
 	if v := firstNonEmpty(n.Plot, n.Outline); v != "" {

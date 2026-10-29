@@ -103,7 +103,7 @@ func TestEnrichMovieAndInheritSeriesArt(t *testing.T) {
 	if err := e.Enrich(context.Background(), []*model.Item{movie, series, season, episode, demo}); err != nil {
 		t.Fatal(err)
 	}
-	if movie.TMDBID != 603 || movie.Overview == "" || movie.Rating != 8.2 {
+	if movie.TMDBID != 603 || movie.Overview == "" || movie.Rating != 8.2 || movie.TMDBVersion != metadataVersion {
 		t.Fatalf("movie metadata: %+v", movie)
 	}
 	if len(movie.Genres) != 2 || movie.Genres[1] != "Science Fiction" {
@@ -235,5 +235,48 @@ func TestRomanizedFolderFallsBackToEnglish(t *testing.T) {
 	}
 	if it.Overview != "家里蹲少年转生到异世界。" {
 		t.Fatalf("overview = %q", it.Overview)
+	}
+}
+
+// A second scan of the same, already enriched catalog must not hit TMDb again;
+// startScan rebuilds items from disk, so MergeCached provides the marker.
+func TestEnrichSkipsAlreadyEnriched(t *testing.T) {
+	var requests int
+	mux := http.NewServeMux()
+	handle := func(body func() any) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			_ = json.NewEncoder(w).Encode(body())
+		}
+	}
+	mux.HandleFunc("/search/movie", handle(func() any {
+		return map[string]any{"results": []map[string]any{{
+			"id": 1, "title": "Film", "original_title": "Film", "poster_path": "/f.jpg",
+			"release_date": "2020-01-01", "vote_average": 7.0,
+		}}}
+	}))
+	mux.HandleFunc("/movie/1/images", handle(func() any { return map[string]any{"logos": []any{}} }))
+	mux.HandleFunc("/movie/1/credits", handle(func() any { return map[string]any{"cast": []any{}} }))
+	mux.HandleFunc("/genre/movie/list", handle(func() any { return map[string]any{"genres": []any{}} }))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	e := New("key", "zh-CN")
+	e.BaseURL = server.URL
+	e.ImageBase = server.URL + "/img"
+	item := &model.Item{ID: "m", Type: model.TypeMovie, Name: "Film", Year: 2020}
+
+	if err := e.Enrich(context.Background(), []*model.Item{item}); err != nil {
+		t.Fatal(err)
+	}
+	if requests == 0 {
+		t.Fatal("first enrichment made no requests")
+	}
+	before := requests
+	if err := e.Enrich(context.Background(), []*model.Item{item}); err != nil {
+		t.Fatal(err)
+	}
+	if requests != before {
+		t.Fatalf("second enrichment made %d extra requests", requests-before)
 	}
 }

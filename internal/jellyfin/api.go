@@ -26,8 +26,9 @@ import (
 	"nuvio/internal/store"
 )
 
-// Version is Nuvio's own version.
-const Version = "1.1.1"
+// Version is Nuvio's own version. It is injected at build time with
+// -ldflags "-X nuvio/internal/jellyfin.Version=<tag>".
+var Version = "dev"
 
 // ApiVersion is the Jellyfin server version we advertise. Native clients gate
 // features on this string.
@@ -54,6 +55,7 @@ type API struct {
 	imageMu      sync.Mutex
 	imageHTTP    *http.Client
 	imageSem     chan struct{}
+	imageFail    sync.Map
 }
 
 // HardwareCapability is one backend's probed encoder and decoder support.
@@ -148,7 +150,9 @@ func (a *API) SoftwareEncoder(codec string) string {
 // SupportsEncode reports whether backend was probed with a working encoder for
 // codec. The backend may be "software" or a hardware backend name.
 func (a *API) SupportsEncode(backend, codec string) bool {
-	for _, cap := range a.Capabilities() {
+	a.toolsMu.RLock()
+	defer a.toolsMu.RUnlock()
+	for _, cap := range a.capabilities {
 		if cap.Backend != backend {
 			continue
 		}

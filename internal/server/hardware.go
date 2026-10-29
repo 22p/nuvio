@@ -68,14 +68,11 @@ type hardwareInfo struct {
 // the whole group is capped rather than each individual codec.
 const hwProbeTimeout = 25 * time.Second
 
-func probeHardware(ffmpeg string) hardwareInfo {
+func probeHardware(ffmpeg, encoders, decoders string) hardwareInfo {
 	info := hardwareInfo{Software: map[string]string{}}
 	if ffmpeg == "" {
 		return info
 	}
-	encOut, _ := exec.Command(ffmpeg, "-hide_banner", "-encoders").Output()
-	decOut, _ := exec.Command(ffmpeg, "-hide_banner", "-decoders").Output()
-	encoders, decoders := string(encOut), string(decOut)
 
 	for _, p := range videoCodecProbes {
 		for _, name := range p.Software {
@@ -136,7 +133,7 @@ func probeBackend(ffmpeg, backend, device, encoders, decoders string) (jellyfin.
 		if name != "" && codecListed(encoders, name) && hardwareEncodeWorks(ctx, ffmpeg, backend, device, p.Codec, name) {
 			cap.Encoders = append(cap.Encoders, p.Codec)
 		}
-		if hardwareDecodeWorks(ctx, ffmpeg, backend, device, p, decoders) {
+		if hardwareDecodeWorks(ctx, ffmpeg, backend, device, p, encoders, decoders) {
 			cap.Decoders = append(cap.Decoders, p.Codec)
 		}
 	}
@@ -175,8 +172,8 @@ func hardwareEncodeWorks(ctx context.Context, ffmpeg, backend, device, codec, en
 // hardwareDecodeWorks decodes a small clip generated with a software encoder.
 // When no software encoder is available the decoder list is used as a weaker
 // fallback so the capability is still reported on minimal ffmpeg builds.
-func hardwareDecodeWorks(ctx context.Context, ffmpeg, backend, device string, probe videoCodecProbe, decoders string) bool {
-	sample := probeSample(ffmpeg, probe)
+func hardwareDecodeWorks(ctx context.Context, ffmpeg, backend, device string, probe videoCodecProbe, encoders, decoders string) bool {
+	sample := probeSample(ffmpeg, probe, encoders)
 	if sample == "" {
 		name := probe.VAAPI
 		if backend == "qsv" {
@@ -200,7 +197,7 @@ var sampleMu sync.Mutex
 
 // probeSample returns a cached one-frame clip in the requested codec, or ""
 // when ffmpeg has no software encoder for it.
-func probeSample(ffmpeg string, probe videoCodecProbe) string {
+func probeSample(ffmpeg string, probe videoCodecProbe, encoders string) string {
 	sampleMu.Lock()
 	defer sampleMu.Unlock()
 	dir := filepath.Join(os.TempDir(), "nuvio-hwprobe")
@@ -217,7 +214,7 @@ func probeSample(ffmpeg string, probe videoCodecProbe) string {
 	}
 	encoder := ""
 	for _, name := range probe.Sample {
-		if ffmpegHasEncoder(ffmpeg, name) {
+		if codecListed(encoders, name) {
 			encoder = name
 			break
 		}
@@ -256,11 +253,6 @@ func probeSample(ffmpeg string, probe videoCodecProbe) string {
 	return path
 }
 
-func ffmpegHasEncoder(ffmpeg, name string) bool {
-	out, err := exec.Command(ffmpeg, "-hide_banner", "-encoders").Output()
-	return err == nil && codecListed(string(out), name)
-}
-
 func runProbe(ctx context.Context, ffmpeg string, args ...string) bool {
 	return exec.CommandContext(ctx, ffmpeg, args...).Run() == nil
 }
@@ -292,8 +284,13 @@ func detectRenderDevice() string {
 
 // applyHardware stores the probe result on the API and logs a summary.
 func applyHardware(api *jellyfin.API, ffmpeg string) hardwareInfo {
-	info := probeHardware(ffmpeg)
-	api.SetEncoder(detectEncoder(ffmpeg))
+	encoders, decoders := "", ""
+	if ffmpeg != "" {
+		encoders = ffmpegList(ffmpeg, "-encoders")
+		decoders = ffmpegList(ffmpeg, "-decoders")
+	}
+	info := probeHardware(ffmpeg, encoders, decoders)
+	api.SetEncoder(detectEncoder(encoders))
 	api.SetSoftwareEncoders(info.Software)
 	api.SetCapabilities(info.Capabilities)
 	vaapi, qsv := "", ""
@@ -333,19 +330,22 @@ func joinOrNone(list []string) string {
 // detectEncoder returns the preferred software H.264 encoder. It is kept for
 // the admin overview and as the last-resort fallback when a newer codec has no
 // working software encoder.
-func detectEncoder(ffmpeg string) string {
-	if ffmpeg == "" {
+func detectEncoder(encoders string) string {
+	if encoders == "" {
 		return ""
 	}
-	out, err := exec.Command(ffmpeg, "-hide_banner", "-encoders").Output()
-	if err != nil {
-		return "libx264"
-	}
-	text := string(out)
 	for _, name := range []string{"libx264", "libopenh264", "h264_v4l2m2m"} {
-		if codecListed(text, name) {
+		if codecListed(encoders, name) {
 			return name
 		}
 	}
 	return "libx264"
+}
+
+func ffmpegList(ffmpeg, flag string) string {
+	out, err := exec.Command(ffmpeg, "-hide_banner", flag).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }

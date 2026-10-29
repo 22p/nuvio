@@ -100,6 +100,18 @@ jobs:
           go-version: '1.27.x'
           cache: true
 
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          echo "number=${version#v}" >> "$GITHUB_OUTPUT"
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -111,7 +123,9 @@ jobs:
           mkdir -p dist
           bin=nuvio
           if [ "$GOOS" = "windows" ]; then bin=nuvio.exe; fi
-          go build -trimpath -ldflags="-s -w" -o "dist/$bin" ./cmd/nuvio
+          go build -trimpath \
+            -ldflags="-s -w -X 'nuvio/internal/jellyfin.Version=${{ steps.version.outputs.number }}'" \
+            -o "dist/$bin" ./cmd/nuvio
           cd dist
           if [ "$GOOS" = "windows" ]; then
             zip -q "nuvio_${GOOS}_${GOARCH}.zip" "$bin"
@@ -153,6 +167,7 @@ jobs:
           version="v${version#v}"
           owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version_number=${version#v}" >> "$GITHUB_OUTPUT"
           echo "owner=$owner" >> "$GITHUB_OUTPUT"
 
       - name: Install QEMU
@@ -167,6 +182,8 @@ jobs:
           image: ${{ env.IMAGE_NAME }}
           tags: latest ${{ steps.version.outputs.version }}
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.version.outputs.version_number }}
           containerfiles: |
             ./Dockerfile
 
