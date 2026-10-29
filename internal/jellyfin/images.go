@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -111,7 +112,7 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if remoteURL != "" && a.serveRemoteImage(w, r, remoteURL) {
+	if remoteURL != "" && a.serveRemoteImage(w, r, it, remoteURL) {
 		return
 	}
 	if kind == "logo" {
@@ -168,7 +169,7 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 
 // serveRemoteImage downloads and caches a TMDb CDN image. Returning false lets
 // the caller fall back to generated artwork when the CDN is unreachable.
-func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, rawURL string) bool {
+func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model.Item, rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" || !strings.HasSuffix(strings.ToLower(u.Hostname()), "tmdb.org") {
 		return false
@@ -177,26 +178,40 @@ func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, rawURL st
 		return false
 	}
 	sum := md5.Sum([]byte(rawURL))
-	cachePath := filepath.Join(a.ImageDir, hex.EncodeToString(sum[:])+".img")
+	name := hex.EncodeToString(sum[:]) + imageExt(u.Path)
+	cachePath := filepath.Join(a.ImageDir, imageCategory(it), name)
 	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
 		writeImageBytes(w, data)
 		return true
 	}
 
 	a.imageMu.Lock()
-	defer a.imageMu.Unlock()
+	if a.imageHTTP == nil {
+		a.imageHTTP = &http.Client{Timeout: 20 * time.Second}
+	}
+	if a.imageSem == nil {
+		a.imageSem = make(chan struct{}, 6)
+	}
+	client, sem := a.imageHTTP, a.imageSem
+	a.imageMu.Unlock()
+
+	// Library pages request dozens of posters at once; a global lock made them
+	// download one by one and many timed out. Cache hits above stay lock-free.
+	select {
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
+	case <-r.Context().Done():
+		return false
+	}
 	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
 		writeImageBytes(w, data)
 		return true
-	}
-	if a.imageHTTP == nil {
-		a.imageHTTP = &http.Client{Timeout: 20 * time.Second}
 	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
 	if err != nil {
 		return false
 	}
-	resp, err := a.imageHTTP.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -211,7 +226,7 @@ func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, rawURL st
 	if err != nil || len(data) == 0 {
 		return false
 	}
-	if err := os.MkdirAll(a.ImageDir, 0o755); err == nil {
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err == nil {
 		tmp := cachePath + ".tmp"
 		if err := os.WriteFile(tmp, data, 0o644); err == nil {
 			_ = os.Rename(tmp, cachePath)
@@ -219,6 +234,32 @@ func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, rawURL st
 	}
 	writeImageBytes(w, data)
 	return true
+}
+
+// imageCategory groups the on-disk artwork cache by media type.
+func imageCategory(it *model.Item) string {
+	if it == nil {
+		return "other"
+	}
+	switch it.Type {
+	case model.TypeMovie:
+		return "movies"
+	case model.TypeSeries, model.TypeSeason, model.TypeEpisode:
+		return "tvshows"
+	case "Person":
+		return "people"
+	}
+	return "other"
+}
+
+// imageExt keeps the cache file browsable; unknown types fall back to .img.
+func imageExt(urlPath string) string {
+	switch ext := strings.ToLower(path.Ext(urlPath)); ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".avif":
+		return ext
+	default:
+		return ".img"
+	}
 }
 
 func writeImageBytes(w http.ResponseWriter, data []byte) {

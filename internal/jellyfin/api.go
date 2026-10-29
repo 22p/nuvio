@@ -53,6 +53,7 @@ type API struct {
 	capabilities []HardwareCapability
 	imageMu      sync.Mutex
 	imageHTTP    *http.Client
+	imageSem     chan struct{}
 }
 
 // HardwareCapability is one backend's probed encoder and decoder support.

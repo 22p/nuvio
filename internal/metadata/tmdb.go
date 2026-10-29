@@ -132,6 +132,27 @@ func (e *Enricher) disable(reason string) {
 }
 
 func (e *Enricher) lookup(ctx context.Context, it *model.Item) (*searchResult, error) {
+	res, err := e.search(ctx, it, e.Language)
+	if err != nil || res != nil {
+		return res, err
+	}
+	// Folder names are often the romaji or English title (common for anime)
+	// while TMDb returns the localised name, so retry in English and localise
+	// the match afterwards.
+	if e.imageLanguage() == "en" {
+		return nil, nil
+	}
+	res, err = e.search(ctx, it, "en-US")
+	if err != nil || res == nil {
+		return res, err
+	}
+	if local := e.details(ctx, kindOfItem(it), res.ID); local != nil {
+		return local, nil
+	}
+	return res, nil
+}
+
+func (e *Enricher) search(ctx context.Context, it *model.Item, language string) (*searchResult, error) {
 	kind := "movie"
 	year := it.Year
 	if it.Type == model.TypeSeries {
@@ -139,7 +160,7 @@ func (e *Enricher) lookup(ctx context.Context, it *model.Item) (*searchResult, e
 	}
 	q := url.Values{}
 	q.Set("api_key", e.APIKey)
-	q.Set("language", e.Language)
+	q.Set("language", language)
 	q.Set("query", it.Name)
 	q.Set("include_adult", "false")
 	if year > 0 {
@@ -173,6 +194,54 @@ func (e *Enricher) lookup(ctx context.Context, it *model.Item) (*searchResult, e
 		return nil, nil
 	}
 	return &out.Results[best], nil
+}
+
+type detailsResponse struct {
+	ID            int     `json:"id"`
+	Title         string  `json:"title"`
+	Name          string  `json:"name"`
+	OriginalTitle string  `json:"original_title"`
+	OriginalName  string  `json:"original_name"`
+	Overview      string  `json:"overview"`
+	PosterPath    string  `json:"poster_path"`
+	BackdropPath  string  `json:"backdrop_path"`
+	ReleaseDate   string  `json:"release_date"`
+	FirstAirDate  string  `json:"first_air_date"`
+	VoteAverage   float64 `json:"vote_average"`
+	Genres        []struct {
+		ID int `json:"id"`
+	} `json:"genres"`
+}
+
+// details re-reads an English search hit in the configured language.
+func (e *Enricher) details(ctx context.Context, kind string, id int) *searchResult {
+	if id <= 0 {
+		return nil
+	}
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("language", e.Language)
+	var out detailsResponse
+	if err := e.getJSON(ctx, fmt.Sprintf("/%s/%d?%s", kind, id, q.Encode()), &out); err != nil {
+		return nil
+	}
+	res := &searchResult{
+		ID:            out.ID,
+		Title:         out.Title,
+		Name:          out.Name,
+		OriginalTitle: out.OriginalTitle,
+		OriginalName:  out.OriginalName,
+		Overview:      out.Overview,
+		PosterPath:    out.PosterPath,
+		BackdropPath:  out.BackdropPath,
+		ReleaseDate:   out.ReleaseDate,
+		FirstAirDate:  out.FirstAirDate,
+		VoteAverage:   out.VoteAverage,
+	}
+	for _, g := range out.Genres {
+		res.GenreIDs = append(res.GenreIDs, g.ID)
+	}
+	return res
 }
 
 func matchScore(query string, year int, r searchResult) int {
@@ -238,6 +307,17 @@ func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
 	local := it.MetadataSource == "nfo"
 	it.TMDBID = r.ID
 	it.MetadataLanguage = e.Language
+	if !local {
+		// Use the TMDb title in the configured language, like Jellyfin does.
+		title := strings.TrimSpace(r.Title)
+		if it.Type == model.TypeSeries {
+			title = strings.TrimSpace(r.Name)
+		}
+		if title != "" {
+			it.Name = title
+			it.SortName = sortTitle(title)
+		}
+	}
 	if local {
 		// Local .nfo metadata wins; TMDb only fills the gaps.
 		if it.Overview == "" {
@@ -289,6 +369,17 @@ func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
 	if len(it.People) == 0 {
 		it.People = e.credits(ctx, kindOfItem(it), r.ID)
 	}
+}
+
+// sortTitle mirrors the scanner's sort key: leading articles are ignored.
+func sortTitle(name string) string {
+	lower := strings.ToLower(name)
+	for _, prefix := range []string{"the ", "a ", "an "} {
+		if strings.HasPrefix(lower, prefix) {
+			return name[len(prefix):]
+		}
+	}
+	return name
 }
 
 // imageLanguage is TMDb's two-letter form of the configured language.
@@ -354,6 +445,7 @@ type seasonDetails struct {
 	PosterPath string `json:"poster_path"`
 	Episodes   []struct {
 		EpisodeNumber int     `json:"episode_number"`
+		Name          string  `json:"name"`
 		Overview      string  `json:"overview"`
 		StillPath     string  `json:"still_path"`
 		AirDate       string  `json:"air_date"`
@@ -435,6 +527,10 @@ func (e *Enricher) enrichEpisodes(ctx context.Context, items []*model.Item) {
 					continue
 				}
 				info := details.Episodes[i]
+				if ep.MetadataSource != "nfo" && strings.TrimSpace(info.Name) != "" {
+					ep.Name = strings.TrimSpace(info.Name)
+					ep.SortName = sortTitle(ep.Name)
+				}
 				if ep.Overview == "" || ep.MetadataSource != "nfo" {
 					if info.Overview != "" {
 						ep.Overview = info.Overview
@@ -613,6 +709,9 @@ func (e *Enricher) inheritSeriesArt(items []*model.Item) {
 		s := series[it.SeriesID]
 		if s == nil {
 			continue
+		}
+		if s.Name != "" {
+			it.SeriesName = s.Name
 		}
 		if it.PosterPath == "" && it.PosterURL == "" {
 			it.PosterURL = s.PosterURL

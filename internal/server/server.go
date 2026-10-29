@@ -95,7 +95,7 @@ func New(cfg Config) (*Server, error) {
 		Store:    st,
 		Catalog:  s.Catalog,
 		DataDir:  cfg.DataDir,
-		ImageDir: filepath.Join(cfg.DataDir, "cache", "images"),
+		ImageDir: filepath.Join(cfg.DataDir, "metadata"),
 		DemoFile: demoFile,
 		Started:  time.Now(),
 	}
@@ -295,7 +295,7 @@ func (s *Server) reloadCatalog() error {
 
 // catalogVersion is bumped when a scan can discover new metadata, forcing one
 // automatic rescan for existing libraries after an upgrade.
-const catalogVersion = 3
+const catalogVersion = 4
 
 // ScanIfNeeded performs the one-time scan for an existing library set that has
 // never been persisted. Normal startups only load nuvio.db.

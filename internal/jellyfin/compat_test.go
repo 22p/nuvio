@@ -887,24 +887,36 @@ func TestRemoteLogoAndEpisodeStill(t *testing.T) {
 
 	const logoURL = "https://image.tmdb.org/t/p/w500/logo.png"
 	const stillURL = "https://image.tmdb.org/t/p/w300/still.jpg"
+	const portraitURL = "https://image.tmdb.org/t/p/w185/portrait.jpg"
+	const moviePosterURL = "https://image.tmdb.org/t/p/w780/movie.jpg"
 	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 	jpeg := []byte{0xff, 0xd8, 0xff, 0xd9}
-	cache := func(rawURL string, data []byte) {
+	cache := func(category, rawURL, ext string, data []byte) string {
 		sum := md5.Sum([]byte(rawURL))
-		path := filepath.Join(a.ImageDir, hex.EncodeToString(sum[:])+".img")
+		path := filepath.Join(a.ImageDir, category, hex.EncodeToString(sum[:])+ext)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, data, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		return path
 	}
-	cache(logoURL, png)
-	cache(stillURL, jpeg)
+	cache("tvshows", logoURL, ".png", png)
+	cache("tvshows", stillURL, ".jpg", jpeg)
+	cache("people", portraitURL, ".jpg", jpeg)
+	cache("movies", moviePosterURL, ".jpg", jpeg)
 
+	movieID := "logicalmovie"
 	seriesID := "logicalseries"
 	episodeID := "logicalepisode"
+	personID := "logicalperson"
 	items := append(demo.Items(),
 		&model.Item{ID: seriesID, Type: model.TypeSeries, Name: "Logo Show", LibraryID: demo.ShowLibraryID, LogoURL: logoURL},
 		&model.Item{ID: episodeID, Type: model.TypeEpisode, Name: "Episode 1", SeriesID: seriesID,
 			LibraryID: demo.ShowLibraryID, SeasonNumber: 1, EpisodeNumber: 1, ThumbURL: stillURL},
+		&model.Item{ID: personID, Type: "Person", Name: "Ada", PosterURL: portraitURL},
+		&model.Item{ID: movieID, Type: model.TypeMovie, Name: "Film", LibraryID: demo.MovieLibraryID, PosterURL: moviePosterURL},
 	)
 	a.Catalog.Replace(demo.Libraries(), items)
 
@@ -954,5 +966,16 @@ func TestRemoteLogoAndEpisodeStill(t *testing.T) {
 	}
 	if rec = get("/Items/" + episodeID + "/Images/Primary"); rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), jpeg) {
 		t.Fatalf("episode primary should use the still: %d", rec.Code)
+	}
+	if rec = get("/Items/" + personID + "/Images/Primary"); rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), jpeg) {
+		t.Fatalf("person portrait = %d", rec.Code)
+	}
+	if rec = get("/Items/" + movieID + "/Images/Primary"); rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), jpeg) {
+		t.Fatalf("movie poster = %d", rec.Code)
+	}
+	for _, dir := range []string{"movies", "tvshows", "people"} {
+		if st, err := os.Stat(filepath.Join(a.ImageDir, dir)); err != nil || !st.IsDir() {
+			t.Fatalf("expected cache directory %s: %v", dir, err)
+		}
 	}
 }

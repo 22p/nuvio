@@ -168,3 +168,72 @@ func TestNoConfidentMatch(t *testing.T) {
 		t.Fatalf("wrong match accepted: %+v", it)
 	}
 }
+
+// Anime folders are often named with the romaji title while TMDb returns the
+// localised name. The English fallback must still match and localise the hit.
+func TestRomanizedFolderFallsBackToEnglish(t *testing.T) {
+	var zhSearches, enSearches int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search/tv", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("language") {
+		case "zh-CN":
+			zhSearches++
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
+		case "en-US":
+			enSearches++
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{
+				"id": 62715, "name": "KonoSuba: God's Blessing on This Wonderful World!",
+				"original_name": "この素晴らしい世界に祝福を！",
+				"overview":      "A shut-in dies and is sent to a fantasy world.",
+				"poster_path":   "/konosuba.jpg", "first_air_date": "2016-01-14",
+				"vote_average": 8.1,
+			}}})
+		}
+	})
+	mux.HandleFunc("/tv/62715", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("language") != "zh-CN" {
+			t.Errorf("details language = %q", r.URL.Query().Get("language"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 62715, "name": "为美好的世界献上祝福！",
+			"original_name": "この素晴らしい世界に祝福を！",
+			"overview":      "家里蹲少年转生到异世界。", "poster_path": "/konosuba.jpg",
+			"first_air_date": "2016-01-14", "vote_average": 8.1,
+		})
+	})
+	mux.HandleFunc("/tv/62715/images", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"logos": []any{}})
+	})
+	mux.HandleFunc("/tv/62715/credits", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"cast": []any{}})
+	})
+	mux.HandleFunc("/genre/tv/list", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"genres": []any{}})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	e := New("key", "zh-CN")
+	e.BaseURL = server.URL
+	e.ImageBase = server.URL + "/img"
+
+	it := &model.Item{ID: "kono", Type: model.TypeSeries, Name: "Konosuba", Year: 2016, LibraryID: "lib"}
+	if err := e.Enrich(context.Background(), []*model.Item{it}); err != nil {
+		t.Fatal(err)
+	}
+	if zhSearches < 1 || enSearches != 1 {
+		t.Fatalf("search attempts zh=%d en=%d", zhSearches, enSearches)
+	}
+	if it.TMDBID != 62715 {
+		t.Fatalf("TMDB id = %d", it.TMDBID)
+	}
+	if it.Name != "为美好的世界献上祝福！" {
+		t.Fatalf("localised title = %q", it.Name)
+	}
+	if !strings.HasSuffix(it.PosterURL, "/w780/konosuba.jpg") {
+		t.Fatalf("poster = %q", it.PosterURL)
+	}
+	if it.Overview != "家里蹲少年转生到异世界。" {
+		t.Fatalf("overview = %q", it.Overview)
+	}
+}
