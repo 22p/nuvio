@@ -31,16 +31,19 @@ type Options struct {
 	// VideoCodec is the source codec, used to pick a QSV decoder.
 	VideoCodec string
 	Encoder    string
-	// Codec is the output codec: h264 (default), hevc, av1 or vp9. Codecs
-	// other than H.264 are packaged as fragmented MP4 segments.
+	// Codec is the output codec: h264 (default), hevc, av1 or vp9. Every
+	// codec is packaged as fragmented MP4 segments.
 	Codec string
+	// AudioCodec is the source codec of the selected audio stream. Only used
+	// when Copy is set, where MP3 has to be re-encoded for fMP4.
+	AudioCodec string
 	// StartNumber is the sequence number of the first segment. Resuming a
 	// suspended session keeps numbering aligned with the client's timeline.
 	StartNumber int
 	// UserID owns the session; used to stop a user's streams when a client
 	// omits PlaySessionId from its stop report.
 	UserID string
-	// Copy repackages the existing streams (-c copy) instead of encoding.
+	// Copy repackages the existing streams instead of encoding.
 	Copy bool
 }
 
@@ -307,10 +310,20 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 	)
 	switch {
 	case opts.Copy:
-		args = append(args,
-			"-c", "copy",
-			"-avoid_negative_ts", "make_zero",
-		)
+		// Video is passed through untouched. MP3 is the one copied audio
+		// format fragmented MP4 cannot carry, so it is re-encoded; every
+		// other eligible format is copied as before.
+		args = append(args, "-c:v", "copy")
+		if opts.AudioCodec == "mp3" {
+			args = append(args,
+				"-c:a", "aac",
+				"-b:a", "160k",
+				"-ac", "2",
+			)
+		} else {
+			args = append(args, "-c:a", "copy")
+		}
+		args = append(args, "-avoid_negative_ts", "make_zero")
 	case vaapi:
 		args = append(args, "-c:v", codec+"_vaapi")
 		args = append(args, profileArgs(codec)...)
@@ -378,19 +391,14 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 	if opts.StartNumber > 0 {
 		args = append(args, "-start_number", strconv.Itoa(opts.StartNumber))
 	}
-	if opts.Copy || codec == "h264" {
-		args = append(args,
-			"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
-			filepath.Join(dir, "main.m3u8"),
-		)
-	} else {
-		args = append(args,
-			"-hls_segment_type", "fmp4",
-			"-hls_fmp4_init_filename", "init.mp4",
-			"-hls_segment_filename", filepath.Join(dir, "seg%05d.m4s"),
-			filepath.Join(dir, "main.m3u8"),
-		)
-	}
+	// Every stream, encoded or remuxed, is packaged as fragmented MP4 so the
+	// manifest, segment naming and content type stay the same for all codecs.
+	args = append(args,
+		"-hls_segment_type", "fmp4",
+		"-hls_fmp4_init_filename", "init.mp4",
+		"-hls_segment_filename", filepath.Join(dir, "seg%05d.m4s"),
+		filepath.Join(dir, "main.m3u8"),
+	)
 	return args
 }
 
@@ -588,8 +596,8 @@ func (s *Session) SegmentPath(name string) (string, bool) {
 	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
 		return "", false
 	}
-	if !strings.HasSuffix(name, ".ts") && !strings.HasSuffix(name, ".m3u8") &&
-		!strings.HasSuffix(name, ".mp4") && !strings.HasSuffix(name, ".m4s") {
+	if !strings.HasSuffix(name, ".m3u8") && !strings.HasSuffix(name, ".mp4") &&
+		!strings.HasSuffix(name, ".m4s") {
 		return "", false
 	}
 	p := filepath.Join(s.Dir, name)
@@ -645,12 +653,12 @@ func (s *Session) WaitForSegment(name string, timeout time.Duration) (string, bo
 	}
 }
 
-// SegmentIndex extracts the sequence number from seg00042.ts / seg00042.m4s.
+// SegmentIndex extracts the sequence number from seg00042.m4s.
 func SegmentIndex(name string) int {
 	if !strings.HasPrefix(name, "seg") {
 		return -1
 	}
-	stem := strings.TrimSuffix(strings.TrimSuffix(name, ".ts"), ".m4s")
+	stem := strings.TrimSuffix(name, ".m4s")
 	n, err := strconv.Atoi(strings.TrimPrefix(stem, "seg"))
 	if err != nil || n < 0 {
 		return -1
@@ -687,12 +695,7 @@ func (s *Session) Master(token string) string {
 		width = s.Height * 16 / 9
 	}
 	var b strings.Builder
-	b.WriteString("#EXTM3U\n")
-	if !s.Copy && s.Codec != "" && s.Codec != "h264" {
-		b.WriteString("#EXT-X-VERSION:7\n")
-	} else {
-		b.WriteString("#EXT-X-VERSION:3\n")
-	}
+	b.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n")
 	if s.Copy {
 		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n",
 			s.Bitrate*1000, width, s.Height))

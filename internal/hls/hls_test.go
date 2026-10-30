@@ -29,6 +29,17 @@ func TestBuildArgsSoftware(t *testing.T) {
 	if strings.Contains(got, "-hwaccel") {
 		t.Fatalf("software session must not use hwaccel: %s", got)
 	}
+	for _, want := range []string{
+		"-hls_segment_type fmp4",
+		"-hls_segment_filename /tmp/session/seg%05d.m4s",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "seg%05d.ts") {
+		t.Fatalf("H.264 encoding should also use fMP4: %s", got)
+	}
 }
 
 func TestBuildArgsVAAPI(t *testing.T) {
@@ -96,11 +107,45 @@ func TestBuildArgsCopyIgnoresHardware(t *testing.T) {
 	}, "/media/movie.mkv", "/tmp/session")
 	got := strings.Join(args, " ")
 
-	if !strings.Contains(got, "-c copy") {
+	if !strings.Contains(got, "-c:v copy") {
 		t.Fatalf("copy mode missing: %s", got)
+	}
+	if !strings.Contains(got, "-c:a copy") {
+		t.Fatalf("copy mode should copy audio: %s", got)
 	}
 	if strings.Contains(got, "-hwaccel") {
 		t.Fatalf("copy mode must not decode through VAAPI: %s", got)
+	}
+	for _, want := range []string{
+		"-hls_segment_type fmp4",
+		"-hls_segment_filename /tmp/session/seg%05d.m4s",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+}
+
+func TestBuildArgsCopyEncodesMP3Audio(t *testing.T) {
+	args := buildArgs(Options{
+		BitrateKbps: 4000,
+		Height:      480,
+		Copy:        true,
+		AudioCodec:  "mp3",
+	}, "/media/movie.avi", "/tmp/session")
+	got := strings.Join(args, " ")
+
+	for _, want := range []string{
+		"-c:v copy",
+		"-c:a aac",
+		"-hls_segment_type fmp4",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "-c copy") {
+		t.Fatalf("MP3 must not be copied into fMP4: %s", got)
 	}
 }
 
@@ -175,12 +220,13 @@ func TestNormalizeCodec(t *testing.T) {
 
 func TestSegmentIndex(t *testing.T) {
 	cases := map[string]int{
-		"seg00000.ts":  0,
-		"seg00042.ts":  42,
+		"seg00000.m4s": 0,
+		"seg00042.m4s": 42,
 		"seg00317.m4s": 317,
 		"init.mp4":     -1,
 		"main.m3u8":    -1,
-		"segabc.ts":    -1,
+		"segabc.m4s":   -1,
+		"seg00000.ts":  -1,
 	}
 	for name, want := range cases {
 		if got := SegmentIndex(name); got != want {
@@ -218,7 +264,7 @@ func TestSuspendKeepsSession(t *testing.T) {
 	if err := os.MkdirAll(sessDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sessDir, "seg00000.ts"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sessDir, "seg00000.m4s"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m := &Manager{dir: dir, sessions: map[string]*Session{}, ffmpeg: func() string { return "" }}
@@ -233,7 +279,7 @@ func TestSuspendKeepsSession(t *testing.T) {
 	if _, ok := m.Get("s"); !ok {
 		t.Fatal("suspended session must stay in the map for resume")
 	}
-	if _, err := os.Stat(filepath.Join(sessDir, "seg00000.ts")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(sessDir, "seg00000.m4s")); !os.IsNotExist(err) {
 		t.Fatalf("segments should be removed, stat err = %v", err)
 	}
 }

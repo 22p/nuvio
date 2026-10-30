@@ -217,7 +217,8 @@ export function getPlaybackInfo(itemId: string, userId: string, opts: PlaybackOp
       ],
       TranscodingProfiles: [
         {
-          Container: 'ts',
+          // The server packages every HLS stream as fragmented MP4.
+          Container: 'mp4',
           Type: 'Video',
           VideoCodec: 'h264',
           AudioCodec: 'aac',

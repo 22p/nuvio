@@ -62,7 +62,7 @@ docker run -d --name nuvio -p 8096:8096 \
   -v nuvio-data:/data nuvio
 ```
 
-启动时会实际编码/解码一帧来验证能力，而不是只看设备节点是否存在：日志会打印 `Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / decode h264, hevc, av1, vp9`，设置 → 服务器 → 转码中也会逐后端展示可用的编码与解码格式。硬件加速可选 `Auto`、`VAAPI (Intel / AMD)`、`QSV (Intel)` 或 `Off`；输出编码可选 H.264、HEVC、AV1 和 VP9（仅列出当前 ffmpeg 与硬件确实支持的项目）。非 H.264 输出使用分片 MP4（fMP4）HLS，客户端必须支持对应编码；所选编码无可用硬件编码器时会回退到该编码的软件编码器，再回退到 H.264。硬件初始化失败或某个文件无法硬解时会自动回退到软件编码。转码会话 90 秒内没有收到播放列表或分片请求时会自动停止 ffmpeg，客户端再次请求时从上次分片继续，避免关闭播放器后进程常驻。宿主机需要安装对应的内核驱动（Intel `i915`/`xe`、AMD `amdgpu`）和 VAAPI 驱动（Debian/Ubuntu 可安装 `mesa-va-drivers`、`intel-media-va-driver-non-free`），裸机运行时把运行用户加入 `render` 组。
+启动时会实际编码/解码一帧来验证能力，而不是只看设备节点是否存在：日志会打印 `Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / decode h264, hevc, av1, vp9`，设置 → 服务器 → 转码中也会逐后端展示可用的编码与解码格式。硬件加速可选 `Auto`、`VAAPI (Intel / AMD)`、`QSV (Intel)` 或 `Off`；输出编码可选 H.264、HEVC、AV1 和 VP9（仅列出当前 ffmpeg 与硬件确实支持的项目）。所有输出（含 H.264）统一封装为分片 MP4（fMP4）HLS，客户端必须支持对应编码；所选编码无可用硬件编码器时会回退到该编码的软件编码器，再回退到 H.264。Remux（仅换容器）同样输出 fMP4，源音频为 MP3 时会转成 AAC，其余音视频流直接复制。硬件初始化失败或某个文件无法硬解时会自动回退到软件编码。转码会话 90 秒内没有收到播放列表或分片请求时会自动停止 ffmpeg，客户端再次请求时从上次分片继续，避免关闭播放器后进程常驻。宿主机需要安装对应的内核驱动（Intel `i915`/`xe`、AMD `amdgpu`）和 VAAPI 驱动（Debian/Ubuntu 可安装 `mesa-va-drivers`、`intel-media-va-driver-non-free`），裸机运行时把运行用户加入 `render` 组。
 
 ## 连接第三方 Jellyfin 客户端
 

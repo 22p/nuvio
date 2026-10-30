@@ -326,12 +326,25 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		}
 		src.TranscodingUrl = "/Videos/" + it.ID + "/master.m3u8?" + q.Encode()
 		src.TranscodingSubProtocol = "hls"
-		src.TranscodingContainer = "ts"
-		if !remux && codec != "h264" {
-			src.TranscodingContainer = "mp4"
-		}
+		src.TranscodingContainer = "mp4"
 	}
 	return src
+}
+
+// audioCodecFor returns the codec of the selected audio stream. An index that
+// does not match a probed track falls back to the file's first audio codec.
+func audioCodecFor(it *model.Item, index int) string {
+	if it == nil || it.Media == nil {
+		return ""
+	}
+	if index > 0 {
+		for _, track := range it.Media.AudioTracks {
+			if track.Index == index && track.Codec != "" {
+				return strings.ToLower(strings.TrimSpace(track.Codec))
+			}
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(it.Media.AudioCodec))
 }
 
 // remuxEligible reports whether the file can be repackaged into HLS without
@@ -348,15 +361,11 @@ func remuxEligible(it *model.Item, req *playbackRequest) bool {
 	if video != "h264" && video != "avc1" && video != "avc" {
 		return false
 	}
-	audio := strings.ToLower(strings.TrimSpace(it.Media.AudioCodec))
-	if req != nil && req.AudioStreamIndex != nil && *req.AudioStreamIndex > 0 {
-		for _, track := range it.Media.AudioTracks {
-			if track.Index == *req.AudioStreamIndex {
-				audio = strings.ToLower(strings.TrimSpace(track.Codec))
-				break
-			}
-		}
+	audioIndex := 0
+	if req != nil && req.AudioStreamIndex != nil {
+		audioIndex = *req.AudioStreamIndex
 	}
+	audio := audioCodecFor(it, audioIndex)
 	if audio != "aac" && audio != "mp3" {
 		return false
 	}
@@ -607,9 +616,10 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 		psid = randomHex(12)
 	}
 	mode, device, codec, encoder := a.transcodeTarget(settings.HardwareAccel, settings.TranscodeCodec)
+	audioIndex := hls.ParseInt(q.Get("AudioStreamIndex"), 1)
 	opts := hls.Options{
 		BitrateKbps:    int(hls.ParseInt(q.Get("MaxStreamingBitrate"), 8_000_000) / 1000),
-		AudioIndex:     hls.ParseInt(q.Get("AudioStreamIndex"), 1),
+		AudioIndex:     audioIndex,
 		StartTicks:     int64(hls.ParseInt(q.Get("StartTimeTicks"), 0)),
 		Height:         hls.ParseInt(q.Get("Height"), 720),
 		Width:          hls.ParseInt(q.Get("Width"), 0),
@@ -619,6 +629,7 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 		VideoCodec:     it.Media.VideoCodec,
 		Encoder:        encoder,
 		Codec:          codec,
+		AudioCodec:     audioCodecFor(it, audioIndex),
 		UserID:         u.ID,
 		Copy:           remux,
 	}
@@ -727,12 +738,7 @@ func serveSessionFile(w http.ResponseWriter, r *http.Request, name, path string)
 	}
 	defer f.Close()
 	st, _ := f.Stat()
-	ct := "video/mp2t"
-	switch {
-	case strings.HasSuffix(name, ".mp4"), strings.HasSuffix(name, ".m4s"):
-		ct = "video/mp4"
-	}
-	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "public, max-age=600")
 	http.ServeContent(w, r, name, st.ModTime(), f)
 }
