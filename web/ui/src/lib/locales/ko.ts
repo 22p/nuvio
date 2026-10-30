@@ -244,6 +244,7 @@ export const ko: Record<string, string> = {
   'Nothing matches “{0}”.': '“{0}”과(와) 일치하는 콘텐츠가 없습니다.',
   'No results': '결과가 없습니다',
   'This format cannot play in your browser. Lower the bitrate in Settings or install ffmpeg on the server.': '이 형식은 브라우저에서 재생할 수 없습니다. 설정에서 비트레이트를 낮추거나 서버에 ffmpeg를 설치하세요.',
+  'This file cannot play in your browser directly, and transcoding is unavailable (disabled on the server or not allowed for this account). Enable transcoding to watch it.': '브라우저에서 이 파일을 직접 재생할 수 없고 트랜스코딩도 사용할 수 없습니다(서버에서 꺼져 있거나 이 계정에 권한이 없음). 트랜스코딩을 켜 주세요.',
   'Browse library': '라이브러리 보기',
   'Mixed': '혼합',
   'Add a media folder and Nuvio will scan its movies and series. You can also restart and keep the demo library.': '미디어 디렉터리를 추가하면 Nuvio가 영화와 시리즈를 스캔합니다. 데모 라이브러리를 유지한 채 다시 시작할 수도 있습니다.',

@@ -267,6 +267,15 @@ export function PlayerPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Direct playback is attempted even when the browser did not declare the
+  // format, because some players decode more than they advertise. When that
+  // fails there is often no transcoder to fall back to, so say so instead of
+  // leaving a black screen.
+  const directErrorText = () =>
+    !source || source.SupportsTranscoding
+      ? t("This format cannot play in your browser. Lower the bitrate in Settings or install ffmpeg on the server.")
+      : t("This file cannot play in your browser directly, and transcoding is unavailable (disabled on the server or not allowed for this account). Enable transcoding to watch it.")
   const hlsRef = useRef<Hls | null>(null)
   const hideTimer = useRef(0)
   const startedRef = useRef(false)
@@ -421,6 +430,7 @@ export function PlayerPage() {
     const video = videoRef.current
     if (!video || !source) return
     let disposed = false
+    let stallWatchdog = 0
     setEnded(false)
     setNeedsGesture(false)
     setBuffering(true)
@@ -475,6 +485,7 @@ export function PlayerPage() {
       video.src = source.DirectStreamUrl
       const start = requestRef.current.start / 10_000_000
       const onMeta = () => {
+        window.clearTimeout(stallWatchdog)
         if (disposed) return
         if (start > 0 && Number.isFinite(video.duration)) {
           video.currentTime = Math.min(start, Math.max(0, video.duration - 1))
@@ -484,6 +495,14 @@ export function PlayerPage() {
         const p = video.play()
         if (p) p.catch(() => setNeedsGesture(true))
       }
+      // Some browsers fail silently on a container they cannot demux: no
+      // error event and no metadata, just a black screen. Report it instead.
+      stallWatchdog = window.setTimeout(() => {
+        if (disposed || video.readyState >= 1) return
+        setPlaybackLoading(false)
+        setBuffering(false)
+        setError(directErrorText())
+      }, 15_000)
       video.addEventListener('loadedmetadata', onMeta, { once: true })
     } else {
       setError(t("This item has no media source"))
@@ -492,6 +511,7 @@ export function PlayerPage() {
 
     return () => {
       disposed = true
+      window.clearTimeout(stallWatchdog)
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
@@ -529,9 +549,17 @@ export function PlayerPage() {
       if (startedRef.current) reportProgress(true)
     }
     const onWaiting = () => setBuffering(true)
+    let videoCheck = 0
     const onPlaying = () => {
       setBuffering(false)
       setPlaybackLoading(false)
+      window.clearTimeout(videoCheck)
+      if (stateRef.current.mode !== 'direct') return
+      // A container that demuxes but whose video codec cannot be decoded
+      // plays audio over a black frame; report it once playback starts.
+      videoCheck = window.setTimeout(() => {
+        if (video.videoWidth === 0) setError(directErrorText())
+      }, 4000)
     }
     const onVolume = () => {
       setMuted(video.muted)
@@ -558,7 +586,7 @@ export function PlayerPage() {
     const onError = () => {
       setPlaybackLoading(false)
       setBuffering(false)
-      setError(t("This format cannot play in your browser. Lower the bitrate in Settings or install ffmpeg on the server."))
+      setError(directErrorText())
     }
 
     video.addEventListener('timeupdate', onTime)
@@ -572,6 +600,7 @@ export function PlayerPage() {
     video.addEventListener('progress', updateBuffered)
     video.addEventListener('error', onError)
     return () => {
+      window.clearTimeout(videoCheck)
       video.removeEventListener('timeupdate', onTime)
       video.removeEventListener('play', onPlay)
       video.removeEventListener('pause', onPause)

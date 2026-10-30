@@ -244,6 +244,7 @@ export const ja: Record<string, string> = {
   'Nothing matches “{0}”.': '「{0}」に一致する内容はありません。',
   'No results': '結果が見つかりません',
   'This format cannot play in your browser. Lower the bitrate in Settings or install ffmpeg on the server.': 'この形式はブラウザで再生できません。設定でビットレートを下げるか、サーバーにffmpegをインストールしてください。',
+  'This file cannot play in your browser directly, and transcoding is unavailable (disabled on the server or not allowed for this account). Enable transcoding to watch it.': 'このファイルはブラウザで直接再生できず、トランスコードも利用できません（サーバーで無効、またはこのアカウントに権限がありません）。トランスコードを有効にしてください。',
   'Browse library': 'ライブラリを見る',
   'Mixed': 'ミックス',
   'Add a media folder and Nuvio will scan its movies and series. You can also restart and keep the demo library.': 'メディアディレクトリを追加すると、Nuvioが映画とシリーズをスキャンします。デモライブラリを残して再起動することもできます。',

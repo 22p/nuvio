@@ -244,6 +244,7 @@ export const zhTW: Record<string, string> = {
   'Nothing matches “{0}”.': '沒有與“{0}”匹配的內容。',
   'No results': '沒有找到結果',
   'This format cannot play in your browser. Lower the bitrate in Settings or install ffmpeg on the server.': '瀏覽器無法播放這個媒體格式。請在設定中降低位元率以觸發轉碼，或在伺服器安裝 ffmpeg。',
+  'This file cannot play in your browser directly, and transcoding is unavailable (disabled on the server or not allowed for this account). Enable transcoding to watch it.': '瀏覽器無法直接播放這個檔案，而轉碼不可用（伺服器未啟用或目前帳號無權限）。請開啟轉碼後再試。',
   'Browse library': '瀏覽媒體庫',
   'Mixed': '混合',
   'Add a media folder and Nuvio will scan its movies and series. You can also restart and keep the demo library.': '新增一個媒體資料夾，Nuvio 會掃描其中的電影和影集。也可以重啟並保留演示媒體庫。',
