@@ -1,65 +1,11 @@
 package store
 
 import (
-	"database/sql"
-	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"nuvio/internal/model"
 )
-
-func TestLegacyLibraryIDMigration(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Open(dir, "Test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldID := "1234567890abcdef"
-	lib := model.Library{ID: oldID, Name: "Legacy", Type: model.LibraryMovies, Paths: []string{}, AddedAt: time.Now().UTC()}
-	libRaw, _ := json.Marshal(lib)
-	if _, err := s.db.Exec("INSERT INTO libraries(id, data, added_at) VALUES(?, ?, ?)", oldID, string(libRaw), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		t.Fatal(err)
-	}
-	item := model.Item{ID: "movie1", Type: model.TypeMovie, Name: "Movie", LibraryID: oldID, ParentID: oldID, AddedAt: time.Now().UTC()}
-	itemRaw, _ := json.Marshal(item)
-	if _, err := s.db.Exec("INSERT INTO items(id, library_id, data, updated_at) VALUES(?, ?, ?, ?)", item.ID, oldID, string(itemRaw), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		t.Fatal(err)
-	}
-	u, err := s.CreateUser("alice", "secret", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.db.Exec("UPDATE users SET allowed_libraries = ? WHERE id = ?", `["`+oldID+`"]`, u.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := Open(dir, "Test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	libs := reopened.Libraries()
-	if len(libs) != 1 || len(libs[0].ID) != 32 {
-		t.Fatalf("library id not migrated: %+v", libs)
-	}
-	newID := libs[0].ID
-	items, err := reopened.Items()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 1 || items[0].LibraryID != newID || items[0].ParentID != newID {
-		t.Fatalf("items not migrated: %+v", items)
-	}
-	user, ok := reopened.FindUserByName("alice")
-	if !ok || len(user.AllowedLibraries) != 1 || user.AllowedLibraries[0] != newID {
-		t.Fatalf("allowed libraries not migrated: %+v", user)
-	}
-}
 
 func TestAuthTokensAndPersistence(t *testing.T) {
 	dir := t.TempDir()
@@ -293,37 +239,6 @@ func TestAdminCount(t *testing.T) {
 	}
 }
 
-func TestRemuxSettingDefaultsForLegacyDatabase(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Open(dir, "Nuvio")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.metaSet("settings", `{"serverName":"Nuvio","transcodeEnabled":true}`); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	reopened, err := Open(dir, "Nuvio")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reopened.Settings().RemuxEnabled {
-		t.Fatal("legacy settings should enable remuxing by default")
-	}
-	reopened.UpdateSettings(func(st *model.ServerSettings) { st.RemuxEnabled = false })
-	reopened.Close()
-
-	again, err := Open(dir, "Nuvio")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer again.Close()
-	if again.Settings().RemuxEnabled {
-		t.Fatal("explicitly disabled remuxing was re-enabled on restart")
-	}
-}
-
 func TestDeviceSessions(t *testing.T) {
 	s, err := Open(t.TempDir(), "Nuvio")
 	if err != nil {
@@ -378,62 +293,6 @@ func TestDeviceSessions(t *testing.T) {
 	}
 	if n := len(s.Sessions(u.ID, first)); n != 1 {
 		t.Fatalf("Sessions after revoke = %d, want 1", n)
-	}
-}
-
-func TestTokenSessionMigration(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Open(dir, "Nuvio")
-	if err != nil {
-		t.Fatal(err)
-	}
-	u, err := s.CreateUser("alice", "secret", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tok, err := s.IssueToken(u.ID, SessionMeta{DeviceName: "Linux · Chrome", Client: "Nuvio Web"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Recreate the pre-session tokens table shape.
-	db, err := sql.Open("sqlite", filepath.Join(dir, "nuvio.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, col := range []string{"device_id", "device_name", "client", "client_version", "remote_address", "last_seen"} {
-		if _, err := db.Exec("ALTER TABLE tokens DROP COLUMN " + col); err != nil {
-			db.Close()
-			t.Fatalf("drop %s: %v", col, err)
-		}
-	}
-	db.Close()
-
-	reopened, err := Open(dir, "Nuvio")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	if _, ok := reopened.UserByToken(tok); !ok {
-		t.Fatal("legacy token no longer authenticates")
-	}
-	list := reopened.Sessions(u.ID, tok)
-	if len(list) != 1 {
-		t.Fatalf("Sessions = %d, want 1", len(list))
-	}
-	if list[0].DeviceName != "" {
-		t.Fatalf("legacy session unexpectedly has a device name: %+v", list[0])
-	}
-	if list[0].LastSeen.IsZero() {
-		t.Fatal("legacy session has no last-seen timestamp")
-	}
-	reopened.DescribeToken(tok, SessionMeta{DeviceName: "Linux · Chrome", Client: "Nuvio Web"})
-	list = reopened.Sessions(u.ID, tok)
-	if list[0].DeviceName != "Linux · Chrome" || list[0].Client != "Nuvio Web" {
-		t.Fatalf("DescribeToken did not fill metadata: %+v", list[0])
 	}
 }
 

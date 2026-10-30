@@ -186,9 +186,6 @@ type ServerSettings struct {
 	FFprobePath      string `json:"ffprobePath,omitempty"`
 	TMDBAPIKey       string `json:"tmdbApiKey,omitempty"`
 	MetadataLanguage string `json:"metadataLanguage,omitempty"`
-	// ScannerVersion tracks metadata/scan changes that require a catalog
-	// refresh when upgrading.
-	ScannerVersion int `json:"scannerVersion,omitempty"`
 }
 
 // DefaultServerSettings returns the out-of-the-box configuration.

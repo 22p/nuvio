@@ -1,6 +1,5 @@
 // Package store persists accounts, tokens, libraries, settings, scanned media
-// items and per-user playback state in SQLite. The old JSON store is not read
-// or migrated; a fresh nuvio.db is created on first run.
+// items and per-user playback state in SQLite. nuvio.db is created on first run.
 package store
 
 import (
@@ -138,38 +137,6 @@ func Open(dir, defaultServerName string) (*Store, error) {
 			return nil, fmt.Errorf("create schema: %w", err)
 		}
 	}
-	for _, col := range []struct{ name, ddl string }{
-		{"allowed_libraries", "TEXT NOT NULL DEFAULT ''"},
-		{"allow_transcode", "INTEGER NOT NULL DEFAULT 1"},
-		{"allow_remux", "INTEGER NOT NULL DEFAULT 1"},
-	} {
-		if err := ensureColumn(db, "users", col.name, col.ddl); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("migrate users.%s: %w", col.name, err)
-		}
-	}
-	for _, col := range []struct{ name, ddl string }{
-		{"device_id", "TEXT NOT NULL DEFAULT ''"},
-		{"device_name", "TEXT NOT NULL DEFAULT ''"},
-		{"client", "TEXT NOT NULL DEFAULT ''"},
-		{"client_version", "TEXT NOT NULL DEFAULT ''"},
-		{"remote_address", "TEXT NOT NULL DEFAULT ''"},
-		{"last_seen", "TEXT NOT NULL DEFAULT ''"},
-	} {
-		if err := ensureColumn(db, "tokens", col.name, col.ddl); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("migrate tokens.%s: %w", col.name, err)
-		}
-	}
-	if _, err := db.Exec("UPDATE tokens SET last_seen = created_at WHERE last_seen = ''"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate tokens.last_seen: %w", err)
-	}
-	if err := migrateLibraryIDs(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate library ids: %w", err)
-	}
-
 	s := &Store{db: db, path: dbPath}
 	s.serverID, _ = s.metaGet("server_id")
 	if s.serverID == "" {
@@ -207,168 +174,10 @@ func Open(dir, defaultServerName string) (*Store, error) {
 	if s.settings.MetadataLanguage == "" {
 		s.settings.MetadataLanguage = "zh-CN"
 	}
-	if !strings.Contains(rawSettings, `"remuxEnabled"`) {
-		// Settings written before remuxing existed default to enabled.
-		s.settings.RemuxEnabled = true
-		if err := s.saveSettings(); err != nil {
-			db.Close()
-			return nil, err
-		}
-	}
 	if s.settings.MaxBitrateMbps == 0 {
 		s.settings.MaxBitrateMbps = 20
 	}
 	return s, nil
-}
-
-// migrateLibraryIDs expands old 16 character library IDs to 32 hex characters
-// so they are valid GUIDs for Jellyfin clients (the Kotlin SDK parses them as
-// UUIDs). Item and user references are updated in the same transaction.
-func migrateLibraryIDs(db *sql.DB) error {
-	rows, err := db.Query("SELECT id, data FROM libraries")
-	if err != nil {
-		return err
-	}
-	type legacyLibrary struct{ id, data string }
-	var legacy []legacyLibrary
-	for rows.Next() {
-		var l legacyLibrary
-		if err := rows.Scan(&l.id, &l.data); err != nil {
-			rows.Close()
-			return err
-		}
-		if len(l.id) == 16 {
-			legacy = append(legacy, l)
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for _, old := range legacy {
-		newID := randomHex(16)
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		if err := migrateLibraryTx(tx, old.id, old.data, newID); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func migrateLibraryTx(tx *sql.Tx, oldID, raw, newID string) error {
-	var lib model.Library
-	if err := json.Unmarshal([]byte(raw), &lib); err == nil {
-		lib.ID = newID
-		if data, err := json.Marshal(lib); err == nil {
-			raw = string(data)
-		}
-	}
-	if _, err := tx.Exec("UPDATE libraries SET id = ?, data = ? WHERE id = ?", newID, raw, oldID); err != nil {
-		return err
-	}
-
-	type itemRow struct{ id, data string }
-	rows, err := tx.Query("SELECT id, data FROM items WHERE library_id = ?", oldID)
-	if err != nil {
-		return err
-	}
-	var items []itemRow
-	for rows.Next() {
-		var row itemRow
-		if err := rows.Scan(&row.id, &row.data); err == nil {
-			items = append(items, row)
-		}
-	}
-	rows.Close()
-	for _, row := range items {
-		var it model.Item
-		if err := json.Unmarshal([]byte(row.data), &it); err != nil {
-			continue
-		}
-		it.LibraryID = newID
-		if it.ParentID == oldID {
-			it.ParentID = newID
-		}
-		data, err := json.Marshal(&it)
-		if err != nil {
-			continue
-		}
-		if _, err := tx.Exec("UPDATE items SET library_id = ?, data = ? WHERE id = ?", newID, string(data), row.id); err != nil {
-			return err
-		}
-	}
-
-	type userRow struct{ id, libs string }
-	rows, err = tx.Query("SELECT id, allowed_libraries FROM users WHERE allowed_libraries <> ''")
-	if err != nil {
-		return err
-	}
-	var users []userRow
-	for rows.Next() {
-		var row userRow
-		if err := rows.Scan(&row.id, &row.libs); err == nil {
-			users = append(users, row)
-		}
-	}
-	rows.Close()
-	for _, row := range users {
-		libs := decodeLibraries(row.libs)
-		changed := false
-		for i, id := range libs {
-			if id == oldID {
-				libs[i] = newID
-				changed = true
-			}
-		}
-		if !changed {
-			continue
-		}
-		if _, err := tx.Exec("UPDATE users SET allowed_libraries = ? WHERE id = ?", encodeLibraries(libs), row.id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ensureColumn adds a column to an existing table when it is missing. SQLite
-// has no "ADD COLUMN IF NOT EXISTS", so inspect the table first.
-func ensureColumn(db *sql.DB, table, column, ddl string) error {
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return err
-	}
-	found := false
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt any
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		if name == column {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	if found {
-		return nil
-	}
-	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + ddl)
-	return err
 }
 
 // Close closes the database.
@@ -671,19 +480,6 @@ func (s *Store) Sessions(userID, currentToken string) []Session {
 		return out[i].LastSeen.After(out[j].LastSeen)
 	})
 	return out
-}
-
-// DescribeToken fills in missing device metadata for tokens minted before
-// session tracking existed. Existing values are never overwritten.
-func (s *Store) DescribeToken(token string, meta SessionMeta) {
-	if token == "" {
-		return
-	}
-	_, _ = s.db.Exec(`UPDATE tokens SET
-		device_name = CASE WHEN device_name = '' THEN ? ELSE device_name END,
-		client = CASE WHEN client = '' THEN ? ELSE client END,
-		remote_address = CASE WHEN remote_address = '' THEN ? ELSE remote_address END
-		WHERE token = ?`, meta.DeviceName, meta.Client, meta.Address, token)
 }
 
 // RefreshSession replaces the descriptive metadata of a token with what the
