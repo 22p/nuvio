@@ -104,6 +104,7 @@ func TestBuildArgsCopyIgnoresHardware(t *testing.T) {
 		Hardware:       "vaapi",
 		HardwareDevice: "/dev/dri/renderD128",
 		Copy:           true,
+		AudioCopy:      true,
 	}, "/media/movie.mkv", "/tmp/session")
 	got := strings.Join(args, " ")
 
@@ -126,13 +127,13 @@ func TestBuildArgsCopyIgnoresHardware(t *testing.T) {
 	}
 }
 
-func TestBuildArgsCopyEncodesMP3Audio(t *testing.T) {
+func TestBuildArgsCopyEncodesAudio(t *testing.T) {
 	args := buildArgs(Options{
 		BitrateKbps: 4000,
 		Height:      480,
 		Copy:        true,
-		AudioCodec:  "mp3",
-	}, "/media/movie.avi", "/tmp/session")
+		AudioCodec:  "flac",
+	}, "/media/movie.mkv", "/tmp/session")
 	got := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -145,7 +146,39 @@ func TestBuildArgsCopyEncodesMP3Audio(t *testing.T) {
 		}
 	}
 	if strings.Contains(got, "-c copy") {
-		t.Fatalf("MP3 must not be copied into fMP4: %s", got)
+		t.Fatalf("audio must be re-encoded: %s", got)
+	}
+}
+
+func TestBuildArgsCopyRetagsHEVC(t *testing.T) {
+	args := buildArgs(Options{
+		BitrateKbps: 4000,
+		Height:      1080,
+		Copy:        true,
+		AudioCopy:   true,
+		Codec:       "hevc",
+	}, "/media/movie.mkv", "/tmp/session")
+	got := strings.Join(args, " ")
+
+	for _, want := range []string{
+		"-c:v copy",
+		"-c:a copy",
+		"-tag:v hvc1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+}
+
+func TestMasterCodecs(t *testing.T) {
+	s := &Session{ID: "s", Width: 1920, Height: 1080, Bitrate: 8000, Copy: true, Codec: "hevc", AudioCodec: "ac3"}
+	got := s.Master("")
+	if !strings.Contains(got, "#EXT-X-VERSION:7") {
+		t.Fatalf("missing version: %s", got)
+	}
+	if !strings.Contains(got, `CODECS="hvc1.1.6.L93.B0,ac-3"`) {
+		t.Fatalf("wrong codecs: %s", got)
 	}
 }
 

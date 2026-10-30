@@ -194,6 +194,38 @@ export interface PlaybackOptions {
   disableDirectPlay?: boolean
 }
 
+// Codecs are probed once, at module load. Declaring only what the browser can
+// decode is what lets the server remux instead of transcode; declaring a codec
+// it cannot decode would hand the player an unplayable stream.
+function canDecode(mime: string): boolean {
+  if (typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mime)) return true
+  if (typeof document === 'undefined') return false
+  return document.createElement('video').canPlayType(mime) !== ''
+}
+
+const DIRECT_VIDEO_CODECS = (() => {
+  const codecs = ['h264']
+  if (canDecode('video/mp4; codecs="hvc1.1.6.L93.B0"')) codecs.push('hevc')
+  if (canDecode('video/mp4; codecs="av01.0.05M.08"')) codecs.push('av1')
+  if (canDecode('video/mp4; codecs="vp09.00.10.08"')) codecs.push('vp9')
+  return codecs.join(',')
+})()
+
+const DIRECT_AUDIO_CODECS = (() => {
+  const codecs = ['aac']
+  const add = (name: string, mime: string) => {
+    if (canDecode(mime)) codecs.push(name)
+  }
+  add('mp3', 'audio/mp4; codecs="mp3"')
+  add('ac3', 'audio/mp4; codecs="ac-3"')
+  add('eac3', 'audio/mp4; codecs="ec-3"')
+  add('flac', 'audio/mp4; codecs="flac"')
+  add('opus', 'audio/mp4; codecs="opus"')
+  // Vorbis only appears in WebM; the server re-encodes it when repackaging.
+  add('vorbis', 'audio/webm; codecs="vorbis"')
+  return codecs.join(',')
+})()
+
 export function getPlaybackInfo(itemId: string, userId: string, opts: PlaybackOptions = {}) {
   const maxBitrate = opts.maxBitrate && opts.maxBitrate > 0 ? opts.maxBitrate : 120_000_000
   const body = {
@@ -211,8 +243,8 @@ export function getPlaybackInfo(itemId: string, userId: string, opts: PlaybackOp
         {
           Container: 'mp4,m4v,webm',
           Type: 'Video',
-          VideoCodec: 'h264,vp9,av1',
-          AudioCodec: 'aac,mp3,opus,vorbis,flac',
+          VideoCodec: DIRECT_VIDEO_CODECS,
+          AudioCodec: DIRECT_AUDIO_CODECS,
         },
       ],
       TranscodingProfiles: [

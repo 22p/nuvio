@@ -34,8 +34,8 @@ type Options struct {
 	// Codec is the output codec: h264 (default), hevc, av1 or vp9. Every
 	// codec is packaged as fragmented MP4 segments.
 	Codec string
-	// AudioCodec is the source codec of the selected audio stream. Only used
-	// when Copy is set, where MP3 has to be re-encoded for fMP4.
+	// AudioCodec is the codec the segments carry: the source codec when
+	// AudioCopy is set, "aac" otherwise. It only feeds the manifest.
 	AudioCodec string
 	// StartNumber is the sequence number of the first segment. Resuming a
 	// suspended session keeps numbering aligned with the client's timeline.
@@ -43,8 +43,10 @@ type Options struct {
 	// UserID owns the session; used to stop a user's streams when a client
 	// omits PlaySessionId from its stop report.
 	UserID string
-	// Copy repackages the existing streams instead of encoding.
+	// Copy repackages the video stream instead of encoding it.
 	Copy bool
+	// AudioCopy copies the audio stream too; false re-encodes it to AAC.
+	AudioCopy bool
 }
 
 // Session is a running ffmpeg process writing segments into Dir.
@@ -58,6 +60,7 @@ type Session struct {
 	Width      int
 	Copy       bool
 	Codec      string
+	AudioCodec string
 	UserID     string
 	CreatedAt  time.Time
 
@@ -205,6 +208,13 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 		opts.Preset = "veryfast"
 	}
 	opts.Codec = NormalizeCodec(opts.Codec)
+	if opts.AudioCodec == "" {
+		opts.AudioCodec = "aac"
+	}
+	opts.AudioCodec = NormalizeAudio(opts.AudioCodec)
+	if !opts.Copy {
+		opts.AudioCopy = false
+	}
 	dir := filepath.Join(m.dir, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -219,6 +229,7 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 		Width:       opts.Width,
 		Copy:        opts.Copy,
 		Codec:       opts.Codec,
+		AudioCodec:  opts.AudioCodec,
 		UserID:      opts.UserID,
 		CreatedAt:   time.Now(),
 		lastAccess:  time.Now(),
@@ -310,18 +321,18 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 	)
 	switch {
 	case opts.Copy:
-		// Video is passed through untouched. MP3 is the one copied audio
-		// format fragmented MP4 cannot carry, so it is re-encoded; every
-		// other eligible format is copied as before.
+		// Only the video is guaranteed to be copyable; audio is copied when
+		// the client can decode it and fMP4 can carry it, and re-encoded
+		// otherwise.
 		args = append(args, "-c:v", "copy")
-		if opts.AudioCodec == "mp3" {
+		if opts.AudioCopy {
+			args = append(args, "-c:a", "copy")
+		} else {
 			args = append(args,
 				"-c:a", "aac",
 				"-b:a", "160k",
 				"-ac", "2",
 			)
-		} else {
-			args = append(args, "-c:a", "copy")
 		}
 		args = append(args, "-avoid_negative_ts", "make_zero")
 	case vaapi:
@@ -376,10 +387,10 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 			"-ac", "2",
 		)
 	}
-	if !opts.Copy {
-		if tag := objectTag(codec); tag != "" {
-			args = append(args, "-tag:v", tag)
-		}
+	// A copied HEVC stream often carries the "hev1" sample entry, which
+	// Safari refuses; retagging is required for both copy and encode.
+	if tag := objectTag(codec); tag != "" {
+		args = append(args, "-tag:v", tag)
 	}
 	args = append(args,
 		"-f", "hls",
@@ -427,6 +438,28 @@ func profileArgs(codec string) []string {
 		return []string{"-profile:v", "main"}
 	}
 	return nil
+}
+
+// NormalizeAudio maps ffprobe and client spellings to the short audio names
+// used for copy decisions and the manifest.
+func NormalizeAudio(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "eac3", "ec-3", "eac-3":
+		return "eac3"
+	case "ac3", "ac-3":
+		return "ac3"
+	case "flac":
+		return "flac"
+	case "opus":
+		return "opus"
+	case "mp3", "mp3float":
+		return "mp3"
+	case "vorbis":
+		return "vorbis"
+	case "aac", "mp4a":
+		return "aac"
+	}
+	return strings.ToLower(strings.TrimSpace(codec))
 }
 
 // objectTag sets the MP4 sample entry so players recognise HEVC and AV1.
@@ -696,13 +729,8 @@ func (s *Session) Master(token string) string {
 	}
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n")
-	if s.Copy {
-		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n",
-			s.Bitrate*1000, width, s.Height))
-	} else {
-		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"%s,mp4a.40.2\"\n",
-			s.Bitrate*1000, width, s.Height, codecString(s.Codec)))
-	}
+	b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"%s,%s\"\n",
+		s.Bitrate*1000, width, s.Height, codecString(s.Codec), audioCodecString(s.AudioCodec)))
 	b.WriteString("hls/" + s.ID + "/main.m3u8" + query + "\n")
 	return b.String()
 }
@@ -718,6 +746,24 @@ func codecString(codec string) string {
 		return "vp09.00.10.08"
 	default:
 		return "avc1.4d401f"
+	}
+}
+
+// audioCodecString is the RFC 6381 identifier for the audio rendition.
+func audioCodecString(codec string) string {
+	switch NormalizeAudio(codec) {
+	case "ac3":
+		return "ac-3"
+	case "eac3":
+		return "ec-3"
+	case "flac":
+		return "fLaC"
+	case "opus":
+		return "Opus"
+	case "mp3":
+		return "mp4a.40.34"
+	default:
+		return "mp4a.40.2"
 	}
 }
 

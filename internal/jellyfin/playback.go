@@ -257,14 +257,14 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 	canTranscode := ffmpeg != "" && settings.TranscodeEnabled && allowTranscode
 	canRemux := ffmpeg != "" && settings.RemuxEnabled && allowRemux
 	remux := false
+	var plan remuxPlan
 	if !direct {
-		switch {
-		case canRemux && remuxEligible(it, req):
-			// The streams are already client friendly; only the container
-			// changes. This is much cheaper than a full encode.
-			remux = true
-			direct = false
-		case !canTranscode:
+		if canRemux {
+			if p, ok := planRemux(it, req); ok {
+				remux, plan = true, p
+			}
+		}
+		if !remux && !canTranscode {
 			// Without ffmpeg or permission there is no alternative; let the
 			// client try direct play.
 			direct = true
@@ -309,8 +309,13 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		q.Set("MediaSourceId", msid)
 		q.Set("PlaySessionId", psid)
 		codec := TranscodeCodec(settings.TranscodeCodec)
+		audioCodec := "aac"
+		if remux {
+			codec = plan.VideoCodec
+			audioCodec = plan.AudioCodec
+		}
 		q.Set("VideoCodec", codec)
-		q.Set("AudioCodec", "aac")
+		q.Set("AudioCodec", audioCodec)
 		q.Set("AudioStreamIndex", strconv.Itoa(audio))
 		q.Set("MaxStreamingBitrate", strconv.FormatInt(bitrate, 10))
 		q.Set("Height", strconv.Itoa(height))
@@ -320,6 +325,9 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		}
 		if remux {
 			q.Set("Remux", "1")
+			if plan.AudioCopy {
+				q.Set("AudioCopy", "1")
+			}
 		}
 		if token != "" {
 			q.Set("api_key", token)
@@ -347,27 +355,51 @@ func audioCodecFor(it *model.Item, index int) string {
 	return strings.ToLower(strings.TrimSpace(it.Media.AudioCodec))
 }
 
-// remuxEligible reports whether the file can be repackaged into HLS without
-// re-encoding video or audio. Only browser friendly codecs qualify; anything
-// else has to be transcoded.
-func remuxEligible(it *model.Item, req *playbackRequest) bool {
+// fmp4VideoCodec maps a probed codec to the name fMP4 can carry. Unlike
+// hls.NormalizeCodec it does not fall back to H.264, because a video that is
+// not recognised must be transcoded rather than mislabelled.
+func fmp4VideoCodec(codec string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "h264", "avc1", "avc", "avc3":
+		return "h264", true
+	case "hevc", "h265", "hvc1", "hev1":
+		return "hevc", true
+	case "av1", "av01":
+		return "av1", true
+	case "vp9", "vp09":
+		return "vp9", true
+	}
+	return "", false
+}
+
+// fmp4Audio lists audio codecs that can be copied into fragmented MP4. MP3 and
+// Vorbis are absent on purpose: the muxer accepts them, but MSE and Safari do
+// not play them back, so those tracks are re-encoded to AAC instead.
+var fmp4Audio = map[string]bool{"aac": true, "ac3": true, "eac3": true, "flac": true, "opus": true}
+
+// remuxPlan describes a repackage session: the video is copied, and the audio
+// is copied only when the client can decode it.
+type remuxPlan struct {
+	VideoCodec string
+	AudioCodec string
+	AudioCopy  bool
+}
+
+// planRemux decides whether the video stream can be repackaged as fMP4 for
+// this client. Reaching this point means the container could not be played
+// directly, so the client profile is consulted for the codecs alone: whatever
+// it declares decodable is copied, anything else is left to the encoder.
+func planRemux(it *model.Item, req *playbackRequest) (remuxPlan, bool) {
+	var plan remuxPlan
 	if it == nil || it.Media == nil {
-		return false
+		return plan, false
 	}
 	if req != nil && req.EnableDirectStream != nil && !*req.EnableDirectStream {
-		return false
+		return plan, false
 	}
-	video := strings.ToLower(strings.TrimSpace(it.Media.VideoCodec))
-	if video != "h264" && video != "avc1" && video != "avc" {
-		return false
-	}
-	audioIndex := 0
-	if req != nil && req.AudioStreamIndex != nil {
-		audioIndex = *req.AudioStreamIndex
-	}
-	audio := audioCodecFor(it, audioIndex)
-	if audio != "aac" && audio != "mp3" {
-		return false
+	video, ok := fmp4VideoCodec(it.Media.VideoCodec)
+	if !ok {
+		return plan, false
 	}
 	max := int64(0)
 	if req != nil {
@@ -377,9 +409,63 @@ func remuxEligible(it *model.Item, req *playbackRequest) bool {
 		}
 	}
 	if max > 0 && it.Media.Bitrate > max*11/10 {
-		return false
+		return plan, false
 	}
-	return true
+	audioIndex := 0
+	if req != nil && req.AudioStreamIndex != nil {
+		audioIndex = *req.AudioStreamIndex
+	}
+	audio := hls.NormalizeAudio(audioCodecFor(it, audioIndex))
+
+	var profile *deviceProfile
+	if req != nil {
+		profile = req.DeviceProfile
+	}
+	if !profileHasVideo(profile, video) {
+		return plan, false
+	}
+
+	plan.VideoCodec = video
+	plan.AudioCodec = audio
+	// AAC is universally decodable, so it is always worth copying.
+	plan.AudioCopy = fmp4Audio[audio] && (audio == "aac" || profileHasAudio(profile, audio))
+	if !plan.AudioCopy {
+		plan.AudioCodec = "aac"
+	}
+	return plan, true
+}
+
+// profileHasVideo reports whether the client declared the codec. Without a
+// profile only H.264, the baseline every client decodes, is assumed.
+func profileHasVideo(p *deviceProfile, codec string) bool {
+	if p == nil || len(p.DirectPlayProfiles) == 0 {
+		return codec == "h264"
+	}
+	for _, dp := range p.DirectPlayProfiles {
+		if dp.Type != "" && !strings.EqualFold(dp.Type, "Video") {
+			continue
+		}
+		if commaHas(dp.VideoCodec, codec) {
+			return true
+		}
+	}
+	return false
+}
+
+// profileHasAudio reports whether the client declared the audio codec.
+func profileHasAudio(p *deviceProfile, codec string) bool {
+	if p == nil || len(p.DirectPlayProfiles) == 0 {
+		return codec == "aac"
+	}
+	for _, dp := range p.DirectPlayProfiles {
+		if dp.Type != "" && !strings.EqualFold(dp.Type, "Video") {
+			continue
+		}
+		if commaHas(dp.AudioCodec, codec) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
@@ -615,8 +701,26 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 	if psid == "" {
 		psid = randomHex(12)
 	}
-	mode, device, codec, encoder := a.transcodeTarget(settings.HardwareAccel, settings.TranscodeCodec)
 	audioIndex := hls.ParseInt(q.Get("AudioStreamIndex"), 1)
+	mode, device, codec, encoder := "", "", "", ""
+	audioCopy := false
+	audioCodec := "aac"
+	if remux {
+		codec, ok = fmp4VideoCodec(it.Media.VideoCodec)
+		if !ok {
+			writeError(w, 400, "This video codec cannot be remuxed")
+			return
+		}
+		source := hls.NormalizeAudio(audioCodecFor(it, audioIndex))
+		// Only copy audio the container and client can actually handle; the
+		// URL is client supplied, so it cannot be trusted on its own.
+		if q.Get("AudioCopy") == "1" && fmp4Audio[source] {
+			audioCopy = true
+			audioCodec = source
+		}
+	} else {
+		mode, device, codec, encoder = a.transcodeTarget(settings.HardwareAccel, settings.TranscodeCodec)
+	}
 	opts := hls.Options{
 		BitrateKbps:    int(hls.ParseInt(q.Get("MaxStreamingBitrate"), 8_000_000) / 1000),
 		AudioIndex:     audioIndex,
@@ -629,7 +733,8 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 		VideoCodec:     it.Media.VideoCodec,
 		Encoder:        encoder,
 		Codec:          codec,
-		AudioCodec:     audioCodecFor(it, audioIndex),
+		AudioCodec:     audioCodec,
+		AudioCopy:      audioCopy,
 		UserID:         u.ID,
 		Copy:           remux,
 	}

@@ -18,7 +18,56 @@ func mediaItem(video, audio string, bitrate int64) *model.Item {
 }
 
 func TestRemuxEligible(t *testing.T) {
-	multiAudio := &model.Item{
+	// A browser that only decodes H.264/AAC, like a conservative web profile.
+	basic := &deviceProfile{DirectPlayProfiles: []directPlayProfile{
+		{Container: "mp4", Type: "Video", VideoCodec: "h264", AudioCodec: "aac"},
+	}}
+	// A client that declares every codec the container can carry.
+	wide := &deviceProfile{DirectPlayProfiles: []directPlayProfile{
+		{Container: "mp4", Type: "Video", VideoCodec: "h264,hevc,av1,vp9", AudioCodec: "aac,ac3,eac3,flac,opus"},
+	}}
+
+	cases := []struct {
+		name       string
+		item       *model.Item
+		req        *playbackRequest
+		ok         bool
+		audioCopy  bool
+		audioCodec string
+	}{
+		{"h264 aac copies both", mediaItem("h264", "aac", 0), &playbackRequest{DeviceProfile: basic}, true, true, "aac"},
+		{"hevc needs client support", mediaItem("hevc", "aac", 0), &playbackRequest{DeviceProfile: basic}, false, false, ""},
+		{"hevc copies when supported", mediaItem("hevc", "aac", 0), &playbackRequest{DeviceProfile: wide}, true, true, "aac"},
+		{"av1 copies when supported", mediaItem("av1", "aac", 0), &playbackRequest{DeviceProfile: wide}, true, true, "aac"},
+		{"vp9 copies when supported", mediaItem("vp9", "aac", 0), &playbackRequest{DeviceProfile: wide}, true, true, "aac"},
+		{"flac audio copies when supported", mediaItem("h264", "flac", 0), &playbackRequest{DeviceProfile: wide}, true, true, "flac"},
+		{"flac audio re-encoded otherwise", mediaItem("h264", "flac", 0), &playbackRequest{DeviceProfile: basic}, true, false, "aac"},
+		{"ac3 audio copies when supported", mediaItem("h264", "ac3", 0), &playbackRequest{DeviceProfile: wide}, true, true, "ac3"},
+		{"mp3 is never copied", mediaItem("h264", "mp3", 0), &playbackRequest{DeviceProfile: wide}, true, false, "aac"},
+		{"vorbis is never copied", mediaItem("h264", "vorbis", 0), &playbackRequest{DeviceProfile: wide}, true, false, "aac"},
+		{"mpeg2 video must transcode", mediaItem("mpeg2", "aac", 0), &playbackRequest{DeviceProfile: wide}, false, false, ""},
+		{"no profile assumes h264", mediaItem("h264", "aac", 0), &playbackRequest{}, true, true, "aac"},
+		{"no profile rejects hevc", mediaItem("hevc", "aac", 0), &playbackRequest{}, false, false, ""},
+		{"bitrate cap must transcode", mediaItem("h264", "aac", 20_000_000), &playbackRequest{DeviceProfile: wide, MaxStreamingBitrate: 5_000_000}, false, false, ""},
+		{"direct stream disabled", mediaItem("h264", "aac", 0), &playbackRequest{DeviceProfile: wide, EnableDirectStream: boolPtr(false)}, false, false, ""},
+	}
+	for _, tc := range cases {
+		plan, ok := planRemux(tc.item, tc.req)
+		if ok != tc.ok {
+			t.Errorf("%s: planRemux = %v, want %v", tc.name, ok, tc.ok)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if plan.AudioCopy != tc.audioCopy || plan.AudioCodec != tc.audioCodec {
+			t.Errorf("%s: audio = %v/%q, want %v/%q", tc.name, plan.AudioCopy, plan.AudioCodec, tc.audioCopy, tc.audioCodec)
+		}
+	}
+}
+
+func TestPlanRemuxSelectsAudioTrack(t *testing.T) {
+	item := &model.Item{
 		Type: model.TypeMovie,
 		Media: &model.MediaInfo{
 			VideoCodec: "h264",
@@ -29,25 +78,21 @@ func TestRemuxEligible(t *testing.T) {
 			},
 		},
 	}
-	cases := []struct {
-		name string
-		item *model.Item
-		req  *playbackRequest
-		want bool
-	}{
-		{"h264 aac", mediaItem("h264", "aac", 5_000_000), &playbackRequest{}, true},
-		{"avc1 mp3", mediaItem("avc1", "mp3", 0), &playbackRequest{}, true},
-		{"hevc must transcode", mediaItem("hevc", "aac", 0), &playbackRequest{}, false},
-		{"ac3 audio must transcode", mediaItem("h264", "ac3", 0), &playbackRequest{}, false},
-		{"selected aac can remux", multiAudio, &playbackRequest{AudioStreamIndex: intPtr(1)}, true},
-		{"selected ac3 must transcode", multiAudio, &playbackRequest{AudioStreamIndex: intPtr(2)}, false},
-		{"bitrate cap must transcode", mediaItem("h264", "aac", 20_000_000), &playbackRequest{MaxStreamingBitrate: 5_000_000}, false},
-		{"direct stream disabled", mediaItem("h264", "aac", 0), &playbackRequest{EnableDirectStream: boolPtr(false)}, false},
+	profile := &deviceProfile{DirectPlayProfiles: []directPlayProfile{
+		{Container: "mp4", Type: "Video", VideoCodec: "h264", AudioCodec: "aac,ac3"},
+	}}
+
+	plan, ok := planRemux(item, &playbackRequest{DeviceProfile: profile, AudioStreamIndex: intPtr(2)})
+	if !ok || !plan.AudioCopy || plan.AudioCodec != "ac3" {
+		t.Fatalf("selected track: %v %v %q", ok, plan.AudioCopy, plan.AudioCodec)
 	}
-	for _, tc := range cases {
-		if got := remuxEligible(tc.item, tc.req); got != tc.want {
-			t.Errorf("%s: remuxEligible = %v, want %v", tc.name, got, tc.want)
-		}
+
+	withoutAC3 := &deviceProfile{DirectPlayProfiles: []directPlayProfile{
+		{Container: "mp4", Type: "Video", VideoCodec: "h264", AudioCodec: "aac"},
+	}}
+	plan, ok = planRemux(item, &playbackRequest{DeviceProfile: withoutAC3, AudioStreamIndex: intPtr(2)})
+	if !ok || plan.AudioCopy || plan.AudioCodec != "aac" {
+		t.Fatalf("undecodable track should be re-encoded: %v %v %q", ok, plan.AudioCopy, plan.AudioCodec)
 	}
 }
 
