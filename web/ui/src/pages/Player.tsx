@@ -547,6 +547,20 @@ export function PlayerPage() {
       if (!video.buffered.length) return setBuffered(0)
       setBuffered(video.buffered.end(video.buffered.length - 1))
     }
+    // timeupdate only fires about four times a second, so cues drawn from it
+    // can lag a quarter of a second behind the picture. Track the clock at
+    // ~16 Hz while playing so subtitle timing stays close to the frame.
+    let frame = 0
+    let lastClock = 0
+    const tick = (now: number) => {
+      frame = window.requestAnimationFrame(tick)
+      const s = stateRef.current
+      if (video.paused || s.dragging) return
+      if (now - lastClock < 60) return
+      lastClock = now
+      setCurrent(absolutePosition(video, s.mode, s.offset))
+    }
+    frame = window.requestAnimationFrame(tick)
     const onTime = () => {
       const s = stateRef.current
       if (!s.dragging) {
@@ -618,6 +632,7 @@ export function PlayerPage() {
     video.addEventListener('progress', updateBuffered)
     video.addEventListener('error', onError)
     return () => {
+      window.cancelAnimationFrame(frame)
       window.clearTimeout(videoCheck)
       video.removeEventListener('timeupdate', onTime)
       video.removeEventListener('play', onPlay)
