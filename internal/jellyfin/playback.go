@@ -2,6 +2,7 @@ package jellyfin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -258,10 +260,18 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 	canRemux := ffmpeg != "" && settings.RemuxEnabled && allowRemux
 	remux := false
 	var plan remuxPlan
+	startTicks := req.StartTimeTicks
 	if !direct {
 		if canRemux {
 			if p, ok := planRemux(it, req); ok {
-				remux, plan = true, p
+				if startTicks == 0 {
+					remux, plan = true, p
+				} else if k, found := a.keyframeBefore(it.Path, startTicks); found {
+					// Copying can only begin on a keyframe, so the session
+					// starts there and the client is told the real position.
+					startTicks = k
+					remux, plan = true, p
+				}
 			}
 		}
 		if !remux && !canTranscode {
@@ -320,8 +330,8 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		q.Set("MaxStreamingBitrate", strconv.FormatInt(bitrate, 10))
 		q.Set("Height", strconv.Itoa(height))
 		q.Set("Width", strconv.Itoa(width))
-		if req.StartTimeTicks > 0 {
-			q.Set("StartTimeTicks", strconv.FormatInt(req.StartTimeTicks, 10))
+		if startTicks > 0 {
+			q.Set("StartTimeTicks", strconv.FormatInt(startTicks, 10))
 		}
 		if remux {
 			q.Set("Remux", "1")
@@ -353,6 +363,58 @@ func audioCodecFor(it *model.Item, index int) string {
 		}
 	}
 	return strings.ToLower(strings.TrimSpace(it.Media.AudioCodec))
+}
+
+// keyframeBefore returns the last video keyframe at or before ticks. Remuxing
+// copies packets, so a session can only begin on a keyframe; the start is
+// snapped there and reported to the client so the timeline stays aligned.
+func (a *API) keyframeBefore(path string, ticks int64) (int64, bool) {
+	ffprobe := a.FFprobe()
+	if ffprobe == "" || path == "" || ticks <= 0 {
+		return 0, false
+	}
+	// A GOP is rarely longer than 30 seconds; look back that far instead of
+	// scanning the file from the beginning.
+	lookback := ticks - 30*10_000_000
+	if lookback < 0 {
+		lookback = 0
+	}
+	span := float64(ticks-lookback)/10_000_000 + 2
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffprobe,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-read_intervals", fmt.Sprintf("%.3f%%+%.3f", float64(lookback)/10_000_000, span),
+		"-show_entries", "packet=pts_time,flags",
+		"-of", "csv=p=0",
+		path,
+	).Output()
+	if err != nil {
+		return 0, false
+	}
+	return parseKeyframeBefore(string(out), ticks)
+}
+
+// parseKeyframeBefore picks the last keyframe not after ticks from ffprobe's
+// "pts_time,flags" CSV output.
+func parseKeyframeBefore(out string, ticks int64) (int64, bool) {
+	best := int64(-1)
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), ",")
+		if len(fields) < 2 || !strings.Contains(fields[1], "K") {
+			continue
+		}
+		seconds, err := strconv.ParseFloat(fields[0], 64)
+		if err != nil {
+			continue
+		}
+		k := int64(seconds * 10_000_000)
+		if k <= ticks && k > best {
+			best = k
+		}
+	}
+	return best, best >= 0
 }
 
 // fmp4VideoCodec maps a probed codec to the name fMP4 can carry. Unlike

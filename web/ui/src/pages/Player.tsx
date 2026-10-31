@@ -204,6 +204,17 @@ function absolutePosition(video: HTMLVideoElement | null, mode: Mode, offset: nu
   return mode === 'hls' ? offset + video.currentTime : video.currentTime
 }
 
+// streamStartTicks is the position the server actually started the stream at.
+// Remuxing cannot begin mid-GOP, so it seeks back to a keyframe and records
+// that position in the URL; a missing value means the stream starts at 0.
+function streamStartTicks(url?: string): number {
+  if (!url) return 0
+  const query = url.split('?')[1]
+  if (!query) return 0
+  const value = Number(new URLSearchParams(query).get('StartTimeTicks') || 0)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
 function formatMbps(bps?: number): string {
   return bps && bps > 0 ? `${(bps / 1_000_000).toFixed(1)} Mbps` : '—'
 }
@@ -405,7 +416,14 @@ export function PlayerPage() {
         startedRef.current = false
         setSource(src)
         setSessionId(info.PlaySessionId)
-        const startSec = req.start / 10_000_000
+        // A remux can only begin on a keyframe, so the server may start the
+        // stream before the requested position and reports the real start in
+        // the URL. The timeline has to follow the stream, not the request,
+        // or subtitles drift by up to one GOP.
+        const directPlay = !!(prefs.directPlay && src.SupportsDirectPlay && src.DirectStreamUrl)
+        const useHls = !!src.TranscodingUrl && !directPlay
+        const startTicks = useHls ? streamStartTicks(src.TranscodingUrl) : req.start
+        const startSec = startTicks / 10_000_000
         setOffset(startSec)
         setDuration(
           ((src.RunTimeTicks || item.MediaSources?.[0]?.RunTimeTicks || 0) / 10_000_000) || 0,

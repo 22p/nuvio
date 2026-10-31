@@ -116,3 +116,19 @@ func TestLibraryVisibility(t *testing.T) {
 
 func boolPtr(v bool) *bool { return &v }
 func intPtr(v int) *int    { return &v }
+
+func TestParseKeyframeBefore(t *testing.T) {
+	out := "0.000000,K__\n0.040000,___\n4.000000,K__\n4.040000,___\n8.000000,K__\n8.040000,___\n"
+	if k, ok := parseKeyframeBefore(out, 10*10_000_000); !ok || k != 8*10_000_000 {
+		t.Fatalf("10s -> %d %v", k, ok)
+	}
+	if k, ok := parseKeyframeBefore(out, 8*10_000_000); !ok || k != 8*10_000_000 {
+		t.Fatalf("exact keyframe -> %d %v", k, ok)
+	}
+	if k, ok := parseKeyframeBefore(out, 3*10_000_000); !ok || k != 0 {
+		t.Fatalf("before first keyframe -> %d %v", k, ok)
+	}
+	if _, ok := parseKeyframeBefore("0.040000,___\n", 10*10_000_000); ok {
+		t.Fatal("no keyframe should fail")
+	}
+}
