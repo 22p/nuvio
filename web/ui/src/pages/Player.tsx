@@ -204,6 +204,17 @@ function absolutePosition(video: HTMLVideoElement | null, mode: Mode, offset: nu
   return mode === 'hls' ? offset + video.currentTime : video.currentTime
 }
 
+// streamStartTicks is the position the server started the stream at. Remux
+// sessions always start at the beginning, transcode sessions at the requested
+// position, so the player has to know which one it got.
+function streamStartTicks(url?: string): number {
+  if (!url) return 0
+  const query = url.split('?')[1]
+  if (!query) return 0
+  const value = Number(new URLSearchParams(query).get('StartTimeTicks') || 0)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
 function formatMbps(bps?: number): string {
   return bps && bps > 0 ? `${(bps / 1_000_000).toFixed(1)} Mbps` : '—'
 }
@@ -405,12 +416,13 @@ export function PlayerPage() {
         startedRef.current = false
         setSource(src)
         setSessionId(info.PlaySessionId)
-        const startSec = req.start / 10_000_000
-        setOffset(startSec)
+        const directPlay = !!(prefs.directPlay && src.SupportsDirectPlay && src.DirectStreamUrl)
+        const useHls = !!src.TranscodingUrl && !directPlay
+        setOffset((useHls ? streamStartTicks(src.TranscodingUrl) : req.start) / 10_000_000)
         setDuration(
           ((src.RunTimeTicks || item.MediaSources?.[0]?.RunTimeTicks || 0) / 10_000_000) || 0,
         )
-        setCurrent(startSec)
+        setCurrent(req.start / 10_000_000)
         setEnded(false)
       })
       .catch((err) => {
@@ -451,10 +463,33 @@ export function PlayerPage() {
 
     const onReady = () => {
       if (disposed) return
-      setPlaybackLoading(false)
-      setBuffering(false)
-      const p = video.play()
-      if (p) p.catch(() => setNeedsGesture(true))
+      const start = () => {
+        if (disposed) return
+        setPlaybackLoading(false)
+        setBuffering(false)
+        const p = video.play()
+        if (p) p.catch(() => setNeedsGesture(true))
+      }
+      // A copy session starts a little before the requested position. Wait for
+      // the playlist to cover it instead of playing from the earlier keyframe,
+      // which would put the picture and the subtitle clock out of step.
+      const target = requestRef.current.start / 10_000_000 - streamStartTicks(source.TranscodingUrl) / 10_000_000
+      if (!useHls || target <= 0.5) {
+        start()
+        return
+      }
+      const jump = () => {
+        if (disposed) return
+        if ((video.duration || 0) >= target + 0.5) {
+          video.currentTime = target
+          start()
+          return
+        }
+        window.setTimeout(jump, 300)
+      }
+      setBuffering(true)
+      if (video.readyState >= 1) jump()
+      else video.addEventListener('loadedmetadata', jump, { once: true })
     }
 
     if (useHls && source.TranscodingUrl && Hls.isSupported()) {
@@ -827,15 +862,25 @@ export function PlayerPage() {
   const seek = (target: number) => {
     const s = stateRef.current
     if (!s.item) return
+    const video = videoRef.current
+    if (!video) return
     const total = s.duration || 0
     const clamped = Math.min(Math.max(0, target), Math.max(0, total - 0.5))
     if (s.mode === 'direct') {
-      const video = videoRef.current
-      if (video) {
-        video.currentTime = clamped
-        setCurrent(clamped)
-        if (startedRef.current) reportProgress(true)
-      }
+      video.currentTime = clamped
+      setCurrent(clamped)
+      if (startedRef.current) reportProgress(true)
+      return
+    }
+    // A remux session covers the whole file from its start, so any forward
+    // seek can reuse the segments already on disk instead of asking the
+    // server for a new transcoding job. A transcode only covers what has been
+    // encoded so far, and waiting for it is slower than starting a new one.
+    const remux = /[?&]Remux=1/.test(s.source?.TranscodingUrl || '')
+    if (clamped >= s.offset && (remux || clamped <= s.offset + (video.duration || 0))) {
+      video.currentTime = clamped - s.offset
+      setCurrent(clamped)
+      if (startedRef.current) reportProgress(true)
       return
     }
     reloadAt(clamped)

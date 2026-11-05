@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -289,7 +290,14 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 func buildArgs(opts Options, itemPath, dir string) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	if opts.StartTicks > 0 {
-		args = append(args, "-ss", fmt.Sprintf("%.3f", float64(opts.StartTicks)/10_000_000))
+		seconds := float64(opts.StartTicks) / 10_000_000
+		if opts.Copy {
+			// A copy can only start on a keyframe, and the input seek rounds
+			// down, so a target even a microsecond before a keyframe jumps
+			// back a whole GOP. Aim just past it instead.
+			seconds = math.Ceil(seconds*1000)/1000 + 0.001
+		}
+		args = append(args, "-ss", strconv.FormatFloat(seconds, 'f', 3, 64))
 	}
 	vaapi := !opts.Copy && opts.Hardware == "vaapi" && opts.HardwareDevice != ""
 	qsv := !opts.Copy && opts.Hardware == "qsv" && opts.HardwareDevice != ""
