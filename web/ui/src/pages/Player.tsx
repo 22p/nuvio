@@ -827,15 +827,24 @@ export function PlayerPage() {
   const seek = (target: number) => {
     const s = stateRef.current
     if (!s.item) return
+    const video = videoRef.current
+    if (!video) return
     const total = s.duration || 0
     const clamped = Math.min(Math.max(0, target), Math.max(0, total - 0.5))
     if (s.mode === 'direct') {
-      const video = videoRef.current
-      if (video) {
-        video.currentTime = clamped
-        setCurrent(clamped)
-        if (startedRef.current) reportProgress(true)
-      }
+      video.currentTime = clamped
+      setCurrent(clamped)
+      if (startedRef.current) reportProgress(true)
+      return
+    }
+    // The HLS session already covers everything from where it started to the
+    // end of the file, so seek inside the produced playlist instead of asking
+    // the server for a new transcode of segments that are on disk already.
+    const length = video.duration
+    if (Number.isFinite(length) && length > 0 && clamped >= s.offset && clamped <= s.offset + length) {
+      video.currentTime = clamped - s.offset
+      setCurrent(clamped)
+      if (startedRef.current) reportProgress(true)
       return
     }
     reloadAt(clamped)
