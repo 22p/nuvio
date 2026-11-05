@@ -860,11 +860,12 @@ export function PlayerPage() {
       if (startedRef.current) reportProgress(true)
       return
     }
-    // The HLS session already covers everything from where it started to the
-    // end of the file, so seek inside the produced playlist instead of asking
-    // the server for a new transcode of segments that are on disk already.
-    const length = video.duration
-    if (Number.isFinite(length) && length > 0 && clamped >= s.offset && clamped <= s.offset + length) {
+    // A remux session covers the whole file from its start, so any forward
+    // seek can reuse the segments already on disk instead of asking the
+    // server for a new transcoding job. A transcode only covers what has been
+    // encoded so far, and waiting for it is slower than starting a new one.
+    const remux = /[?&]Remux=1/.test(s.source?.TranscodingUrl || '')
+    if (clamped >= s.offset && (remux || clamped <= s.offset + (video.duration || 0))) {
       video.currentTime = clamped - s.offset
       setCurrent(clamped)
       if (startedRef.current) reportProgress(true)
