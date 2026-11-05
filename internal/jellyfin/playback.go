@@ -320,7 +320,11 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		q.Set("MaxStreamingBitrate", strconv.FormatInt(bitrate, 10))
 		q.Set("Height", strconv.Itoa(height))
 		q.Set("Width", strconv.Itoa(width))
-		if req.StartTimeTicks > 0 {
+		// A copy can only begin on a keyframe, so it always starts at the
+		// beginning of the file; the client seeks to the requested position
+		// itself. Anything else would start the stream earlier than the
+		// position the client counts from.
+		if req.StartTimeTicks > 0 && !remux {
 			q.Set("StartTimeTicks", strconv.FormatInt(req.StartTimeTicks, 10))
 		}
 		if remux {

@@ -204,6 +204,17 @@ function absolutePosition(video: HTMLVideoElement | null, mode: Mode, offset: nu
   return mode === 'hls' ? offset + video.currentTime : video.currentTime
 }
 
+// streamStartTicks is the position the server started the stream at. Remux
+// sessions always start at the beginning, transcode sessions at the requested
+// position, so the player has to know which one it got.
+function streamStartTicks(url?: string): number {
+  if (!url) return 0
+  const query = url.split('?')[1]
+  if (!query) return 0
+  const value = Number(new URLSearchParams(query).get('StartTimeTicks') || 0)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
 function formatMbps(bps?: number): string {
   return bps && bps > 0 ? `${(bps / 1_000_000).toFixed(1)} Mbps` : '—'
 }
@@ -405,12 +416,13 @@ export function PlayerPage() {
         startedRef.current = false
         setSource(src)
         setSessionId(info.PlaySessionId)
-        const startSec = req.start / 10_000_000
-        setOffset(startSec)
+        const directPlay = !!(prefs.directPlay && src.SupportsDirectPlay && src.DirectStreamUrl)
+        const useHls = !!src.TranscodingUrl && !directPlay
+        setOffset((useHls ? streamStartTicks(src.TranscodingUrl) : req.start) / 10_000_000)
         setDuration(
           ((src.RunTimeTicks || item.MediaSources?.[0]?.RunTimeTicks || 0) / 10_000_000) || 0,
         )
-        setCurrent(startSec)
+        setCurrent(req.start / 10_000_000)
         setEnded(false)
       })
       .catch((err) => {
@@ -449,8 +461,19 @@ export function PlayerPage() {
       !(prefs.directPlay && source.SupportsDirectPlay && source.DirectStreamUrl)
     setMode(useHls ? 'hls' : 'direct')
 
+    const streamStart = streamStartTicks(source.TranscodingUrl) / 10_000_000
     const onReady = () => {
       if (disposed) return
+      // A remux session starts at the beginning of the file, so jump to the
+      // position the client actually asked for once the media is attached.
+      const target = requestRef.current.start / 10_000_000 - streamStart
+      if (useHls && target > 0.5) {
+        const jump = () => {
+          if (!disposed) video.currentTime = Math.min(target, Math.max(0, (video.duration || target) - 1))
+        }
+        if (video.readyState >= 1) jump()
+        else video.addEventListener('loadedmetadata', jump, { once: true })
+      }
       setPlaybackLoading(false)
       setBuffering(false)
       const p = video.play()
