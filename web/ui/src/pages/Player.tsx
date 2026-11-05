@@ -464,20 +464,35 @@ export function PlayerPage() {
     const streamStart = streamStartTicks(source.TranscodingUrl) / 10_000_000
     const onReady = () => {
       if (disposed) return
-      // A remux session starts at the beginning of the file, so jump to the
-      // position the client actually asked for once the media is attached.
-      const target = requestRef.current.start / 10_000_000 - streamStart
-      if (useHls && target > 0.5) {
-        const jump = () => {
-          if (!disposed) video.currentTime = Math.min(target, Math.max(0, (video.duration || target) - 1))
-        }
-        if (video.readyState >= 1) jump()
-        else video.addEventListener('loadedmetadata', jump, { once: true })
+      const start = () => {
+        if (disposed) return
+        setPlaybackLoading(false)
+        setBuffering(false)
+        const p = video.play()
+        if (p) p.catch(() => setNeedsGesture(true))
       }
-      setPlaybackLoading(false)
-      setBuffering(false)
-      const p = video.play()
-      if (p) p.catch(() => setNeedsGesture(true))
+      // A remux session starts at the beginning of the file, so jump to the
+      // requested position. Until ffmpeg has produced that part of the
+      // playlist the seek would be clamped to the produced range, so wait for
+      // it instead of playing from the start.
+      const target = requestRef.current.start / 10_000_000 - streamStart
+      if (!useHls || target <= 0.5) {
+        start()
+        return
+      }
+      let tries = 0
+      const jump = () => {
+        if (disposed) return
+        if ((video.duration || 0) >= target + 0.5 || ++tries > 240) {
+          if ((video.duration || 0) >= target + 0.5) video.currentTime = target
+          start()
+          return
+        }
+        window.setTimeout(jump, 500)
+      }
+      setBuffering(true)
+      if (video.readyState >= 1) jump()
+      else video.addEventListener('loadedmetadata', jump, { once: true })
     }
 
     if (useHls && source.TranscodingUrl && Hls.isSupported()) {
