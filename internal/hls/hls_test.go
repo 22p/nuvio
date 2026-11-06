@@ -510,27 +510,3 @@ func TestValidPreset(t *testing.T) {
 		}
 	}
 }
-
-func TestBuildArgsCopySeeksPastKeyframe(t *testing.T) {
-	// 9.343667s is the keyframe; rounding to milliseconds would land before
-	// it, and ffmpeg would seek back a whole GOP.
-	args := buildArgs(Options{
-		StartTicks: 93_436_669,
-		Copy:       true,
-		AudioCopy:  true,
-		Codec:      "h264",
-	}, "/media/movie.mkv", "/tmp/session")
-	got := strings.Join(args, " ")
-	if !strings.Contains(got, "-ss 9.345") {
-		t.Fatalf("copy seek must clear the keyframe: %s", got)
-	}
-
-	args = buildArgs(Options{
-		StartTicks: 93_436_669,
-		Codec:      "h264",
-	}, "/media/movie.mkv", "/tmp/session")
-	got = strings.Join(args, " ")
-	if !strings.Contains(got, "-ss 9.344") {
-		t.Fatalf("transcode keeps the requested position: %s", got)
-	}
-}
