@@ -377,9 +377,18 @@ func TestJanitorSuspendsIdleSession(t *testing.T) {
 	if !sess.Suspended() {
 		t.Fatal("idle session was not suspended")
 	}
-	sess.mu.Lock()
-	finished := sess.finished
-	sess.mu.Unlock()
+	// Suspension marks the session before it kills ffmpeg, so wait for the
+	// process to be reaped instead of racing the janitor's stop call.
+	finished := false
+	for time.Now().Before(deadline) {
+		sess.mu.Lock()
+		finished = sess.finished
+		sess.mu.Unlock()
+		if finished {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if !finished {
 		t.Fatal("ffmpeg process should have been reaped")
 	}
