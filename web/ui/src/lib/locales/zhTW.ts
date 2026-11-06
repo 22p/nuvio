@@ -130,6 +130,8 @@ export const zhTW: Record<string, string> = {
   'Your library is empty': '媒體庫還是空的',
   'Font size': '字號',
   'Subtitles': '字幕',
+  'Subtitle delay': '字幕延遲',
+  'Reset': '重設',
   'Subtitles load separately as WebVTT; video is not re-encoded.': '字幕以 WebVTT 方式獨立載入，不重新編碼畫面。',
   'Subtitle text color.': '字幕文字顏色。',
   'Subtitle preview': '字幕樣式預覽 · Subtitle preview',

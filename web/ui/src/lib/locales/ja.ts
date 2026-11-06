@@ -130,6 +130,8 @@ export const ja: Record<string, string> = {
   'Your library is empty': 'ライブラリが空です',
   'Font size': '文字サイズ',
   'Subtitles': '字幕',
+  'Subtitle delay': '字幕のタイミング',
+  'Reset': 'リセット',
   'Subtitles load separately as WebVTT; video is not re-encoded.': '字幕はWebVTTとして個別に読み込み、映像は再エンコードしません。',
   'Subtitle text color.': '字幕の文字色。',
   'Subtitle preview': '字幕プレビュー · Subtitle preview',

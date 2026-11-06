@@ -251,6 +251,7 @@ export function PlayerPage() {
   const [duration, setDuration] = useState(0)
   const [buffered, setBuffered] = useState(0)
   const [cues, setCues] = useState<Cue[]>([])
+  const [subDelay, setSubDelay] = useState(0)
   const [volume, setVolume] = useState(() => Number(localStorage.getItem('nuvio.volume') || 0.9))
   const [muted, setMuted] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
@@ -355,6 +356,24 @@ export function PlayerPage() {
       controller.abort()
     }
   }, [activeSubtitleStream?.DeliveryUrl])
+
+  // Subtitle timing belongs to the track, not to the playback session: a
+  // sidecar written for another release runs off by a fixed amount on every
+  // episode, so the correction is remembered per item.
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(`nuvio.subdelay.${item?.Id || ''}`) || 0)
+    setSubDelay(Number.isFinite(saved) ? Math.max(-30, Math.min(30, saved)) : 0)
+  }, [item?.Id])
+
+  const applySubDelay = (next: number) => {
+    const clamped = Math.round(Math.max(-30, Math.min(30, next)) * 10) / 10
+    setSubDelay(clamped)
+    if (!item?.Id) return
+    const key = `nuvio.subdelay.${item.Id}`
+    if (clamped === 0) localStorage.removeItem(key)
+    else localStorage.setItem(key, String(clamped))
+  }
+  const adjustSubDelay = (delta: number) => applySubDelay(subDelay + delta)
 
   // Fetch item metadata and prepare the first playback request.
   useEffect(() => {
@@ -842,6 +861,14 @@ export function PlayerPage() {
         case 'c':
           cycleSubtitles()
           break
+        case '[':
+          e.preventDefault()
+          adjustSubDelay(-0.1)
+          break
+        case ']':
+          e.preventDefault()
+          adjustSubDelay(0.1)
+          break
         case 'i':
           e.preventDefault()
           setMenu((m) => (m === 'settings' ? null : 'settings'))
@@ -855,7 +882,7 @@ export function PlayerPage() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subtitleStreams, activeSubtitle, duration, mode, offset])
+  }, [subtitleStreams, activeSubtitle, duration, mode, offset, subDelay, item?.Id, cues.length])
 
   const currentPosition = (): number => absolutePosition(videoRef.current, stateRef.current.mode, stateRef.current.offset)
 
@@ -1045,9 +1072,10 @@ export function PlayerPage() {
   }
 
   const displayCurrent = dragging ? seekPreview : current
+  const cueTime = displayCurrent - subDelay
   const activeCues =
     !ended && cues.length
-      ? cues.filter((c) => displayCurrent >= c.start - 0.02 && displayCurrent <= c.end)
+      ? cues.filter((c) => cueTime >= c.start - 0.02 && cueTime <= c.end)
       : []
   const plainCues = activeCues.filter((c) => c.line === undefined && c.position === undefined)
   const positionedCues = activeCues.filter((c) => c.line !== undefined || c.position !== undefined)
@@ -1354,6 +1382,33 @@ export function PlayerPage() {
             </button>
           ))}
           {!subtitleStreams.length && <div className="menu-empty">{t("This video has no subtitle track")}</div>}
+          {activeSubtitle != null && cues.length > 0 && (
+            <div className="sub-delay">
+              <span>{t("Subtitle delay")}</span>
+              <div className="sub-delay-controls">
+                <button onClick={() => adjustSubDelay(-1)} disabled={subDelay <= -30}>
+                  −1s
+                </button>
+                <button onClick={() => adjustSubDelay(-0.1)} disabled={subDelay <= -30}>
+                  −0.1
+                </button>
+                <button
+                  className={`sub-delay-value ${subDelay !== 0 ? 'active' : ''}`}
+                  onClick={() => applySubDelay(0)}
+                  title={t("Reset")}
+                >
+                  {subDelay > 0 ? '+' : ''}
+                  {subDelay.toFixed(1)}s
+                </button>
+                <button onClick={() => adjustSubDelay(0.1)} disabled={subDelay >= 30}>
+                  +0.1
+                </button>
+                <button onClick={() => adjustSubDelay(1)} disabled={subDelay >= 30}>
+                  +1s
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

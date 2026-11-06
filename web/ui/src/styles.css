@@ -3241,6 +3241,45 @@ select option:disabled {
   color: var(--dim);
   font-size: 12px;
 }
+.sub-delay {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 6px;
+  padding: 10px 11px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  font-size: 11px;
+  color: var(--dim);
+}
+.sub-delay-controls {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+.sub-delay-controls button {
+  padding: 6px 0;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.sub-delay-controls button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.sub-delay-controls button:disabled {
+  opacity: 0.35;
+}
+.sub-delay-value {
+  border-color: rgba(255, 255, 255, 0.13);
+}
+.sub-delay-value.active {
+  border-color: rgba(190, 150, 255, 0.65);
+  color: #d9ceff;
+}
 .info-menu dl {
   margin: 0;
   padding: 0 10px 6px;
