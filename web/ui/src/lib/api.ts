@@ -347,6 +347,31 @@ export interface MetadataCandidate {
   poster?: string
 }
 
+export const getAIModels = (baseUrl: string, apiKey: string) =>
+  api<{ models: string[] }>(
+    `/api/admin/ai/models?baseUrl=${encodeURIComponent(baseUrl)}&apiKey=${encodeURIComponent(apiKey)}`,
+  )
+
+export const generateAILists = () =>
+  api<{ lists: Array<{ title: string; itemIds: string[] }> }>('/api/admin/ai/lists', {
+    method: 'POST',
+  })
+
+export const aiMatchMetadata = (limit = 10) =>
+  api<{ matched: Array<{ id: string; name: string; tmdbId: number }>; failed: string[] }>(
+    '/api/admin/metadata/ai',
+    { method: 'POST', body: JSON.stringify({ limit }) },
+  )
+
+export const getAILists = (userId: string) =>
+  api<Array<{ title: string; items: JFItem[] }>>(`/Items/AI/Lists?userId=${userId}`)
+
+export const translateSubtitle = (itemId: string, index: number, language: string) =>
+  api<{ index: number; language: string; title: string; deliveryUrl: string }>(
+    `/Items/${itemId}/Subtitles/${index}/Translate?language=${encodeURIComponent(language)}`,
+    { method: 'POST' },
+  )
+
 export const getUnmatchedMetadata = () =>
   api<{ items: UnmatchedItem[]; total: number }>('/api/admin/metadata/unmatched')
 

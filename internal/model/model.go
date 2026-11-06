@@ -189,6 +189,22 @@ type ServerSettings struct {
 	FFprobePath      string `json:"ffprobePath,omitempty"`
 	TMDBAPIKey       string `json:"tmdbApiKey,omitempty"`
 	MetadataLanguage string `json:"metadataLanguage,omitempty"`
+
+	// AI is optional and off by default. The base URL is an OpenAI-compatible
+	// endpoint, prefilled with DeepSeek's.
+	AIEnabled        bool     `json:"aiEnabled,omitempty"`
+	AIBaseURL        string   `json:"aiBaseUrl,omitempty"`
+	AIAPIKey         string   `json:"aiApiKey,omitempty"`
+	AIModel          string   `json:"aiModel,omitempty"`
+	AITargetLanguage string   `json:"aiTargetLanguage,omitempty"`
+	AILists          []AIList `json:"aiLists,omitempty"`
+}
+
+// AIList is a themed set of items produced by the assistant for the home page.
+type AIList struct {
+	Title     string   `json:"title"`
+	ItemIDs   []string `json:"itemIds"`
+	CreatedAt string   `json:"createdAt,omitempty"`
 }
 
 // DefaultServerSettings returns the out-of-the-box configuration.
@@ -202,5 +218,7 @@ func DefaultServerSettings(name string) ServerSettings {
 		TranscodeCodec:   "h264",
 		HardwareAccel:    "auto",
 		MetadataLanguage: "zh-CN",
+		AIBaseURL:        "https://api.deepseek.com/v1",
+		AITargetLanguage: "zh-CN",
 	}
 }

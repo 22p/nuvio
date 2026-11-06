@@ -6,6 +6,9 @@ import {
   getAdminOverview,
   getScanStatus,
   getSessions,
+  aiMatchMetadata,
+  generateAILists,
+  getAIModels,
   getUnmatchedMetadata,
   matchMetadata,
   searchMetadata,
@@ -508,6 +511,15 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   const [matchNotice, setMatchNotice] = useState('')
   const [matchFailed, setMatchFailed] = useState(false)
 
+  const [aiEnabled, setAIEnabled] = useState(false)
+  const [aiBaseUrl, setAIBaseUrl] = useState('https://api.deepseek.com/v1')
+  const [aiApiKey, setAIApiKey] = useState('')
+  const [aiModel, setAIModel] = useState('')
+  const [aiTargetLanguage, setAITargetLanguage] = useState('zh-CN')
+  const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [aiBusy, setAIBusy] = useState(false)
+  const [aiNotice, setAINotice] = useState('')
+
   const [libName, setLibName] = useState('')
   const [libType, setLibType] = useState('movies')
   const [libPaths, setLibPaths] = useState('')
@@ -529,6 +541,11 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       setFfprobePath(data.settings.ffprobePath || '')
       setTmdbApiKey(data.settings.tmdbApiKey || '')
       setMetadataLanguage(data.settings.metadataLanguage || 'zh-CN')
+      setAIEnabled(Boolean(data.settings.aiEnabled))
+      setAIBaseUrl(data.settings.aiBaseUrl || 'https://api.deepseek.com/v1')
+      setAIApiKey(data.settings.aiApiKey || '')
+      setAIModel(data.settings.aiModel || '')
+      setAITargetLanguage(data.settings.aiTargetLanguage || 'zh-CN')
       setScanning(data.scan.scanning)
       getUnmatchedMetadata()
         .then((res) => setUnmatched(res.items))
@@ -581,6 +598,11 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
         ffprobePath,
         tmdbApiKey,
         metadataLanguage,
+        aiEnabled,
+        aiBaseUrl,
+        aiApiKey,
+        aiModel,
+        aiTargetLanguage,
       })
       setNotice(t("Server settings saved"))
       await onConfigChange()
@@ -648,6 +670,56 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       setMatchNotice(err instanceof Error ? err.message : t("Could not save the match"))
     } finally {
       setMatchBusy(false)
+    }
+  }
+
+  const fetchModels = async () => {
+    setAIBusy(true)
+    setAINotice('')
+    try {
+      const res = await getAIModels(aiBaseUrl, aiApiKey)
+      setModelOptions(res.models || [])
+      if (!aiModel && res.models?.length) setAIModel(res.models[0])
+      setAINotice(t("{0} models available", { 0: res.models?.length || 0 }))
+    } catch (err) {
+      setAINotice(err instanceof Error ? err.message : t("Could not list models"))
+    } finally {
+      setAIBusy(false)
+    }
+  }
+
+  const runAIMatch = async () => {
+    setAIBusy(true)
+    setMatchNotice('')
+    setMatchFailed(false)
+    try {
+      const res = await aiMatchMetadata(10)
+      setMatchNotice(
+        t("Matched {0} items", { 0: res.matched.length }) +
+          (res.failed?.length ? " · " + res.failed.length + " " + t("failed") : ''),
+      )
+      const list = await getUnmatchedMetadata()
+      setUnmatched(list.items)
+      onConfigChange()
+    } catch (err) {
+      setMatchFailed(true)
+      setMatchNotice(err instanceof Error ? err.message : t("AI matching failed"))
+    } finally {
+      setAIBusy(false)
+    }
+  }
+
+  const buildLists = async () => {
+    setAIBusy(true)
+    setAINotice('')
+    try {
+      const res = await generateAILists()
+      setAINotice(t("Created {0} lists", { 0: res.lists?.length || 0 }))
+      await onConfigChange()
+    } catch (err) {
+      setAINotice(err instanceof Error ? err.message : t("Could not create lists"))
+    } finally {
+      setAIBusy(false)
     }
   }
 
@@ -958,8 +1030,84 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
 
         <div className="admin-block">
           <div className="admin-block-head">
+            <h3>{t("AI assistant")}</h3>
+            <span className={`status-dot ${aiEnabled && aiApiKey ? 'ok' : 'warn'}`}>
+              {aiEnabled && aiApiKey ? t("Configured") : t("Off")}
+            </span>
+          </div>
+          <p className="setting-hint" style={{ marginBottom: 12 }}>
+            {t("Used for metadata guesses, subtitle translation and themed lists. Only text is sent to the endpoint you configure; an OpenAI-compatible local server works too.")}
+          </p>
+          <div className="setting-row">
+            <div>
+              <div className="setting-label">{t("Enable AI")}</div>
+              <div className="setting-hint">{t("The API key is stored in the server database.")}</div>
+            </div>
+            <Switch checked={aiEnabled} onChange={setAIEnabled} />
+          </div>
+          <div className="form-grid-3">
+            <label className="field">
+              <span>{t("API base URL")}</span>
+              <input value={aiBaseUrl} onChange={(e) => setAIBaseUrl(e.target.value)} placeholder="https://api.deepseek.com/v1" />
+            </label>
+            <label className="field">
+              <span>{t("API key")}</span>
+              <input type="password" value={aiApiKey} onChange={(e) => setAIApiKey(e.target.value)} autoComplete="off" />
+            </label>
+            <div className="field field-align">
+              <button className="btn btn-ghost btn-sm" onClick={fetchModels} disabled={aiBusy}>
+                {aiBusy ? t("Working…") : t("Fetch models")}
+              </button>
+            </div>
+            <label className="field">
+              <span>{t("Model")}</span>
+              {modelOptions.length > 0 ? (
+                <select value={aiModel} onChange={(e) => setAIModel(e.target.value)}>
+                  {modelOptions.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              ) : (
+                <input value={aiModel} onChange={(e) => setAIModel(e.target.value)} placeholder="deepseek-chat" />
+              )}
+            </label>
+            <label className="field">
+              <span>{t("Translate subtitles into")}</span>
+              <select value={aiTargetLanguage} onChange={(e) => setAITargetLanguage(e.target.value)}>
+                <option value="zh-CN">{t("Simplified Chinese")}</option>
+                <option value="zh-TW">{t("Traditional Chinese")}</option>
+                <option value="en-US">English</option>
+                <option value="ja-JP">{t("Japanese")}</option>
+                <option value="ko-KR">한국어</option>
+              </select>
+            </label>
+            <div className="field field-align">
+              <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
+                {saving ? t("Saving…") : t("Save AI settings")}
+              </button>
+            </div>
+          </div>
+          {aiNotice && <div className="path-line">{aiNotice}</div>}
+          <div className="setting-row" style={{ marginTop: 12 }}>
+            <div>
+              <div className="setting-label">{t("Themed lists")}</div>
+              <div className="setting-hint">{t("Ask the assistant to group the library into rows for the home page.")}</div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={buildLists} disabled={aiBusy}>
+              {t("Generate lists")}
+            </button>
+          </div>
+        </div>
+
+        <div className="admin-block">
+          <div className="admin-block-head">
             <h3>{t("Metadata matches")}</h3>
-            <span className="hint-box" style={{ padding: '2px 8px' }}>{unmatched.length}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="hint-box" style={{ padding: '2px 8px' }}>{unmatched.length}</span>
+              <button className="btn btn-ghost btn-sm" onClick={runAIMatch} disabled={aiBusy}>
+                {t("Identify with AI")}
+              </button>
+            </div>
           </div>
           <p className="setting-hint" style={{ marginBottom: 12 }}>
             {t("Items TMDb could not identify. Search for the right entry and pick it; the choice is kept across rescans.")}

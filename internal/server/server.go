@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"nuvio/internal/ai"
 	"nuvio/internal/catalog"
 	"nuvio/internal/demo"
 	"nuvio/internal/hls"
@@ -145,6 +146,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/libraries/{id}", s.handleRemoveLibrary)
 	mux.HandleFunc("POST /api/admin/scan", s.handleTriggerScan)
 	mux.HandleFunc("PUT /api/admin/settings", s.handleSettings)
+	mux.HandleFunc("GET /api/admin/ai/models", s.handleAIModels)
+	mux.HandleFunc("POST /api/admin/ai/lists", s.handleAIGenerateLists)
+	mux.HandleFunc("POST /api/admin/metadata/ai", s.handleMetadataAI)
 	mux.HandleFunc("GET /api/admin/metadata/unmatched", s.handleMetadataUnmatched)
 	mux.HandleFunc("GET /api/admin/metadata/search", s.handleMetadataSearch)
 	mux.HandleFunc("POST /api/admin/metadata/match", s.handleMetadataMatch)
@@ -429,6 +433,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"ffprobe":       s.API.FFprobe() != "",
 		"demo":          s.cfg.Demo,
 		"tmdb":          st.TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "",
+		"ai":            st.AIEnabled && st.AIAPIKey != "",
+		"aiTargetLang":  st.AITargetLanguage,
 		"scanning":      status.Scanning || s.isScanning(),
 		"itemCount":     status.ItemCount,
 		"serverId":      s.Store.ServerID(),
@@ -630,6 +636,317 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		"users":        userOut,
 		"settings":     s.Store.Settings(),
 	})
+}
+
+// aiClient returns a client for the saved AI settings, or nil when AI is off.
+func (s *Server) aiClient() *ai.Client {
+	st := s.Store.Settings()
+	if !st.AIEnabled || st.AIAPIKey == "" {
+		return nil
+	}
+	return ai.New(st.AIBaseURL, st.AIAPIKey, st.AIModel)
+}
+
+// handleAIModels lists the models of an OpenAI-compatible endpoint. Query
+// parameters let the settings page probe values before they are saved.
+func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	st := s.Store.Settings()
+	base := strings.TrimSpace(r.URL.Query().Get("baseUrl"))
+	key := strings.TrimSpace(r.URL.Query().Get("apiKey"))
+	if base == "" {
+		base = st.AIBaseURL
+	}
+	if key == "" {
+		key = st.AIAPIKey
+	}
+	client := ai.New(base, key, "")
+	models, err := client.Models(r.Context())
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"models": models})
+}
+
+// handleMetadataAI asks the assistant to read the messy file names of
+// unmatched items and then resolves the suggested title against TMDb.
+func (s *Server) handleMetadataAI(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	var body struct {
+		ItemIDs []string `json:"itemIds"`
+		Limit   int      `json:"limit"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	if body.Limit <= 0 || body.Limit > 25 {
+		body.Limit = 10
+	}
+	enricher := s.metadataEnricher()
+	if enricher == nil {
+		writeJSON(w, 400, map[string]any{"error": "TMDb API key is not configured"})
+		return
+	}
+	client := s.aiClient()
+	if client == nil {
+		writeJSON(w, 400, map[string]any{"error": "AI is not configured"})
+		return
+	}
+
+	picked := []*model.Item{}
+	if len(body.ItemIDs) > 0 {
+		for _, id := range body.ItemIDs {
+			if it, ok := s.Catalog.Get(normalizeCatalogID(id)); ok && it.TMDBID == 0 {
+				picked = append(picked, it)
+			}
+		}
+	} else {
+		for _, it := range s.Catalog.All() {
+			if it.Demo || it.TMDBID > 0 {
+				continue
+			}
+			if it.Type != model.TypeMovie && it.Type != model.TypeSeries {
+				continue
+			}
+			picked = append(picked, it)
+			if len(picked) >= body.Limit {
+				break
+			}
+		}
+	}
+
+	type result struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		TmdbID int    `json:"tmdbId"`
+	}
+	matched := []result{}
+	failures := []string{}
+	for _, it := range picked {
+		title, year, err := s.suggestTitle(r.Context(), client, it)
+		if err != nil {
+			failures = append(failures, it.Name+": "+err.Error())
+			continue
+		}
+		candidates, err := enricher.Search(r.Context(), title)
+		if err != nil {
+			failures = append(failures, it.Name+": "+err.Error())
+			continue
+		}
+		cand := pickCandidate(candidates, title, year, it.Type)
+		if cand == nil {
+			continue
+		}
+		it.TMDBID = cand.ID
+		it.TMDBVersion = 0
+		it.MetadataLanguage = ""
+		if err := enricher.EnrichOne(r.Context(), it); err != nil {
+			failures = append(failures, it.Name+": "+err.Error())
+			continue
+		}
+		matched = append(matched, result{ID: it.ID, Name: it.Name, TmdbID: it.TMDBID})
+	}
+	if len(matched) > 0 {
+		_ = s.Store.ReplaceItems(s.Catalog.All())
+	}
+	writeJSON(w, 200, map[string]any{"matched": matched, "failed": failures})
+}
+
+func (s *Server) suggestTitle(ctx context.Context, client *ai.Client, it *model.Item) (string, int, error) {
+	kind := "movie"
+	if it.Type == model.TypeSeries {
+		kind = "tv"
+	}
+	user := ""
+	if it.Type == model.TypeSeries {
+		user = "Folder: " + it.Name + "\n"
+	} else if it.Path != "" {
+		user = "File name: " + filepath.Base(it.Path) + "\n"
+		if folder := filepath.Base(filepath.Dir(it.Path)); folder != "" && folder != "." {
+			user += "Folder: " + folder + "\n"
+		}
+	}
+	user += "Library title: " + it.Name + "\nKind: " + kind + "\n"
+	reply, err := client.Chat(ctx,
+		`You identify movies and TV series from file names. Reply with JSON only, shaped as {"title":"English or original title","year":1999}. Use 0 for an unknown year.`,
+		user, true)
+	if err != nil {
+		return "", 0, err
+	}
+	var out struct {
+		Title string `json:"title"`
+		Year  int    `json:"year"`
+	}
+	if err := json.Unmarshal([]byte(stripJSONFence(reply)), &out); err != nil {
+		return "", 0, fmt.Errorf("could not read the suggestion")
+	}
+	if strings.TrimSpace(out.Title) == "" {
+		return "", 0, fmt.Errorf("empty suggestion")
+	}
+	return strings.TrimSpace(out.Title), out.Year, nil
+}
+
+func pickCandidate(candidates []metadata.Candidate, title string, year int, itemType string) *metadata.Candidate {
+	want := strings.ToLower(strings.TrimSpace(title))
+	kind := "movie"
+	if itemType == model.TypeSeries {
+		kind = "tv"
+	}
+	var best *metadata.Candidate
+	bestScore := 0
+	for i := range candidates {
+		c := &candidates[i]
+		if c.Type != kind {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(c.Title))
+		score := 0
+		switch {
+		case name == want:
+			score = 3
+		case strings.Contains(name, want) || strings.Contains(want, name):
+			score = 2
+		}
+		if year > 0 && c.Year > 0 && year == c.Year {
+			score += 2
+		}
+		if score > bestScore {
+			best, bestScore = c, score
+		}
+	}
+	if best == nil && len(candidates) > 0 {
+		for i := range candidates {
+			if candidates[i].Type == kind {
+				best = &candidates[i]
+				break
+			}
+		}
+	}
+	return best
+}
+
+func stripJSONFence(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	return strings.TrimSpace(s)
+}
+
+func normalizeCatalogID(id string) string {
+	id = strings.TrimSpace(id)
+	return strings.ToLower(strings.ReplaceAll(id, "-", ""))
+}
+
+// aiListPrompt builds the request for themed lists from a sample of the
+// catalog, and returns the prompt plus the ids that may be used.
+func (s *Server) aiListPrompt() (string, []string) {
+	type entry struct {
+		ID      string   `json:"id"`
+		Name    string   `json:"name"`
+		Year    int      `json:"year,omitempty"`
+		Type    string   `json:"type"`
+		Genres  []string `json:"genres,omitempty"`
+		Summary string   `json:"summary,omitempty"`
+	}
+	entries := []entry{}
+	for _, it := range s.Catalog.All() {
+		if it.Demo || (it.Type != model.TypeMovie && it.Type != model.TypeSeries) {
+			continue
+		}
+		e := entry{ID: it.ID, Name: it.Name, Year: it.Year, Type: it.Type, Genres: it.Genres}
+		if overview := strings.TrimSpace(it.Overview); overview != "" {
+			if len([]rune(overview)) > 120 {
+				overview = string([]rune(overview)[:120])
+			}
+			e.Summary = overview
+		}
+		entries = append(entries, e)
+		if len(entries) >= 80 {
+			break
+		}
+	}
+	payload, _ := json.Marshal(entries)
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.ID)
+	}
+	prompt := "Here is the library as JSON:\n" + string(payload) +
+		"\nGroup it into 4 themed lists of 6 to 8 items. Every id must come from the input. " +
+		"Reply with JSON only: {\"lists\":[{\"title\":\"short themed name\",\"ids\":[\"...\"]}]}"
+	return prompt, ids
+}
+
+// handleAIGenerateLists replaces the themed lists with a fresh grouping.
+func (s *Server) handleAIGenerateLists(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	client := s.aiClient()
+	if client == nil {
+		writeJSON(w, 400, map[string]any{"error": "AI is not configured"})
+		return
+	}
+	prompt, allowed := s.aiListPrompt()
+	if len(allowed) < 6 {
+		writeJSON(w, 400, map[string]any{"error": "Add more movies or series first"})
+		return
+	}
+	reply, err := client.Chat(r.Context(),
+		"You build themed viewing lists for a media server. Reply with JSON only.",
+		prompt, true)
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"error": err.Error()})
+		return
+	}
+	var out struct {
+		Lists []struct {
+			Title string   `json:"title"`
+			IDs   []string `json:"ids"`
+		} `json:"lists"`
+	}
+	if err := json.Unmarshal([]byte(stripJSONFence(reply)), &out); err != nil {
+		writeJSON(w, 502, map[string]any{"error": "AI reply was not valid JSON"})
+		return
+	}
+	know := map[string]bool{}
+	for _, id := range allowed {
+		know[id] = true
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	lists := []model.AIList{}
+	for _, l := range out.Lists {
+		title := strings.TrimSpace(l.Title)
+		if title == "" {
+			continue
+		}
+		ids := []string{}
+		seen := map[string]bool{}
+		for _, id := range l.IDs {
+			if know[id] && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) < 2 {
+			continue
+		}
+		lists = append(lists, model.AIList{Title: title, ItemIDs: ids, CreatedAt: now})
+		if len(lists) >= 6 {
+			break
+		}
+	}
+	if len(lists) == 0 {
+		writeJSON(w, 502, map[string]any{"error": "AI returned no usable lists"})
+		return
+	}
+	s.Store.UpdateSettings(func(st *model.ServerSettings) {
+		st.AILists = lists
+	})
+	writeJSON(w, 200, map[string]any{"lists": lists})
 }
 
 // metadataEnricher returns an enricher for the configured TMDb key, or nil
@@ -985,6 +1302,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		FFprobePath      *string `json:"ffprobePath"`
 		TMDBAPIKey       *string `json:"tmdbApiKey"`
 		MetadataLanguage *string `json:"metadataLanguage"`
+		AIEnabled        *bool   `json:"aiEnabled"`
+		AIBaseURL        *string `json:"aiBaseUrl"`
+		AIAPIKey         *string `json:"aiApiKey"`
+		AIModel          *string `json:"aiModel"`
+		AITargetLanguage *string `json:"aiTargetLanguage"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]any{"error": "Invalid request format"})
@@ -1061,6 +1383,21 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.MetadataLanguage != nil && strings.TrimSpace(*body.MetadataLanguage) != "" {
 			st.MetadataLanguage = strings.TrimSpace(*body.MetadataLanguage)
+		}
+		if body.AIEnabled != nil {
+			st.AIEnabled = *body.AIEnabled
+		}
+		if body.AIBaseURL != nil {
+			st.AIBaseURL = strings.TrimRight(strings.TrimSpace(*body.AIBaseURL), "/")
+		}
+		if body.AIAPIKey != nil {
+			st.AIAPIKey = strings.TrimSpace(*body.AIAPIKey)
+		}
+		if body.AIModel != nil {
+			st.AIModel = strings.TrimSpace(*body.AIModel)
+		}
+		if body.AITargetLanguage != nil && strings.TrimSpace(*body.AITargetLanguage) != "" {
+			st.AITargetLanguage = strings.TrimSpace(*body.AITargetLanguage)
 		}
 	})
 	ffmpeg := resolveTool("", settings.FFmpegPath, "NUVIO_FFMPEG", "ffmpeg")

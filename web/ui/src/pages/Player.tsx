@@ -3,11 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Hls from 'hls.js'
 import {
+  getConfig,
   getEpisodes,
   getItem,
   getPlaybackInfo,
   getToken,
   setPlayed,
+  translateSubtitle,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { usePrefs } from '../lib/prefs'
@@ -230,7 +232,7 @@ export function PlayerPage() {
   const { id = '' } = useParams()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const { session } = useAuth()
+  const { session, isAdmin } = useAuth()
   const { prefs, update } = usePrefs()
 
   const [item, setItem] = useState<JFItem | null>(null)
@@ -252,6 +254,10 @@ export function PlayerPage() {
   const [buffered, setBuffered] = useState(0)
   const [cues, setCues] = useState<Cue[]>([])
   const [subDelay, setSubDelay] = useState(0)
+  const [extraSubs, setExtraSubs] = useState<MediaStream[]>([])
+  const [translating, setTranslating] = useState(false)
+  const [aiReady, setAIReady] = useState(false)
+  const [aiTargetLang, setAITargetLang] = useState('zh-CN')
   const [volume, setVolume] = useState(() => Number(localStorage.getItem('nuvio.volume') || 0.9))
   const [muted, setMuted] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
@@ -308,7 +314,11 @@ export function PlayerPage() {
   }, [item, source, sessionId, mode, offset, audioIndex, duration, dragging])
 
   const streams = useMemo(() => source?.MediaStreams || item?.MediaSources?.[0]?.MediaStreams || [], [source, item])
-  const subtitleStreams = useMemo(() => streams.filter((s) => s.Type === 'Subtitle'), [streams])
+  const subtitleStreams = useMemo(() => {
+    const base = streams.filter((s) => s.Type === 'Subtitle')
+    if (!extraSubs.length) return base
+    return [...base, ...extraSubs.filter((e) => !base.some((b) => b.Index === e.Index))]
+  }, [streams, extraSubs])
   const audioStreams = useMemo(() => streams.filter((s) => s.Type === 'Audio'), [streams])
   const videoStream = useMemo(() => streams.find((s) => s.Type === 'Video'), [streams])
   const activeAudio = audioStreams.find((a) => a.Index === audioIndex)
@@ -374,6 +384,15 @@ export function PlayerPage() {
     else localStorage.setItem(key, String(clamped))
   }
   const adjustSubDelay = (delta: number) => applySubDelay(subDelay + delta)
+
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => {
+        setAIReady(Boolean(cfg.ai))
+        if (cfg.aiTargetLang) setAITargetLang(cfg.aiTargetLang)
+      })
+      .catch(() => {})
+  }, [])
 
   // Fetch item metadata and prepare the first playback request.
   useEffect(() => {
@@ -464,6 +483,7 @@ export function PlayerPage() {
     let stallWatchdog = 0
     setEnded(false)
     setNeedsGesture(false)
+    setExtraSubs([])
     setBuffering(true)
     setPlaybackLoading(true)
 
@@ -1038,6 +1058,30 @@ export function PlayerPage() {
     }
   }
 
+  const translateActiveSubtitle = async () => {
+    const stream = activeSubtitleStream
+    if (!stream || !item) return
+    setTranslating(true)
+    try {
+      const res = await translateSubtitle(item.Id, stream.Index, aiTargetLang)
+      const track: MediaStream = {
+        Type: 'Subtitle',
+        Index: res.index,
+        Codec: 'webvtt',
+        Language: res.language,
+        DisplayTitle: res.title,
+        DeliveryUrl: res.deliveryUrl,
+        IsExternal: true,
+      }
+      setExtraSubs((prev) => [...prev.filter((t) => t.Index !== track.Index), track])
+      setSubChoice(res.index)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("Subtitle translation failed"))
+    } finally {
+      setTranslating(false)
+    }
+  }
+
   const cycleSubtitles = () => {
     if (!subtitleStreams.length) return
     if (activeSubtitle == null) setSubChoice(subtitleStreams[0].Index)
@@ -1386,6 +1430,18 @@ export function PlayerPage() {
             </button>
           ))}
           {!subtitleStreams.length && <div className="menu-empty">{t("This video has no subtitle track")}</div>}
+          {aiReady && isAdmin && activeSubtitleStream && (
+            <div className="sub-delay">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={translateActiveSubtitle}
+                disabled={translating}
+              >
+                {translating ? t("Translating…") : t("Translate subtitles with AI")}
+              </button>
+            </div>
+          )}
+
           {activeSubtitle != null && cues.length > 0 && (
             <div className="sub-delay">
               <span>{t("Subtitle delay")}</span>

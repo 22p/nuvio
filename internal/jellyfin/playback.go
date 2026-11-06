@@ -84,6 +84,7 @@ func (a *API) registerMedia(mux *http.ServeMux) {
 		// Legacy 10.x apps request subtitles without a media source id.
 		mux.HandleFunc("GET "+prefix+"/{itemId}/Subtitles/{index}/{file}", a.handleSubtitle)
 	}
+	a.registerAI(mux)
 	mux.HandleFunc("GET /Items/{itemId}/SpecialFeatures", a.handleSpecialFeatures)
 	mux.HandleFunc("GET /Items/{itemId}/Images/{imageType}", a.handleImage)
 	mux.HandleFunc("GET /Items/{itemId}/Images/{imageType}/{imageIndex}", a.handleImage)
@@ -525,6 +526,7 @@ func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
 			SupportsExternalStream: true, IsTextSubtitleStream: true,
 		})
 	}
+	out = append(out, a.translatedStreams(it, token)...)
 	return out
 }
 
@@ -903,21 +905,7 @@ func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data []byte
-	var err error
-	switch {
-	case strings.HasPrefix(sub.Path, "demo://"):
-		data, _ = demo.SubtitleBytes(sub.Path)
-		if data == nil {
-			err = fmt.Errorf("demo subtitle missing")
-		}
-	case sub.Path != "":
-		data, err = media.SubtitleToVTT(sub.Path)
-	case sub.Embedded:
-		data, err = a.extractSubtitle(r, it, *sub)
-	default:
-		err = fmt.Errorf("subtitle has no source")
-	}
+	data, err := a.loadSubtitle(r, it, sub)
 	if err != nil {
 		http.Error(w, "subtitle unavailable", http.StatusNotFound)
 		return
@@ -975,6 +963,24 @@ func vttToSRT(data []byte) []byte {
 		b.WriteByte('\n')
 	}
 	return []byte(b.String())
+}
+
+// loadSubtitle returns a subtitle stream as WebVTT, whether it is a sidecar,
+// an embedded track or the demo clip.
+func (a *API) loadSubtitle(r *http.Request, it *model.Item, sub *model.Subtitle) ([]byte, error) {
+	switch {
+	case strings.HasPrefix(sub.Path, "demo://"):
+		data, _ := demo.SubtitleBytes(sub.Path)
+		if data == nil {
+			return nil, fmt.Errorf("demo subtitle missing")
+		}
+		return data, nil
+	case sub.Path != "":
+		return media.SubtitleToVTT(sub.Path)
+	case sub.Embedded:
+		return a.extractSubtitle(r, it, *sub)
+	}
+	return nil, fmt.Errorf("subtitle has no source")
 }
 
 func (a *API) extractSubtitle(r *http.Request, it *model.Item, sub model.Subtitle) ([]byte, error) {

@@ -1,7 +1,7 @@
 import { t } from '../lib/i18n'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getLatest, getNextUp, getResume } from '../lib/api'
+import { getAILists, getLatest, getNextUp, getResume } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import type { JFItem } from '../lib/types'
 import { useViews, useViewsLoading } from '../components/Layout'
@@ -15,6 +15,7 @@ export function HomePage() {
   const [resume, setResume] = useState<JFItem[]>([])
   const [nextUp, setNextUp] = useState<JFItem[]>([])
   const [latestByView, setLatestByView] = useState<Record<string, JFItem[]>>({})
+  const [aiLists, setAILists] = useState<Array<{ title: string; items: JFItem[] }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -55,6 +56,19 @@ export function HomePage() {
       alive = false
     }
   }, [session, views, viewsLoading])
+
+  useEffect(() => {
+    if (!session) return
+    let alive = true
+    getAILists(session.user.Id)
+      .then((lists) => {
+        if (alive) setAILists((lists || []).filter((l) => (l.items?.length || 0) >= 2))
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [session])
 
   const moviesView = views.find((v) => v.CollectionType === 'movies')
   const showsView = views.find((v) => v.CollectionType === 'tvshows')
@@ -133,6 +147,9 @@ export function HomePage() {
                   moreHref={`/library/${v.Id}`}
                 />
               ))}
+            {aiLists.map((l) => (
+              <MediaRow key={l.title} title={l.title} items={l.items} variant="wide" />
+            ))}
             {!resume.length && !nextUp.length && !latestMovies.length && !latestShows.length && (
               <EmptyState
                 title={t("Nothing to play yet")}

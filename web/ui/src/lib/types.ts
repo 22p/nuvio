@@ -125,6 +125,8 @@ export interface AppConfig {
   ffprobe: boolean
   demo: boolean
   tmdb?: boolean
+  ai?: boolean
+  aiTargetLang?: string
   scanning: boolean
   itemCount: number
   serverId: string
@@ -204,5 +206,10 @@ export interface AdminOverview {
     ffprobePath?: string
     tmdbApiKey?: string
     metadataLanguage?: string
+    aiEnabled?: boolean
+    aiBaseUrl?: string
+    aiApiKey?: string
+    aiModel?: string
+    aiTargetLanguage?: string
   }
 }
