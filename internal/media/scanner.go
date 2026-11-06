@@ -53,8 +53,14 @@ var (
 	specialsRe  = regexp.MustCompile(`(?i)^(?:specials?|extras?|bonus|ova|oad|sp|sps|ncop|nced|pv)$`)
 	yearRe      = regexp.MustCompile(`(?:\(|\[|\.|\s)((?:19|20)\d{2})(?:\)|\]|\.|\s|$)`)
 	bracketRe   = regexp.MustCompile(`[\[\(\{][^\]\)\}]*[\]\)\}]`)
-	tokenRe     = regexp.MustCompile(`(?i)\b(2160p|1080p|720p|576p|480p|uhd|bluray|blu-ray|brrip|bdrip|webrip|web-dl|webdl|hdtv|dvdrip|remux|x264|x265|h264|h265|hevc|avc|10bit|8bit|hdr|dv|dolby|vision|atmos|dts(?:-hd)?|truehd|aac|ac3|eac3|ddp?5[ .]1|proper|repack|extended|unrated|remastered|multi|dual|sub|eng|chi)\b`)
+	tokenRe     = regexp.MustCompile(`(?i)\b(2160p|1080p|720p|576p|480p|uhd|bluray|blu-ray|brrip|bdrip|webrip|web-dl|webdl|hdtv|dvdrip|remux|x264|x265|h264|h265|hevc|avc|10bit|8bit|hdr|dv|dolby|vision|atmos|dts(?:-hd)?|truehd|aac|ac3|eac3|ddp?5[ .]1|proper|repack|extended|unrated|remastered|multi|dual|sub|eng|chi|chs|cht|big5|jpn)\b`)
 	multiSpace  = regexp.MustCompile(`\s{2,}`)
+	// Provider ids written into the file or folder name, e.g. {tmdb-12345}
+	// or [imdb-tt0111161]. They pick the exact TMDb entry instead of guessing.
+	tmdbIDRe       = regexp.MustCompile(`(?i)(?:tmdb|tmdbid)[-=: ]?(\d{1,8})`)
+	imdbIDRe       = regexp.MustCompile(`(?i)(?:imdb|imdbid)[-=: ]?(tt\d{6,10})`)
+	cjkNoiseRe     = regexp.MustCompile(`(?i)(简繁|繁简|简中|繁中|简英|双语|内嵌|外挂|合集|全\s*\d+\s*[集话話]|第\s*[0-9一二三四五六七八九十百]+\s*[季部篇])`)
+	releaseGroupRe = regexp.MustCompile(`[-@][A-Za-z0-9]{2,12}$`)
 )
 
 var skipDirs = map[string]bool{
@@ -354,6 +360,15 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			ChildCount:   len(agg.seasons),
 		}
 		applyNFO(series, agg.nfo)
+		if series.TMDBID == 0 || series.IMDBID == "" {
+			tmdb, imdb := providerIDs(filepath.Base(agg.dir) + " " + agg.name)
+			if series.TMDBID == 0 {
+				series.TMDBID = tmdb
+			}
+			if series.IMDBID == "" {
+				series.IMDBID = imdb
+			}
+		}
 		if series.AddedAt.IsZero() {
 			series.AddedAt = time.Now().Add(-time.Hour * 24 * 365)
 		}
@@ -448,6 +463,15 @@ func (s *Scanner) movieItem(lib *model.Library, ve *videoEntry, artByDir map[str
 		item.ThumbPath = art.landscape
 	}
 	applyNFO(item, movieNFO(ve))
+	if item.TMDBID == 0 || item.IMDBID == "" {
+		tmdb, imdb := providerIDs(filepath.Base(filepath.Dir(ve.path)) + " " + ve.base)
+		if item.TMDBID == 0 {
+			item.TMDBID = tmdb
+		}
+		if item.IMDBID == "" {
+			item.IMDBID = imdb
+		}
+	}
 	return item
 }
 
@@ -746,15 +770,31 @@ func movieTitle(ve *videoEntry, roots map[string]bool) (string, int) {
 	return cleanTitleYear(base)
 }
 
+// videoExt reports whether the suffix is a real media extension. Names are
+// dotted too, so an unconditional TrimSuffix would eat the last word of
+// "Show.Name.2021" or "WEB-DL.x264".
+func videoExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".webm", ".ts", ".m2ts",
+		".mpg", ".mpeg", ".flv", ".ogv", ".rmvb", ".divx", ".vob", ".iso":
+		return true
+	}
+	return false
+}
+
 func cleanTitleYear(s string) (string, int) {
-	s = strings.TrimSuffix(s, filepath.Ext(s))
+	if ext := filepath.Ext(s); videoExt(ext) {
+		s = strings.TrimSuffix(s, ext)
+	}
 	s = strings.NewReplacer(".", " ", "_", " ").Replace(s)
+	s = stripReleaseGroup(s)
 	year := 0
 	if m := yearRe.FindStringSubmatch(s); len(m) == 2 {
 		year, _ = strconv.Atoi(m[1])
 	}
 	s = bracketRe.ReplaceAllString(s, " ")
 	s = tokenRe.ReplaceAllString(s, " ")
+	s = cjkNoiseRe.ReplaceAllString(s, " ")
 	if m := yearRe.FindStringIndex(s); m != nil {
 		s = s[:m[0]] + s[m[1]:]
 	}
@@ -765,11 +805,48 @@ func cleanTitleYear(s string) (string, int) {
 	return s, year
 }
 
+// CleanTitle exposes the scanner's title heuristics so metadata lookup can
+// treat the containing folder name as a second candidate.
+func CleanTitle(s string) (string, int) {
+	return cleanTitleYear(s)
+}
+
 func cleanTitle(s string) string {
+	s = stripReleaseGroup(s)
 	s = strings.NewReplacer(".", " ", "_", " ", " - ", " ").Replace(s)
 	s = tokenRe.ReplaceAllString(s, " ")
+	s = cjkNoiseRe.ReplaceAllString(s, " ")
+	s = tmdbIDRe.ReplaceAllString(s, " ")
+	s = imdbIDRe.ReplaceAllString(s, " ")
 	s = multiSpace.ReplaceAllString(s, " ")
 	return strings.TrimSpace(strings.Trim(s, "-–—[](){}"))
+}
+
+// stripReleaseGroup removes a trailing "-GROUP" when the name in front of it
+// still carries a release tag, which is the usual shape of scene file names.
+// Plain titles such as "Spider-Man" are left alone.
+func stripReleaseGroup(s string) string {
+	loc := releaseGroupRe.FindStringIndex(s)
+	if loc == nil || loc[0] <= 0 {
+		return s
+	}
+	head := s[:loc[0]]
+	if !tokenRe.MatchString(head) && !yearRe.MatchString(head) {
+		return s
+	}
+	return s[:loc[0]]
+}
+
+// providerIDs reads a TMDb or IMDb id written into a file or folder name.
+func providerIDs(text string) (int, string) {
+	tmdb, imdb := 0, ""
+	if m := tmdbIDRe.FindStringSubmatch(text); len(m) == 2 {
+		tmdb, _ = strconv.Atoi(m[1])
+	}
+	if m := imdbIDRe.FindStringSubmatch(text); len(m) == 2 {
+		imdb = strings.ToLower(m[1])
+	}
+	return tmdb, imdb
 }
 
 func matchSubtitles(dir, base string, files []string) []model.Subtitle {

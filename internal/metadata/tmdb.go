@@ -9,18 +9,24 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 
+	"nuvio/internal/media"
 	"nuvio/internal/model"
 )
 
 // metadataVersion marks items enriched with the current field set. Bump it
 // when a new TMDb field is added so existing libraries refresh once.
-const metadataVersion = 2
+const metadataVersion = 3
+
+// minMatchScore is the confidence a candidate needs before it is applied.
+// A year match alone (3) is not enough, and a partial name plus a year (5) is.
+const minMatchScore = 5
 
 // Enricher resolves TMDb matches sequentially to stay within the public API
 // rate limits. A nil or empty APIKey makes it a no-op.
@@ -65,6 +71,7 @@ type searchResult struct {
 	FirstAirDate  string  `json:"first_air_date"`
 	VoteAverage   float64 `json:"vote_average"`
 	Popularity    float64 `json:"popularity"`
+	Runtime       int     `json:"runtime"`
 	GenreIDs      []int   `json:"genre_ids"`
 }
 
@@ -121,6 +128,69 @@ func (e *Enricher) Enrich(ctx context.Context, items []*model.Item) error {
 	return firstErr
 }
 
+// EnrichOne resolves a single item. It is used when an administrator picks a
+// TMDb entry by hand, where the id is already known.
+func (e *Enricher) EnrichOne(ctx context.Context, it *model.Item) error {
+	return e.Enrich(ctx, []*model.Item{it})
+}
+
+// Candidate is a search hit shown in the manual matching UI.
+type Candidate struct {
+	ID       int    `json:"id"`
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Year     int    `json:"year"`
+	Overview string `json:"overview"`
+	Poster   string `json:"poster,omitempty"`
+}
+
+// Search queries both movie and TV entries for the manual match dialog.
+func (e *Enricher) Search(ctx context.Context, query string) ([]Candidate, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	var out []Candidate
+	for _, kind := range []string{"movie", "tv"} {
+		q := url.Values{}
+		q.Set("api_key", e.APIKey)
+		q.Set("language", e.Language)
+		q.Set("query", query)
+		q.Set("include_adult", "false")
+		var res searchResponse
+		if err := e.getJSON(ctx, "/search/"+kind+"?"+q.Encode(), &res); err != nil {
+			return nil, err
+		}
+		for i, r := range res.Results {
+			if i >= 6 {
+				break
+			}
+			title := r.Title
+			if kind == "tv" {
+				title = r.Name
+			}
+			if title == "" {
+				title = r.OriginalTitle
+				if kind == "tv" {
+					title = r.OriginalName
+				}
+			}
+			c := Candidate{
+				ID:       r.ID,
+				Type:     kind,
+				Title:    title,
+				Year:     yearOf(r.ReleaseDate, r.FirstAirDate),
+				Overview: r.Overview,
+			}
+			if r.PosterPath != "" {
+				c.Poster = e.ImageBase + "/w342" + r.PosterPath
+			}
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
 func (e *Enricher) isDisabled() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -136,68 +206,94 @@ func (e *Enricher) disable(reason string) {
 }
 
 func (e *Enricher) lookup(ctx context.Context, it *model.Item) (*searchResult, error) {
-	res, err := e.search(ctx, it, e.Language)
-	if err != nil || res != nil {
-		return res, err
-	}
-	// Folder names are often the romaji or English title (common for anime)
-	// while TMDb returns the localised name, so retry in English and localise
-	// the match afterwards.
-	if e.imageLanguage() == "en" {
-		return nil, nil
-	}
-	res, err = e.search(ctx, it, "en-US")
-	if err != nil || res == nil {
-		return res, err
-	}
-	if local := e.details(ctx, kindOfItem(it), res.ID); local != nil {
-		return local, nil
-	}
-	return res, nil
-}
-
-func (e *Enricher) search(ctx context.Context, it *model.Item, language string) (*searchResult, error) {
-	kind := "movie"
-	year := it.Year
-	if it.Type == model.TypeSeries {
-		kind = "tv"
-	}
-	q := url.Values{}
-	q.Set("api_key", e.APIKey)
-	q.Set("language", language)
-	q.Set("query", it.Name)
-	q.Set("include_adult", "false")
-	if year > 0 {
-		if kind == "movie" {
-			q.Set("year", fmt.Sprintf("%d", year))
-		} else {
-			q.Set("first_air_date_year", fmt.Sprintf("%d", year))
+	kind := kindOfItem(it)
+	// An explicit id wins over any heuristic: it cannot pick the wrong entry.
+	if it.TMDBID > 0 {
+		if res := e.details(ctx, kind, it.TMDBID); res != nil {
+			return res, nil
 		}
 	}
-	path := "/search/" + kind
-	var out searchResponse
-	if err := e.getJSON(ctx, path+"?"+q.Encode(), &out); err != nil {
-		return nil, err
+	if it.IMDBID != "" {
+		if res := e.findByIMDB(ctx, it); res != nil {
+			return res, nil
+		}
 	}
-	// A year in the filename can be wrong. Retry once without it before giving up.
-	if len(out.Results) == 0 && year > 0 {
-		q.Del("year")
-		q.Del("first_air_date_year")
-		if err := e.getJSON(ctx, path+"?"+q.Encode(), &out); err != nil {
+	for _, name := range e.candidates(it) {
+		res, err := e.search(ctx, name, it.Year, kind, e.Language)
+		if err != nil {
 			return nil, err
 		}
+		if res == nil && e.imageLanguage() != "en" {
+			// Folder names are often the romaji or English title (common for
+			// anime) while TMDb returns the localised name.
+			res, err = e.search(ctx, name, it.Year, kind, "en-US")
+			if err != nil {
+				return nil, err
+			}
+		}
+		if res == nil {
+			continue
+		}
+		// Read the full entry for the runtime and use it to confirm the match:
+		// two films can share a name, but rarely a running time. The titles
+		// come from the search hit because the localised entry may not keep
+		// the name that was matched.
+		if full := e.details(ctx, kind, res.ID); full != nil {
+			if matchScore(name, it.Year, *res, int64(full.Runtime)*60*10_000_000) >= minMatchScore {
+				return full, nil
+			}
+			continue
+		}
+		return res, nil
 	}
-	best, bestScore := -1, 0
-	for i, r := range out.Results {
-		score := matchScore(it.Name, it.Year, r)
-		if score > bestScore {
-			best, bestScore = i, score
+	return nil, nil
+}
+
+// candidates returns the names worth querying: the parsed title and, for
+// movies, the containing folder, which is often cleaner than the file name.
+func (e *Enricher) candidates(it *model.Item) []string {
+	out := []string{strings.TrimSpace(it.Name)}
+	if it.Path != "" && it.Type == model.TypeMovie {
+		folder := filepath.Base(filepath.Dir(it.Path))
+		if name, _ := media.CleanTitle(folder); name != "" && !strings.EqualFold(name, it.Name) {
+			out = append(out, name)
 		}
 	}
-	if best < 0 || bestScore < 4 {
-		return nil, nil
+	return out
+}
+
+// findByIMDB resolves an IMDb id to a TMDb entry. The kind stored on the item
+// decides which list is preferred, with the other list as a fallback.
+func (e *Enricher) findByIMDB(ctx context.Context, it *model.Item) *searchResult {
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("language", e.Language)
+	q.Set("external_source", "imdb_id")
+	var out struct {
+		MovieResults []searchResult `json:"movie_results"`
+		TVResults    []searchResult `json:"tv_results"`
 	}
-	return &out.Results[best], nil
+	if err := e.getJSON(ctx, "/find/"+url.PathEscape(it.IMDBID)+"?"+q.Encode(), &out); err != nil {
+		return nil
+	}
+	kind, pick := "movie", out.MovieResults
+	if kindOfItem(it) == "tv" {
+		kind, pick = "tv", out.TVResults
+	}
+	if len(pick) == 0 {
+		if len(out.MovieResults) > 0 {
+			kind, pick = "movie", out.MovieResults
+		} else if len(out.TVResults) > 0 {
+			kind, pick = "tv", out.TVResults
+		}
+	}
+	if len(pick) == 0 || pick[0].ID <= 0 {
+		return nil
+	}
+	if res := e.details(ctx, kind, pick[0].ID); res != nil {
+		return res
+	}
+	return &pick[0]
 }
 
 type detailsResponse struct {
@@ -212,12 +308,14 @@ type detailsResponse struct {
 	ReleaseDate   string  `json:"release_date"`
 	FirstAirDate  string  `json:"first_air_date"`
 	VoteAverage   float64 `json:"vote_average"`
+	Runtime       int     `json:"runtime"`
 	Genres        []struct {
 		ID int `json:"id"`
 	} `json:"genres"`
 }
 
-// details re-reads an English search hit in the configured language.
+// details re-reads a search hit in the configured language and fills the
+// fields the search response does not carry, such as the runtime.
 func (e *Enricher) details(ctx context.Context, kind string, id int) *searchResult {
 	if id <= 0 {
 		return nil
@@ -241,6 +339,7 @@ func (e *Enricher) details(ctx context.Context, kind string, id int) *searchResu
 		ReleaseDate:   out.ReleaseDate,
 		FirstAirDate:  out.FirstAirDate,
 		VoteAverage:   out.VoteAverage,
+		Runtime:       out.Runtime,
 	}
 	for _, g := range out.Genres {
 		res.GenreIDs = append(res.GenreIDs, g.ID)
@@ -248,7 +347,48 @@ func (e *Enricher) details(ctx context.Context, kind string, id int) *searchResu
 	return res
 }
 
-func matchScore(query string, year int, r searchResult) int {
+// search queries one candidate and returns the best hit above the confidence
+// threshold. A year in the file name can be wrong, so it is retried without.
+func (e *Enricher) search(ctx context.Context, name string, year int, kind, language string) (*searchResult, error) {
+	q := url.Values{}
+	q.Set("api_key", e.APIKey)
+	q.Set("language", language)
+	q.Set("query", name)
+	q.Set("include_adult", "false")
+	if year > 0 {
+		if kind == "movie" {
+			q.Set("year", fmt.Sprintf("%d", year))
+		} else {
+			q.Set("first_air_date_year", fmt.Sprintf("%d", year))
+		}
+	}
+	path := "/search/" + kind
+	var out searchResponse
+	if err := e.getJSON(ctx, path+"?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	if len(out.Results) == 0 && year > 0 {
+		q.Del("year")
+		q.Del("first_air_date_year")
+		if err := e.getJSON(ctx, path+"?"+q.Encode(), &out); err != nil {
+			return nil, err
+		}
+	}
+	best, bestScore := -1, 0
+	for i, r := range out.Results {
+		if score := matchScore(name, year, r, 0); score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	if best < 0 || bestScore < minMatchScore {
+		return nil, nil
+	}
+	return &out.Results[best], nil
+}
+
+// matchScore rates a candidate. Exact names score highest, near names score
+// partially, and the year plus the runtime decide between look-alikes.
+func matchScore(query string, year int, r searchResult, runtimeTicks int64) int {
 	qn := normalizeTitle(query)
 	if qn == "" {
 		return 0
@@ -263,7 +403,11 @@ func matchScore(query string, year int, r searchResult) int {
 		case cn == qn:
 			best = max(best, 6)
 		case strings.Contains(cn, qn) || strings.Contains(qn, cn):
+			best = max(best, 2)
+		case similarity(cn, qn) >= 0.85:
 			best = max(best, 3)
+		case similarity(cn, qn) >= 0.70:
+			best = max(best, 2)
 		}
 	}
 	resultYear := yearOf(r.ReleaseDate, r.FirstAirDate)
@@ -275,7 +419,51 @@ func matchScore(query string, year int, r searchResult) int {
 			best++
 		}
 	}
+	if runtimeTicks > 0 && r.Runtime > 0 {
+		minutes := int(runtimeTicks / 10_000_000 / 60)
+		switch diff := abs(minutes - r.Runtime); {
+		case diff <= 3:
+			best += 2
+		case diff <= 10:
+			best++
+		case diff > 20:
+			best -= 2
+		}
+	}
 	return best
+}
+
+// similarity returns 1 for identical strings and 0 when nothing matches.
+func similarity(a, b string) float64 {
+	ar, br := []rune(a), []rune(b)
+	longest := len(ar)
+	if len(br) > longest {
+		longest = len(br)
+	}
+	if longest == 0 {
+		return 0
+	}
+	return 1 - float64(editDistance(ar, br))/float64(longest)
+}
+
+func editDistance(a, b []rune) int {
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
 }
 
 func normalizeTitle(s string) string {

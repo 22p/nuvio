@@ -31,6 +31,16 @@ type nfoData struct {
 	Runtime    string         `xml:"runtime"`
 	Genres     []string       `xml:"genre"`
 	Actors     []nfoActor     `xml:"actor"`
+	TmdbID     string         `xml:"tmdbid"`
+	ImdbID     string         `xml:"imdbid"`
+	UniqueIDs  []nfoUniqueID  `xml:"uniqueid"`
+}
+
+// nfoUniqueID is the Kodi/Jellyfin form of an external provider id:
+// <uniqueid type="tmdb">12345</uniqueid>.
+type nfoUniqueID struct {
+	Type string `xml:"type,attr"`
+	Text string `xml:",chardata"`
 }
 
 // nfoRatingField accepts both <rating>7.5</rating> and <rating><value>7.5</value></rating>.
@@ -189,9 +199,51 @@ func applyNFO(it *model.Item, n *nfoData) {
 		it.People = people
 		changed = true
 	}
+	// Provider ids do not make the file locally described: they only tell the
+	// enricher which entry to read, so they do not set MetadataSource.
+	if it.TMDBID == 0 {
+		it.TMDBID = nfoTMDBID(n)
+	}
+	if it.IMDBID == "" {
+		it.IMDBID = nfoIMDBID(n)
+	}
 	if changed {
 		it.MetadataSource = "nfo"
 	}
+}
+
+func nfoTMDBID(n *nfoData) int {
+	if v := int(nfoNumber(n.TmdbID)); v > 0 {
+		return v
+	}
+	for _, u := range n.UniqueIDs {
+		if strings.EqualFold(strings.TrimSpace(u.Type), "tmdb") {
+			if v := int(nfoNumber(u.Text)); v > 0 {
+				return v
+			}
+		}
+	}
+	return 0
+}
+
+func nfoIMDBID(n *nfoData) string {
+	if v := normalizeIMDB(n.ImdbID); v != "" {
+		return v
+	}
+	for _, u := range n.UniqueIDs {
+		if strings.EqualFold(strings.TrimSpace(u.Type), "imdb") {
+			return normalizeIMDB(u.Text)
+		}
+	}
+	return ""
+}
+
+func normalizeIMDB(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if strings.HasPrefix(s, "tt") && len(s) > 2 {
+		return s
+	}
+	return ""
 }
 
 // nfoRating handles both <rating>7.5</rating> and the newer nested ratings.

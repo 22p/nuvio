@@ -6,6 +6,9 @@ import {
   getAdminOverview,
   getScanStatus,
   getSessions,
+  getUnmatchedMetadata,
+  matchMetadata,
+  searchMetadata,
   removeLibrary,
   revokeSession,
   saveServerSettings,
@@ -14,6 +17,7 @@ import {
 import { useAuth } from '../lib/auth'
 import { usePrefs } from '../lib/prefs'
 import type { AdminOverview, DeviceSession } from '../lib/types'
+import type { MetadataCandidate, UnmatchedItem } from '../lib/api'
 import { Spinner } from '../components/Media'
 import { Switch } from '../components/Controls'
 import { languages, t, useI18n, type Lang } from '../lib/i18n'
@@ -496,6 +500,14 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   const [saving, setSaving] = useState(false)
   const [scanning, setScanning] = useState(false)
 
+  const [unmatched, setUnmatched] = useState<UnmatchedItem[]>([])
+  const [matching, setMatching] = useState<UnmatchedItem | null>(null)
+  const [matchQuery, setMatchQuery] = useState('')
+  const [matchResults, setMatchResults] = useState<MetadataCandidate[]>([])
+  const [matchBusy, setMatchBusy] = useState(false)
+  const [matchNotice, setMatchNotice] = useState('')
+  const [matchFailed, setMatchFailed] = useState(false)
+
   const [libName, setLibName] = useState('')
   const [libType, setLibType] = useState('movies')
   const [libPaths, setLibPaths] = useState('')
@@ -518,6 +530,9 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       setTmdbApiKey(data.settings.tmdbApiKey || '')
       setMetadataLanguage(data.settings.metadataLanguage || 'zh-CN')
       setScanning(data.scan.scanning)
+      getUnmatchedMetadata()
+        .then((res) => setUnmatched(res.items))
+        .catch(() => setUnmatched([]))
       setError('')
     } catch (err) {
       setError(err instanceof Error ? err.message : t("Could not load server information"))
@@ -595,6 +610,44 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : t("Delete failed"))
+    }
+  }
+
+  const runMatchSearch = async () => {
+    const query = matchQuery.trim()
+    if (query.length < 2) return
+    setMatchBusy(true)
+    setMatchNotice('')
+    setMatchFailed(false)
+    try {
+      const res = await searchMetadata(query)
+      setMatchResults(res.results || [])
+    } catch (err) {
+      setMatchFailed(true)
+      setMatchNotice(err instanceof Error ? err.message : t("Search failed"))
+    } finally {
+      setMatchBusy(false)
+    }
+  }
+
+  const applyMatch = async (candidate: MetadataCandidate) => {
+    if (!matching) return
+    setMatchBusy(true)
+    setMatchNotice('')
+    setMatchFailed(false)
+    try {
+      const updated = await matchMetadata(matching.id, candidate.id, candidate.type)
+      setUnmatched((list) => list.filter((it) => it.id !== matching.id))
+      setMatching(null)
+      setMatchQuery('')
+      setMatchResults([])
+      setMatchNotice(t("Matched to ") + updated.name)
+      onConfigChange()
+    } catch (err) {
+      setMatchFailed(true)
+      setMatchNotice(err instanceof Error ? err.message : t("Could not save the match"))
+    } finally {
+      setMatchBusy(false)
     }
   }
 
@@ -901,6 +954,93 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
             </div>
           </div>
           <div className="path-line">{t("Saving triggers a rescan. Artwork is cached locally.")}</div>
+        </div>
+
+        <div className="admin-block">
+          <div className="admin-block-head">
+            <h3>{t("Metadata matches")}</h3>
+            <span className="hint-box" style={{ padding: '2px 8px' }}>{unmatched.length}</span>
+          </div>
+          <p className="setting-hint" style={{ marginBottom: 12 }}>
+            {t("Items TMDb could not identify. Search for the right entry and pick it; the choice is kept across rescans.")}
+          </p>
+          {matchNotice && (
+            <div className={matchFailed ? 'inline-error' : 'inline-ok'}>{matchNotice}</div>
+          )}
+          {unmatched.length === 0 && <div className="hint-box">{t("Every item is matched.")}</div>}
+          {unmatched.slice(0, 8).map((it) => (
+            <div key={it.id} className="admin-library">
+              <div className="admin-library-main">
+                <div className="admin-library-name">
+                  {it.name}
+                  {it.year ? <span className="tag muted-tag">{it.year}</span> : null}
+                  <span className="tag muted-tag">{it.type === 'Series' ? t("Series") : t("Movies")}</span>
+                </div>
+              </div>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setMatching(it)
+                  setMatchQuery(it.name)
+                  setMatchResults([])
+                  setMatchNotice('')
+                }}
+              >
+                {t("Match")}
+              </button>
+            </div>
+          ))}
+          {unmatched.length > 8 && (
+            <div className="path-line">{t("Showing the first 8. Rescan after matching to refresh the list.")}</div>
+          )}
+          {matching && (
+            <div className="admin-block" style={{ marginTop: 12 }}>
+              <div className="admin-block-head">
+                <h3>{matching.name}</h3>
+                <button className="btn btn-ghost btn-sm" onClick={() => setMatching(null)}>
+                  {t("Cancel")}
+                </button>
+              </div>
+              <div className="form-grid-3">
+                <label className="field">
+                  <span>{t("Search TMDb")}</span>
+                  <input
+                    value={matchQuery}
+                    onChange={(e) => setMatchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') runMatchSearch()
+                    }}
+                    placeholder={t("Title in any language")}
+                  />
+                </label>
+                <div className="field field-align">
+                  <button className="btn btn-primary btn-sm" onClick={runMatchSearch} disabled={matchBusy}>
+                    {matchBusy ? t("Searching…") : t("Search")}
+                  </button>
+                </div>
+              </div>
+              {matchResults.map((c) => (
+                <button
+                  key={`${c.type}-${c.id}`}
+                  className="menu-option"
+                  style={{ textAlign: 'left' }}
+                  onClick={() => applyMatch(c)}
+                >
+                  <span>
+                    {c.title}
+                    <em>
+                      {[c.year || '', c.type === 'tv' ? t("Series") : t("Movies")]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </em>
+                  </span>
+                </button>
+              ))}
+              {!matchBusy && matchResults.length === 0 && matchQuery.length > 1 && (
+                <div className="path-line">{t("Search by another title if nothing matches.")}</div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="admin-foot">

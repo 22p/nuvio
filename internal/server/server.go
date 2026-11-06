@@ -145,6 +145,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/libraries/{id}", s.handleRemoveLibrary)
 	mux.HandleFunc("POST /api/admin/scan", s.handleTriggerScan)
 	mux.HandleFunc("PUT /api/admin/settings", s.handleSettings)
+	mux.HandleFunc("GET /api/admin/metadata/unmatched", s.handleMetadataUnmatched)
+	mux.HandleFunc("GET /api/admin/metadata/search", s.handleMetadataSearch)
+	mux.HandleFunc("POST /api/admin/metadata/match", s.handleMetadataMatch)
 
 	for _, prefix := range []string{"/Users/", "/UserItems/", "/UserPlayedItems/", "/UserFavoriteItems/",
 		"/Items", "/Items/", "/Videos/", "/videos/", "/Sessions/", "/System/", "/Shows/", "/Search/", "/Branding/",
@@ -627,6 +630,120 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		"users":        userOut,
 		"settings":     s.Store.Settings(),
 	})
+}
+
+// metadataEnricher returns an enricher for the configured TMDb key, or nil
+// when metadata lookups are not available.
+func (s *Server) metadataEnricher() *metadata.Enricher {
+	settings := s.Store.Settings()
+	key := settings.TMDBAPIKey
+	if key == "" {
+		key = os.Getenv("NUVIO_TMDB_API_KEY")
+	}
+	if key == "" {
+		return nil
+	}
+	return metadata.New(key, settings.MetadataLanguage)
+}
+
+// handleMetadataUnmatched lists movies and series that no TMDb entry was
+// matched to, so an administrator can pick the right one by hand.
+func (s *Server) handleMetadataUnmatched(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	type row struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Type string `json:"type"`
+		Year int    `json:"year,omitempty"`
+	}
+	out := make([]row, 0)
+	for _, it := range s.Catalog.All() {
+		if it.Demo || it.TMDBID > 0 {
+			continue
+		}
+		if it.Type != model.TypeMovie && it.Type != model.TypeSeries {
+			continue
+		}
+		out = append(out, row{ID: it.ID, Name: it.Name, Type: it.Type, Year: it.Year})
+		if len(out) >= 200 {
+			break
+		}
+	}
+	writeJSON(w, 200, map[string]any{"items": out, "total": len(out)})
+}
+
+func (s *Server) handleMetadataSearch(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if len([]rune(query)) < 2 {
+		writeJSON(w, 400, map[string]any{"error": "Enter at least two characters"})
+		return
+	}
+	enricher := s.metadataEnricher()
+	if enricher == nil {
+		writeJSON(w, 400, map[string]any{"error": "TMDb API key is not configured"})
+		return
+	}
+	results, err := enricher.Search(r.Context(), query)
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"error": "TMDb lookup failed: " + err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"results": results})
+}
+
+func (s *Server) handleMetadataMatch(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	var body struct {
+		ItemID string `json:"itemId"`
+		TmdbID int    `json:"tmdbId"`
+		Type   string `json:"type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ItemID == "" || body.TmdbID <= 0 {
+		writeJSON(w, 400, map[string]any{"error": "itemId and tmdbId are required"})
+		return
+	}
+	it, ok := s.Catalog.Get(body.ItemID)
+	if !ok {
+		writeJSON(w, 404, map[string]any{"error": "Item does not exist"})
+		return
+	}
+	if body.Type != "" && body.Type != kindOfItemType(it.Type) {
+		writeJSON(w, 400, map[string]any{"error": "The chosen entry does not match this item type"})
+		return
+	}
+	enricher := s.metadataEnricher()
+	if enricher == nil {
+		writeJSON(w, 400, map[string]any{"error": "TMDb API key is not configured"})
+		return
+	}
+	it.TMDBID = body.TmdbID
+	it.TMDBVersion = 0
+	it.MetadataLanguage = ""
+	if err := enricher.EnrichOne(r.Context(), it); err != nil {
+		writeJSON(w, 502, map[string]any{"error": "TMDb lookup failed: " + err.Error()})
+		return
+	}
+	if err := s.Store.ReplaceItems(s.Catalog.All()); err != nil {
+		writeJSON(w, 500, map[string]any{"error": "Could not save the match: " + err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"id": it.ID, "name": it.Name, "year": it.Year, "tmdbId": it.TMDBID,
+	})
+}
+
+func kindOfItemType(t string) string {
+	if t == model.TypeSeries {
+		return "tv"
+	}
+	return "movie"
 }
 
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {

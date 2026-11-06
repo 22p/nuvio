@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -221,6 +222,7 @@ type itemDTO struct {
 	IsHD                     bool              `json:"IsHD"`
 	MediaStreams             []mediaStreamDTO  `json:"MediaStreams,omitempty"`
 	Chapters                 []any             `json:"Chapters,omitempty"`
+	ProviderIds              map[string]string `json:"ProviderIds,omitempty"`
 	People                   []personDTO       `json:"People,omitempty"`
 	Studios                  []any             `json:"Studios,omitempty"`
 }
@@ -396,6 +398,16 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 		ParentBackdropImageTags: []string{},
 		LocationType:            "FileSystem",
 		UserData:                a.buildUserData(it, userID),
+	}
+	if it.TMDBID > 0 || it.IMDBID != "" {
+		ids := map[string]string{}
+		if it.TMDBID > 0 {
+			ids["Tmdb"] = strconv.Itoa(it.TMDBID)
+		}
+		if it.IMDBID != "" {
+			ids["Imdb"] = it.IMDBID
+		}
+		dto.ProviderIds = ids
 	}
 	if it.Demo {
 		dto.LocationType = "Virtual"

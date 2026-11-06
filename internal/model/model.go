@@ -69,6 +69,7 @@ type Item struct {
 	People       []Person `json:"people,omitempty"`
 
 	TMDBID           int    `json:"tmdbId,omitempty"`
+	IMDBID           string `json:"imdbId,omitempty"`
 	TMDBVersion      int    `json:"tmdbVersion,omitempty"`
 	MetadataSource   string `json:"metadataSource,omitempty"`
 	MetadataLanguage string `json:"metadataLanguage,omitempty"`

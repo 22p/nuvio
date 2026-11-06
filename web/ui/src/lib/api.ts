@@ -328,6 +328,36 @@ export const addLibrary = (name: string, type: string, paths: string[]) =>
 export const removeLibrary = (id: string) =>
   api<void>(`/api/admin/libraries/${id}`, { method: 'DELETE' })
 
+export interface UnmatchedItem {
+  id: string
+  name: string
+  type: string
+  year?: number
+}
+
+export interface MetadataCandidate {
+  id: number
+  type: string
+  title: string
+  year: number
+  overview: string
+  poster?: string
+}
+
+export const getUnmatchedMetadata = () =>
+  api<{ items: UnmatchedItem[]; total: number }>('/api/admin/metadata/unmatched')
+
+export const searchMetadata = (query: string) =>
+  api<{ results: MetadataCandidate[] }>(
+    `/api/admin/metadata/search?query=${encodeURIComponent(query)}`,
+  )
+
+export const matchMetadata = (itemId: string, tmdbId: number, type: string) =>
+  api<{ id: string; name: string; year: number; tmdbId: number }>('/api/admin/metadata/match', {
+    method: 'POST',
+    body: JSON.stringify({ itemId, tmdbId, type }),
+  })
+
 export const saveServerSettings = (settings: Record<string, unknown>) =>
   api<Record<string, unknown>>('/api/admin/settings', {
     method: 'PUT',

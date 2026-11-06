@@ -237,3 +237,36 @@ func TestScanHonoursIgnoreFiles(t *testing.T) {
 		t.Fatalf("series = %v, want only Keep", names)
 	}
 }
+
+func TestProviderIDsFromNames(t *testing.T) {
+	cases := []struct {
+		name string
+		tmdb int
+		imdb string
+	}{
+		{"Movie.Name.2020.1080p{tmdb-603}", 603, ""},
+		{"[imdb-tt0133093] The Matrix", 0, "tt0133093"},
+		{"Show [tmdbid=1399] S01", 1399, ""},
+		{"No ids here", 0, ""},
+	}
+	for _, c := range cases {
+		tmdb, imdb := providerIDs(c.name)
+		if tmdb != c.tmdb || imdb != c.imdb {
+			t.Fatalf("%q -> %d %q", c.name, tmdb, imdb)
+		}
+	}
+}
+
+func TestCleanTitleDropsReleaseNoise(t *testing.T) {
+	cases := map[string]string{
+		"Show.Name.S01E01.1080p.WEB-DL.x264-GROUP":           "Show Name S01E01",
+		"[Nekomoe kissaten] Mushoku Tensei [01][1080p][CHS]": "Mushoku Tensei",
+		"无职转生 第1季 简繁双语":                                      "无职转生",
+		"The.Matrix.1999.1080p.BluRay.x264":                  "The Matrix",
+	}
+	for in, want := range cases {
+		if got, _ := CleanTitle(in); got != want {
+			t.Fatalf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}

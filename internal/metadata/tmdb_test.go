@@ -280,3 +280,67 @@ func TestEnrichSkipsAlreadyEnriched(t *testing.T) {
 		t.Fatalf("second enrichment made %d extra requests", requests-before)
 	}
 }
+
+// A pinned TMDb id must win over the name, so odd file names and manual
+// matches survive rescans.
+func TestLookupUsesStoredIDs(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/movie/603", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("language") != "zh-CN" {
+			t.Errorf("details language = %q", r.URL.Query().Get("language"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 603, "title": "The Matrix", "original_title": "The Matrix",
+			"overview": "A hacker discovers reality.", "poster_path": "/poster.jpg",
+			"release_date": "1999-03-31", "vote_average": 8.2, "runtime": 136,
+		})
+	})
+	mux.HandleFunc("/movie/603/images", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"logos": []any{}})
+	})
+	mux.HandleFunc("/movie/603/credits", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"cast": []any{}})
+	})
+	mux.HandleFunc("/genre/movie/list", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"genres": []any{}})
+	})
+	mux.HandleFunc("/find/tt0133093", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"movie_results": []map[string]any{{"id": 603, "title": "The Matrix"}},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	e := New("key", "zh-CN")
+	e.BaseURL = server.URL
+	e.ImageBase = server.URL + "/img"
+
+	pinned := &model.Item{ID: "a", Type: model.TypeMovie, Name: "完全不对的名字", LibraryID: "lib", TMDBID: 603}
+	fromIMDB := &model.Item{ID: "b", Type: model.TypeMovie, Name: "another wrong name", LibraryID: "lib", IMDBID: "tt0133093"}
+	if err := e.Enrich(context.Background(), []*model.Item{pinned, fromIMDB}); err != nil {
+		t.Fatal(err)
+	}
+	if pinned.TMDBID != 603 || pinned.Name != "The Matrix" || pinned.RuntimeTicks != 0 {
+		t.Fatalf("pinned item = %+v", pinned)
+	}
+	if fromIMDB.TMDBID != 603 || fromIMDB.Name != "The Matrix" {
+		t.Fatalf("imdb item = %+v", fromIMDB)
+	}
+}
+
+func TestMatchScoreRejectsLookAlikes(t *testing.T) {
+	exact := searchResult{Title: "The Matrix", ReleaseDate: "1999-03-31"}
+	if got := matchScore("The Matrix", 1999, exact, 0); got < 9 {
+		t.Fatalf("exact score = %d", got)
+	}
+	sequel := searchResult{Title: "The Matrix Reloaded", ReleaseDate: "2003-05-15", Runtime: 138}
+	if got := matchScore("The Matrix", 1999, sequel, 136*60*10_000_000); got >= minMatchScore {
+		t.Fatalf("sequel accepted with score %d", got)
+	}
+	// A near name plus the right year is enough; the runtime adds confidence.
+	typo := searchResult{Title: "The Matrix", ReleaseDate: "1999-03-31", Runtime: 136}
+	if got := matchScore("The Matrx", 1999, typo, 136*60*10_000_000); got < minMatchScore {
+		t.Fatalf("near name rejected with score %d", got)
+	}
+}
