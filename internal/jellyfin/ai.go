@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"nuvio/internal/ai"
 	"nuvio/internal/media"
@@ -164,6 +165,8 @@ func (a *API) handleTranslateSubtitle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "AI is not configured")
 		return
 	}
+	// The whole track is translated in one request, which can take minutes.
+	client.HTTP.Timeout = 5 * time.Minute
 	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
 	if !ok || !canSeeItem(u, it) || it.Media == nil {
 		writeError(w, 404, "Item does not exist")
@@ -238,16 +241,12 @@ func parseIndex(s string) int {
 }
 
 // translateVTT translates the text lines of a WebVTT file, keeping cue timing
-// untouched. Cues are sent in small batches so a long film stays within the
-// model's context window.
+// untouched. The whole track is sent as one request; if the model truncates
+// the reply the batch is split in halves and retried, so a long film still
+// completes without a fixed 30-cue chunk size.
 func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (string, error) {
 	blocks := strings.Split(strings.ReplaceAll(vtt, "\r\n", "\n"), "\n\n")
-	type job struct {
-		block int
-		line  int
-		text  string
-	}
-	jobs := []job{}
+	jobs := []cueJob{}
 	for bi, block := range blocks {
 		lines := strings.Split(block, "\n")
 		timing := -1
@@ -264,37 +263,14 @@ func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (str
 			if strings.TrimSpace(lines[i]) == "" {
 				continue
 			}
-			jobs = append(jobs, job{block: bi, line: i, text: lines[i]})
+			jobs = append(jobs, cueJob{block: bi, line: i, text: lines[i]})
 		}
 	}
 	if len(jobs) == 0 {
 		return "", fmt.Errorf("subtitle has no text")
 	}
-	for start := 0; start < len(jobs); start += 30 {
-		end := start + 30
-		if end > len(jobs) {
-			end = len(jobs)
-		}
-		payload := map[string]string{}
-		for i := start; i < end; i++ {
-			payload[fmt.Sprintf("%d", i)] = jobs[i].text
-		}
-		raw, _ := json.Marshal(payload)
-		reply, err := client.Chat(ctx,
-			"You translate subtitles. Keep names, tone and line breaks. Reply with JSON only: an object with the same keys and the translated text as values.",
-			"Target language: "+lang+"\n"+string(raw), true)
-		if err != nil {
-			return "", fmt.Errorf("translation failed: %w", err)
-		}
-		var out map[string]string
-		if err := json.Unmarshal([]byte(stripJSONFence(reply)), &out); err != nil {
-			return "", fmt.Errorf("translation reply was not valid JSON")
-		}
-		for i := start; i < end; i++ {
-			if translated := strings.TrimSpace(out[fmt.Sprintf("%d", i)]); translated != "" {
-				jobs[i].text = translated
-			}
-		}
+	if err := translateJobs(ctx, client, jobs, lang); err != nil {
+		return "", err
 	}
 	for _, j := range jobs {
 		lines := strings.Split(blocks[j.block], "\n")
@@ -302,6 +278,56 @@ func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (str
 		blocks[j.block] = strings.Join(lines, "\n")
 	}
 	return strings.Join(blocks, "\n\n"), nil
+}
+
+type cueJob struct {
+	block int
+	line  int
+	text  string
+}
+
+// translateJobs sends one contiguous run of cues. A malformed or truncated
+// JSON reply is retried in two halves, down to a single cue.
+func translateJobs(ctx context.Context, client *ai.Client, jobs []cueJob, lang string) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	payload := make(map[string]string, len(jobs))
+	for i := range jobs {
+		payload[fmt.Sprintf("%d", i)] = jobs[i].text
+	}
+	raw, _ := json.Marshal(payload)
+	// Leave room for the JSON envelope and for languages that expand.
+	maxTokens := len(jobs)*48 + 512
+	if maxTokens < 4096 {
+		maxTokens = 4096
+	}
+	if maxTokens > 16000 {
+		maxTokens = 16000
+	}
+	reply, err := client.ChatWith(ctx,
+		"You translate subtitles. Keep names, tone and line breaks. Reply with JSON only: an object with the same keys and the translated text as values.",
+		"Target language: "+lang+"\n"+string(raw), true, maxTokens, true)
+	if err != nil {
+		return fmt.Errorf("translation failed: %w", err)
+	}
+	var out map[string]string
+	if err := json.Unmarshal([]byte(stripJSONFence(reply)), &out); err != nil {
+		if len(jobs) > 1 {
+			mid := len(jobs) / 2
+			if err := translateJobs(ctx, client, jobs[:mid], lang); err != nil {
+				return err
+			}
+			return translateJobs(ctx, client, jobs[mid:], lang)
+		}
+		return fmt.Errorf("translation reply was not valid JSON")
+	}
+	for i := range jobs {
+		if translated := strings.TrimSpace(out[fmt.Sprintf("%d", i)]); translated != "" {
+			jobs[i].text = translated
+		}
+	}
+	return nil
 }
 
 func stripJSONFence(s string) string {

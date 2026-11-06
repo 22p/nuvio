@@ -47,6 +47,14 @@ type chatRequest struct {
 	Messages       []message       `json:"messages"`
 	Temperature    float64         `json:"temperature"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+	MaxTokens      int             `json:"max_tokens,omitempty"`
+	Thinking       *thinkingField  `json:"thinking,omitempty"`
+}
+
+// thinkingField is DeepSeek's switch. Other OpenAI-compatible servers ignore
+// unknown fields, and the retry below drops it if one rejects the request.
+type thinkingField struct {
+	Type string `json:"type"`
 }
 
 type responseFormat struct {
@@ -66,6 +74,12 @@ type chatResponse struct {
 
 // Chat sends a system and a user message and returns the reply text.
 func (c *Client) Chat(ctx context.Context, system, user string, jsonMode bool) (string, error) {
+	return c.ChatWith(ctx, system, user, jsonMode, 0, false)
+}
+
+// ChatWith is Chat with an output budget and an option to skip the model's
+// reasoning pass, which matters for bulk tasks such as translating subtitles.
+func (c *Client) ChatWith(ctx context.Context, system, user string, jsonMode bool, maxTokens int, disableThinking bool) (string, error) {
 	if !c.Available() {
 		return "", fmt.Errorf("AI is not configured")
 	}
@@ -80,13 +94,21 @@ func (c *Client) Chat(ctx context.Context, system, user string, jsonMode bool) (
 	if jsonMode {
 		body.ResponseFormat = &responseFormat{Type: "json_object"}
 	}
+	if maxTokens > 0 {
+		body.MaxTokens = maxTokens
+	}
+	if disableThinking {
+		body.Thinking = &thinkingField{Type: "disabled"}
+	}
 	out, status, err := c.post(ctx, "/chat/completions", body)
 	if err != nil {
 		return "", err
 	}
-	// Not every compatible endpoint accepts response_format.
-	if status == http.StatusBadRequest && jsonMode {
+	// Not every compatible endpoint accepts response_format or the DeepSeek
+	// thinking switch, so retry without the optional fields once.
+	if status == http.StatusBadRequest && (jsonMode || disableThinking) {
 		body.ResponseFormat = nil
+		body.Thinking = nil
 		out, status, err = c.post(ctx, "/chat/completions", body)
 		if err != nil {
 			return "", err
