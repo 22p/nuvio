@@ -65,6 +65,7 @@ var (
 	imdbIDRe       = regexp.MustCompile(`(?i)(?:imdb|imdbid)[-=: ]?(tt\d{6,10})`)
 	cjkNoiseRe     = regexp.MustCompile(`(?i)(简繁|繁简|简中|繁中|简英|双语|内嵌|外挂|合集|全\s*\d+\s*[集话話]|第\s*[0-9一二三四五六七八九十百]+\s*[季部篇])`)
 	releaseGroupRe = regexp.MustCompile(`[-@][A-Za-z0-9]{2,12}$`)
+	extraMarkerRe  = regexp.MustCompile(`(?i)^(pv|cm|spot|trailer|teaser|menu|short|ncop|nced|sp|sps|ova|oad|special|tokuten|bonus)$`)
 )
 
 // extraKinds maps the usual extras folder names to the Jellyfin extra type.
@@ -343,6 +344,9 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 		}
 		seriesID := agg.id
 		seriesByDir[agg.dir] = seriesID
+		// Extras often live next to the episodes (Show/Season 01/extras), so
+		// the season directory also points at the series.
+		seriesByDir[ve.dir] = seriesID
 		seasonID := md5hex(fmt.Sprintf("season:%s:%d", seriesID, season))
 		epName, epYear := episodeTitle(ve.base, season, episode)
 		if epYear == 0 {
@@ -497,6 +501,48 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 	return items, nil
 }
 
+// extraName picks a readable name for an extra. Release-style names keep all
+// their words inside brackets, which the usual cleaner drops, so fall back to
+// the meaningful markers (PV, CM, S01E01) instead of showing the whole name.
+func extraName(base string) string {
+	if name, _ := cleanTitleYear(base); name != "" && name != "Untitled" {
+		return name
+	}
+	var keep []string
+	for _, part := range bracketParts(base) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if extraMarkerRe.MatchString(part) || episodeRe.MatchString(part) || episodeRe2.MatchString(part) {
+			keep = append(keep, part)
+		}
+	}
+	if len(keep) > 0 {
+		return strings.Join(keep, " ")
+	}
+	return base
+}
+
+// bracketParts returns the contents of every [...] or (...) group.
+func bracketParts(s string) []string {
+	out := []string{}
+	for i := 0; i < len(s); i++ {
+		if s[i] != '[' && s[i] != '(' {
+			continue
+		}
+		closing := byte(']')
+		if s[i] == '(' {
+			closing = ')'
+		}
+		if j := strings.IndexByte(s[i+1:], closing); j >= 0 {
+			out = append(out, s[i+1:i+1+j])
+			i += j + 1
+		}
+	}
+	return out
+}
+
 // extrasOwner walks up to the extras folder a file belongs to and returns the
 // folder of the owning movie or series.
 func extrasOwner(dir, root string, dirs map[string]string) (string, string, bool) {
@@ -513,10 +559,7 @@ func extrasOwner(dir, root string, dirs map[string]string) (string, string, bool
 // extraItem describes a trailer or other extra. It is a child of the movie or
 // series so the library listing does not show it as a separate title.
 func (s *Scanner) extraItem(lib *model.Library, ve *videoEntry, parentID string) *model.Item {
-	name, _ := cleanTitleYear(ve.base)
-	if name == "" || name == "Untitled" {
-		name = ve.base
-	}
+	name := extraName(ve.base)
 	return &model.Item{
 		ID:           md5hex("extra:" + ve.path),
 		Type:         model.TypeVideo,

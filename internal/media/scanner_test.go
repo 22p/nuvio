@@ -316,3 +316,50 @@ func TestScanAttachesExtrasToTheirOwner(t *testing.T) {
 		t.Fatalf("extra types: %+v", kinds)
 	}
 }
+
+func TestScanAttachesSeasonExtrasToSeries(t *testing.T) {
+	root := t.TempDir()
+	show := filepath.Join(root, "Show Name")
+	season := filepath.Join(show, "Season 01")
+	for _, dir := range []string{"extras", "trailers"} {
+		if err := os.MkdirAll(filepath.Join(season, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTestFile(t, filepath.Join(season, "Show Name S01E01.mkv"), "")
+	writeTestFile(t, filepath.Join(season, "extras", "Bonus 01 - Tokuten.mkv"), "")
+	writeTestFile(t, filepath.Join(season, "trailers", "[Group][Show Name][PV][S01E02][1080P].mkv"), "")
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryShows, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var series *model.Item
+	var extras []*model.Item
+	for _, it := range items {
+		switch it.Type {
+		case model.TypeSeries:
+			series = it
+		case model.TypeVideo:
+			extras = append(extras, it)
+		}
+	}
+	if series == nil {
+		t.Fatalf("series missing: %+v", items)
+	}
+	if len(extras) != 2 {
+		t.Fatalf("extras = %+v", extras)
+	}
+	names := map[string]string{}
+	for _, e := range extras {
+		if e.ParentID != series.ID {
+			t.Fatalf("extra %q parent = %q, want %q", e.Name, e.ParentID, series.ID)
+		}
+		names[e.Name] = e.ExtraType
+	}
+	if names["PV S01E02"] != "Trailer" {
+		t.Fatalf("trailer name/type: %+v", names)
+	}
+}
