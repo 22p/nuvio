@@ -99,12 +99,14 @@ func buildUserDTO(u *model.User, serverID, serverName string) userDTO {
 		folders = []string{}
 	}
 	p := userPolicy{
-		IsAdministrator:                  u.IsAdmin,
-		IsDisabled:                       false,
-		EnableCollectionManagement:       u.IsAdmin,
-		EnableAllFolders:                 len(folders) == 0,
-		EnabledFolders:                   folders,
-		EnableContentDownloading:         true,
+		IsAdministrator:            u.IsAdmin,
+		IsDisabled:                 false,
+		EnableCollectionManagement: u.IsAdmin,
+		EnableAllFolders:           len(folders) == 0,
+		EnabledFolders:             folders,
+		// Downloads and offline sync are not implemented, so clients must not
+		// offer them. The subtitle flag stays on: subtitle files are served.
+		EnableContentDownloading:         false,
 		EnablePublicSharing:              false,
 		EnableRemoteAccess:               true,
 		EnableRemoteControlOfOtherUsers:  u.IsAdmin,
@@ -116,7 +118,7 @@ func buildUserDTO(u *model.User, serverID, serverName string) userDTO {
 		EnableMediaConversion:            u.AllowTranscode,
 		EnableContentDeletion:            u.IsAdmin,
 		EnableContentDeletionFromFolders: []string{},
-		EnableSyncTranscoding:            true,
+		EnableSyncTranscoding:            false,
 		EnableSubtitleManagement:         true,
 		EnableSubtitleDownloading:        true,
 		EnableLyricManagement:            false,
@@ -389,7 +391,7 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 		Size:                    it.Size,
 		Path:                    it.Path,
 		PlayAccess:              "Full",
-		CanDownload:             it.Media != nil,
+		CanDownload:             false,
 		SeriesId:                it.SeriesID,
 		SeriesName:              it.SeriesName,
 		SeasonId:                it.SeasonID,
