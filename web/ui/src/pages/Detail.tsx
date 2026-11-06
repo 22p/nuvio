@@ -7,6 +7,7 @@ import {
   getNextUp,
   getSeasons,
   getSimilar,
+  getSpecialFeatures,
   imageUrl,
   setFavorite,
   setPlayed,
@@ -42,6 +43,7 @@ export function DetailPage() {
   const [allEpisodes, setAllEpisodes] = useState<JFItem[]>([])
   const [seasonId, setSeasonId] = useState('')
   const [similar, setSimilar] = useState<JFItem[]>([])
+  const [extras, setExtras] = useState<JFItem[]>([])
   const [nextTarget, setNextTarget] = useState<JFItem | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -54,6 +56,7 @@ export function DetailPage() {
     setSeasons([])
     setAllEpisodes([])
     setSimilar([])
+    setExtras([])
     setNextTarget(null)
     const userId = session?.user.Id
     if (!userId) return
@@ -93,6 +96,13 @@ export function DetailPage() {
           setNextTarget(it)
         }
 
+        if (it.Type === 'Movie' || it.Type === 'Series') {
+          getSpecialFeatures(userId, it.Id)
+            .then((res) => {
+              if (alive) setExtras(res || [])
+            })
+            .catch(() => {})
+        }
         if (it.Type !== 'Season' && it.Type !== 'Episode') {
           getSimilar(userId, it.Id)
             .then((res) => {
@@ -344,6 +354,36 @@ export function DetailPage() {
                 </div>
               </>
             )}
+          </section>
+        )}
+
+        {extras.length > 0 && (
+          <section className="episodes-section">
+            <div className="section-head">
+              <h2>{t("Extras")}</h2>
+              <span className="muted">{extras.length}</span>
+            </div>
+            <div className="episode-list">
+              {extras.map((extra) => (
+                <div className="episode-row" key={extra.Id}>
+                  <button className="episode-main" onClick={() => navigate(`/watch/${extra.Id}`)}>
+                    <div className="episode-thumb">
+                      <img src={imageUrl(extra.Id, 'Primary', 480)} alt="" loading="lazy" />
+                      <span className="episode-play">
+                        <IconPlay size={15} />
+                      </span>
+                    </div>
+                    <div className="episode-info">
+                      <div className="episode-top">
+                        <span className="episode-title">{extra.Name}</span>
+                        <span className="episode-runtime">{formatRuntime(extra.RunTimeTicks, true)}</span>
+                      </div>
+                      <p>{extra.ExtraType === 'Trailer' ? t("Trailer") : t("Extras")}</p>
+                    </div>
+                  </button>
+                </div>
+              ))}
+            </div>
           </section>
         )}
 

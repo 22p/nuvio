@@ -86,6 +86,7 @@ export interface JFItem {
   People?: Person[]
   Container?: string
   Path?: string
+  ExtraType?: string
   LocationType?: string
   IsFolder?: boolean
   Size?: number

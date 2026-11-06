@@ -36,6 +36,10 @@ type videoEntry struct {
 	modTime time.Time
 	media   model.MediaInfo
 	subs    []model.Subtitle
+	// extra is the Jellyfin extra type when the file sits in a trailers or
+	// extras folder; parent is the folder of the owning movie or series.
+	extra  string
+	parent string
 }
 
 type artSet struct {
@@ -63,10 +67,24 @@ var (
 	releaseGroupRe = regexp.MustCompile(`[-@][A-Za-z0-9]{2,12}$`)
 )
 
+// extraKinds maps the usual extras folder names to the Jellyfin extra type.
+// Files below them belong to the movie or series that contains the folder.
+var extraKinds = map[string]string{
+	"trailers":          "Trailer",
+	"extras":            "Other",
+	"featurettes":       "Featurette",
+	"behind the scenes": "BehindTheScenes",
+	"deleted scenes":    "DeletedScene",
+	"interviews":        "Interview",
+	"scenes":            "Scene",
+	"shorts":            "Short",
+	"bonus":             "Other",
+}
+
 var skipDirs = map[string]bool{
 	"@eaDir": true, "#recycle": true, "lost+found": true, "$RECYCLE.BIN": true,
 	"System Volume Information": true, "node_modules": true, ".git": true,
-	"transcodes": true, "cache": true, "extras": true, "featurettes": true,
+	"transcodes": true, "cache": true,
 }
 
 // Scan reads every video below lib.Paths.
@@ -76,6 +94,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 	imagesByDir := map[string]map[string]string{}
 	subsByDir := map[string][]string{}
 	ignoreRules := map[string][]ignoreRule{}
+	extraDirs := map[string]string{}
 	seen := map[string]bool{}
 
 	for _, root := range lib.Paths {
@@ -100,6 +119,11 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			if d.IsDir() {
 				if path != root && (strings.HasPrefix(name, ".") || skipDirs[name]) {
 					return filepath.SkipDir
+				}
+				if path != root {
+					if kind, ok := extraKinds[strings.ToLower(strings.TrimSpace(name))]; ok {
+						extraDirs[path] = kind
+					}
 				}
 				// Jellyfin compatible .ignore: an empty file excludes the whole
 				// directory, a non-empty one lists files/subfolders to skip.
@@ -175,6 +199,15 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 				ve.size = info.Size()
 				ve.modTime = info.ModTime()
 			}
+			if kind, owner, ok := extrasOwner(dir, root, extraDirs); ok {
+				// Extras that sit directly below the library root have no
+				// movie or series to belong to.
+				if owner != root {
+					ve.extra, ve.parent = kind, owner
+				} else {
+					return nil
+				}
+			}
 			videos = append(videos, ve)
 			return nil
 		})
@@ -223,8 +256,22 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 
 	var items []*model.Item
 	if lib.Type == model.LibraryMovies {
+		byDir := map[string]string{}
 		for _, ve := range videos {
-			items = append(items, s.movieItem(lib, ve, artByDir, rootSet))
+			if ve.extra != "" {
+				continue
+			}
+			it := s.movieItem(lib, ve, artByDir, rootSet)
+			items = append(items, it)
+			byDir[ve.dir] = it.ID
+		}
+		for _, ve := range videos {
+			if ve.extra == "" {
+				continue
+			}
+			if parentID, ok := byDir[ve.parent]; ok {
+				items = append(items, s.extraItem(lib, ve, parentID))
+			}
 		}
 		return items, nil
 	}
@@ -245,8 +292,12 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 		nfo       *nfoData
 	}
 	groups := map[string]*seriesAgg{}
+	seriesByDir := map[string]string{}
 	var movies []*videoEntry
 	for _, ve := range videos {
+		if ve.extra != "" {
+			continue
+		}
 		season, episode, ok := parseEpisode(ve.base, ve.dir)
 		if !ok {
 			if lib.Type == model.LibraryShows {
@@ -291,6 +342,7 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 			episode = len(agg.seasons[season]) + 1
 		}
 		seriesID := agg.id
+		seriesByDir[agg.dir] = seriesID
 		seasonID := md5hex(fmt.Sprintf("season:%s:%d", seriesID, season))
 		epName, epYear := episodeTitle(ve.base, season, episode)
 		if epYear == 0 {
@@ -427,6 +479,14 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 	for _, ve := range movies {
 		items = append(items, s.movieItem(lib, ve, artByDir, rootSet))
 	}
+	for _, ve := range videos {
+		if ve.extra == "" {
+			continue
+		}
+		if parentID, ok := seriesByDir[ve.parent]; ok {
+			items = append(items, s.extraItem(lib, ve, parentID))
+		}
+	}
 
 	// Assign stable, unique sort keys and durations.
 	for _, it := range items {
@@ -435,6 +495,44 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 		}
 	}
 	return items, nil
+}
+
+// extrasOwner walks up to the extras folder a file belongs to and returns the
+// folder of the owning movie or series.
+func extrasOwner(dir, root string, dirs map[string]string) (string, string, bool) {
+	for d := dir; ; d = filepath.Dir(d) {
+		if kind, ok := dirs[d]; ok {
+			return kind, filepath.Dir(d), true
+		}
+		if d == root || filepath.Dir(d) == d {
+			return "", "", false
+		}
+	}
+}
+
+// extraItem describes a trailer or other extra. It is a child of the movie or
+// series so the library listing does not show it as a separate title.
+func (s *Scanner) extraItem(lib *model.Library, ve *videoEntry, parentID string) *model.Item {
+	name, _ := cleanTitleYear(ve.base)
+	if name == "" || name == "Untitled" {
+		name = ve.base
+	}
+	return &model.Item{
+		ID:           md5hex("extra:" + ve.path),
+		Type:         model.TypeVideo,
+		Name:         name,
+		SortName:     model.SortName(name),
+		LibraryID:    lib.ID,
+		ParentID:     parentID,
+		ExtraType:    ve.extra,
+		Path:         ve.path,
+		Container:    ve.media.Container,
+		Size:         ve.size,
+		AddedAt:      ve.modTime,
+		Media:        &ve.media,
+		RuntimeTicks: ve.media.DurationTicks,
+		ArtSeed:      md5hex("art:" + ve.path),
+	}
 }
 
 func (s *Scanner) movieItem(lib *model.Library, ve *videoEntry, artByDir map[string]*artSet, roots map[string]bool) *model.Item {

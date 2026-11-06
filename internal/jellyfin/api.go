@@ -992,6 +992,12 @@ func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
 	if len(q.Types) == 0 && q.ParentID == "" {
 		q.Types = []string{model.TypeMovie, model.TypeSeries, model.TypeSeason, model.TypeEpisode}
 	}
+	// Trailers and other extras hang off their movie or series and are read
+	// through SpecialFeatures. A recursive browse without an explicit type
+	// filter must not list them as separate titles.
+	if len(q.Types) == 0 {
+		q.ExcludeTypes = append(q.ExcludeTypes, model.TypeVideo)
+	}
 	playedIDs := a.Store.PlayedIDs(u.ID)
 	favIDs := a.Store.FavoriteIDs(u.ID)
 	resume := a.Store.Resumable(u.ID)
@@ -1288,6 +1294,28 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, 404, "Item does not exist")
+}
+
+// handleSpecialFeatures lists the trailers and extras that were scanned from
+// the trailers/extras folders of a movie or series.
+func (a *API) handleSpecialFeatures(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
+	if !ok {
+		return
+	}
+	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
+	if !ok || !canSeeItem(u, it) {
+		writeError(w, 404, "Item does not exist")
+		return
+	}
+	out := []itemDTO{}
+	for _, child := range a.Catalog.Children(it.ID) {
+		if child.Type != model.TypeVideo {
+			continue
+		}
+		out = append(out, a.buildItem(child, u.ID, false, a.tokenFromRequest(r)))
+	}
+	writeJSON(w, 200, out)
 }
 
 func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {

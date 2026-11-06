@@ -429,4 +429,6 @@ export const ja: Record<string, string> = {
   'Could not save the match': '一致を保存できませんでした',
   'Search by another title if nothing matches.': '見つからない場合は別のタイトルで検索してください。',
   'Cancel': 'キャンセル',
+  'Extras': '特典',
+  'Trailer': '予告編',
 }

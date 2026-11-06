@@ -164,6 +164,9 @@ export const getEpisodes = (userId: string, seriesId: string, seasonId?: string)
 export const getSimilar = (userId: string, itemId: string) =>
   api<QueryResult<JFItem>>(`/Items/${itemId}/Similar?userId=${userId}`)
 
+export const getSpecialFeatures = (userId: string, itemId: string) =>
+  api<JFItem[]>(`/Items/${itemId}/SpecialFeatures?userId=${userId}`)
+
 export function searchItems(userId: string, term: string): Promise<QueryResult<JFItem>> {
   const q = new URLSearchParams({
     searchTerm: term,

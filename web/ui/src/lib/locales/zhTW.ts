@@ -429,4 +429,6 @@ export const zhTW: Record<string, string> = {
   'Could not save the match': '無法儲存比對',
   'Search by another title if nothing matches.': '找不到時換一個標題再搜尋。',
   'Cancel': '取消',
+  'Extras': '花絮',
+  'Trailer': '預告片',
 }

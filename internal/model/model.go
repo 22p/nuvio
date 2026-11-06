@@ -13,6 +13,7 @@ const (
 	TypeSeries  = "Series"
 	TypeSeason  = "Season"
 	TypeEpisode = "Episode"
+	TypeVideo   = "Video"
 )
 
 // Library types.
@@ -72,6 +73,7 @@ type Item struct {
 	IMDBID           string `json:"imdbId,omitempty"`
 	TMDBVersion      int    `json:"tmdbVersion,omitempty"`
 	MetadataSource   string `json:"metadataSource,omitempty"`
+	ExtraType        string `json:"extraType,omitempty"`
 	MetadataLanguage string `json:"metadataLanguage,omitempty"`
 }
 

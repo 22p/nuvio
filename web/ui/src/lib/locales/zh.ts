@@ -429,4 +429,6 @@ export const zh: Record<string, string> = {
   'Could not save the match': '无法保存匹配',
   'Search by another title if nothing matches.': '没找到时换一个标题再搜。',
   'Cancel': '取消',
+  'Extras': '花絮',
+  'Trailer': '预告片',
 }

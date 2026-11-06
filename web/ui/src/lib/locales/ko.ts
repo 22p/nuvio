@@ -429,4 +429,6 @@ export const ko: Record<string, string> = {
   'Could not save the match': '매칭을 저장할 수 없습니다',
   'Search by another title if nothing matches.': '찾지 못하면 다른 제목으로 검색하세요.',
   'Cancel': '취소',
+  'Extras': '부가 영상',
+  'Trailer': '예고편',
 }

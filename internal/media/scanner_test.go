@@ -270,3 +270,49 @@ func TestCleanTitleDropsReleaseNoise(t *testing.T) {
 		}
 	}
 }
+
+func TestScanAttachesExtrasToTheirOwner(t *testing.T) {
+	root := t.TempDir()
+	movieDir := filepath.Join(root, "Movie Name (2019)")
+	for _, dir := range []string{"trailers", "extras", filepath.Join("featurettes")} {
+		if err := os.MkdirAll(filepath.Join(movieDir, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTestFile(t, filepath.Join(movieDir, "Movie Name (2019).mkv"), "")
+	writeTestFile(t, filepath.Join(movieDir, "trailers", "Official Trailer.mkv"), "")
+	writeTestFile(t, filepath.Join(movieDir, "extras", "Behind The Scenes.mkv"), "")
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryMovies, Paths: []string{root}}
+	items, err := (&Scanner{}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var movie *model.Item
+	var extras []*model.Item
+	for _, it := range items {
+		switch it.Type {
+		case model.TypeMovie:
+			movie = it
+		case model.TypeVideo:
+			extras = append(extras, it)
+		}
+	}
+	if movie == nil {
+		t.Fatalf("movie missing: %+v", items)
+	}
+	if len(extras) != 2 {
+		t.Fatalf("extras = %+v", extras)
+	}
+	kinds := map[string]string{}
+	for _, e := range extras {
+		if e.ParentID != movie.ID {
+			t.Fatalf("extra parent = %q, want %q", e.ParentID, movie.ID)
+		}
+		kinds[e.Name] = e.ExtraType
+	}
+	if kinds["Official Trailer"] != "Trailer" || kinds["Behind The Scenes"] != "Other" {
+		t.Fatalf("extra types: %+v", kinds)
+	}
+}

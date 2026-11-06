@@ -166,6 +166,7 @@ Shows/
 - 背景图文件名：`fanart` / `backdrop` / `background`。
 - 字幕语言从后缀识别，如 `.zh.srt`、`.en.forced.srt`、`.zh-CN.ass`。
 - 没有图片时 Nuvio 会自动生成艺术封面；配置 TMDb 后优先使用在线海报（本地图片仍然优先）。
+- 花絮与预告片：电影或剧集目录下的 `trailers`、`extras`、`featurettes`、`behind the scenes`、`deleted scenes`、`interviews`、`scenes`、`shorts` 会作为该条目的花絮，在详情页「花絮」中列出并可播放；它们不会出现在片库列表或「最近添加」里。
 
 ## 转码与 ffmpeg
 
