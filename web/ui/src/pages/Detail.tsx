@@ -179,9 +179,13 @@ export function DetailPage() {
       ? item.SeriesId
         ? `/item/${item.SeriesId}`
         : '/'
-      : item.ParentId
-        ? `/library/${item.ParentId}`
-        : '/'
+      : item.Type === 'Video'
+        ? item.ParentId
+          ? `/item/${item.ParentId}`
+          : '/'
+        : item.ParentId
+          ? `/library/${item.ParentId}`
+          : '/'
   const goBack = () => {
     if (cameFromPlayer) navigate(parentPath)
     else navigate(-1)

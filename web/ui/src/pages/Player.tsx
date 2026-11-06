@@ -1105,6 +1105,10 @@ export function PlayerPage() {
     )
   }
 
+  // A trailer or extra is a child of its movie or series; going back to the
+  // extra's own detail page adds a meaningless stop before the real parent.
+  const detailsPath =
+    item.Type === 'Video' && item.ParentId ? `/item/${item.ParentId}` : `/item/${item.Id}`
   const title = item.Type === 'Episode' ? item.Name : item.Name
   const subtitle = item.Type === 'Episode'
     ? `${item.SeriesName} · ${episodeCode(item.ParentIndexNumber, item.IndexNumber)}`
@@ -1144,7 +1148,7 @@ export function PlayerPage() {
       <div className="player-shade bottom" />
 
       <header className="player-topbar">
-        <button className="glass-button" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })} aria-label={t("Back")}>
+        <button className="glass-button" onClick={() => navigate(detailsPath, { state: { fromPlayer: true } })} aria-label={t("Back")}>
           <IconBack size={20} />
         </button>
         <div className="player-heading">
@@ -1182,7 +1186,7 @@ export function PlayerPage() {
             <h2>{t("Playback problem")}</h2>
             <p>{t(error)}</p>
             <div className="player-error-actions">
-              <button className="btn btn-ghost" onClick={() => navigate(`/item/${item.Id}`, { state: { fromPlayer: true } })}>{t("Back to details")}</button>
+              <button className="btn btn-ghost" onClick={() => navigate(detailsPath, { state: { fromPlayer: true } })}>{t("Back to details")}</button>
               <button
                 className="btn btn-primary"
                 onClick={() => {
