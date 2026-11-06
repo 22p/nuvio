@@ -12,8 +12,8 @@
 - **Jellyfin 兼容接口**：按 Jellyfin 12.4.0 接口实现登录、用户视图（`/UserViews`）、媒体库浏览（`/Items`）、最近添加（`/Items/Latest`）、继续观看（`/UserItems/Resume`）、搜索、详情、图片、`PlaybackInfo`、直连串流（HTTP Range）、HLS 转码、外挂字幕、播放进度上报、已看/收藏（`/UserPlayedItems`、`/UserFavoriteItems`）、`/Genres`、`/Persons` 与显示偏好持久化。
 - **媒体扫描**：电影目录、剧集 `Show/Season 01/S01E01`、扁平目录、电影/剧集混合库；从文件名解析标题与年份。读取同目录下的 `movie.nfo` / `剧集名.nfo`（标题、简介、评分、分级、类型、演员）以及 `folder.jpg`、`backdrop.jpg`、`landscape.jpg`、`logo.png`，本地元数据与图片优先于在线数据。扫描结果写入 SQLite，重启后直接读取，不会重复扫描。
 - **在线元数据（可选）**：填写 TMDb API Key 后，重新扫描会补全标题、海报、背景图、标题 logo、简介、评分、类型与演员表；剧集海报和演员会继承给季和单集，单集会补全剧照、简介和播出日期，图片经服务器代理并缓存到磁盘。
-- **字幕**：自动发现同名字幕 `.srt` / `.vtt` / `.ass` / `.ssa`，统一转换为 WebVTT；ffmpeg 可提取内嵌字幕；支持语言、字号、颜色、背景、描边等偏好。
-- **播放**：浏览器兼容格式直连播放；容器不兼容但编码兼容（H.264 + AAC/MP3）时优先**转封装**（`-c copy`，不重新编码）；只有编码或码率不兼容时才转码为 HLS（输出编码可选 H.264、HEVC、AV1、VP9）。可选用 VAAPI（Intel / AMD）或 QSV（Intel）硬件解码与编码，失败自动回退软件。播放器支持音轨切换、字幕、0.5×–2× 倍速，以及实时播放信息（源/输出分辨率、编解码器、帧率、码率、缓冲、丢帧、HLS 档位、会话）。
+- **字幕**：自动发现同名字幕 `.srt` / `.vtt` / `.ass` / `.ssa`；网页播放器统一按 WebVTT 渲染，外挂 ASS/SSA 同时以原格式提供给支持 libass 的客户端；ffmpeg 可提取内嵌字幕；支持语言、字号、颜色、背景、描边等偏好，并可在播放器里以 0.1 秒为步长微调时间轴（按条目记忆）。
+- **播放**：浏览器兼容格式直连播放；容器不兼容但编码兼容（视频 H.264 / HEVC / AV1 / VP9，音频 AAC 或客户端支持的 AC-3 / E-AC-3 / FLAC / Opus）时优先**转封装**（`-c copy`，视频不重新编码）；只有编码或码率不兼容时才转码为 HLS（输出编码可选 H.264、HEVC、AV1、VP9）。可选用 VAAPI（Intel / AMD）或 QSV（Intel）硬件解码与编码，失败自动回退软件。播放器支持音轨切换、字幕与时间轴微调、0.5×–2× 倍速，以及实时播放信息（源/输出分辨率、编解码器、帧率、码率、缓冲、丢帧、HLS 档位、会话）。
 - **账户与权限**：管理员/普通用户、PBKDF2-SHA256 密码哈希、持久化访问令牌；独立「用户」页面可为每个账号设置可见媒体库、转码、转封装，并支持重置密码与删除账号。设置页的「登录设备」会记录每个令牌的设备名、客户端、IP 与最近活跃时间，可撤销其他设备——被撤销的设备需要重新登录，当前设备保留。
 - **自生成封面**：没有海报的条目会生成确定性的抽象封面与背景图，媒体库开箱即用。
 - **SQLite 存储**：用户、令牌、媒体库、片库索引与观看进度统一存放在 `data/nuvio.db`（WAL 模式，纯 Go 驱动，无需 CGO）。
@@ -21,7 +21,7 @@
 
 ## 快速开始
 
-要求：Go 1.24+；构建 Web 界面需要 Node.js 20+。播放时可选安装 `ffmpeg` / `ffprobe`。
+要求：Go 1.27+；构建 Web 界面需要 Node.js 20+。播放时可选安装 `ffmpeg` / `ffprobe`。
 
 ```bash
 make build          # 安装前端依赖、构建 Web、编译单文件二进制
@@ -36,7 +36,7 @@ make build          # 安装前端依赖、构建 Web、编译单文件二进制
 
 首次打开网页会进入初始化页，创建管理员账号后即可进入内置演示片库。
 
-界面语言可在设置页切换。管理员还可以打开 `http://localhost:8096/users` 管理账号与权限；旧的 `/settings#users` 会自动跳转到该页面。
+界面语言可在设置页切换。管理员还可以打开 `http://localhost:8096/users` 管理账号与权限。
 
 开发模式：
 
@@ -51,6 +51,49 @@ cd web/ui && npm run dev                # 终端 2（默认代理到 :8096）
 docker build -t nuvio .
 docker run -d --name nuvio -p 8096:8096 -v nuvio-data:/data nuvio
 ```
+
+### Podman（Quadlet）
+
+rootless 放在 `~/.config/containers/systemd/nuvio.container`，系统级放在 `/etc/containers/systemd/`：
+
+```ini
+# ~/.config/containers/systemd/nuvio.container
+[Unit]
+Description=Nuvio media server
+
+[Container]
+Image=ghcr.io/22p/nuvio:latest
+ContainerName=nuvio
+AutoUpdate=registry
+Environment=TZ=Asia/Shanghai
+AddDevice=/dev/dri:/dev/dri
+Volume=nuvio:/data
+#Tmpfs=/data/transcode:rw,size=4g
+#Volume=/opt/data:/video:ro,z
+PublishPort=8096:8096
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now nuvio   # 系统级去掉 --user，改用 sudo
+```
+
+- `Volume=nuvio:/data` 是命名卷。媒体目录用 `Volume=/opt/data:/video:ro,z` 挂进来后，在网页里把媒体库路径填 `/video`；SELinux 发行版上的 bind mount 需要 `:z`（共享）或 `:Z`（独占）。
+- 转码缓存默认写在 `/data/transcode`。想单独用一块盘，直接嵌套挂载即可，Podman 会按容器内路径深度先挂父再挂子：
+
+  ```ini
+  Volume=/mnt/nvme/nuvio-cache:/data/transcode
+  ```
+
+  同时要在 `[Unit]` 里加 `RequiresMountsFor=/mnt/nvme/nuvio-cache`，否则盘还没就绪时缓存会落进数据卷。
+- `Tmpfs=/data/transcode:rw,size=4g` 可以完全不写盘，但 remux 会把整片切成 fMP4，4g 对高码率单集可能不够，按单集大小留余量或改用独立卷。
+- rootless 下访问 `/dev/dri` 需要当前用户在 `render`（部分发行版是 `video`）组里。
 
 ### 硬件转码（VAAPI / QSV）
 
@@ -128,12 +171,13 @@ Shows/
 
 直连播放永远优先。客户端无法直接播放时按以下顺序降级：
 
-1. **转封装**：视频为 H.264、音频为 AAC/MP3，只是容器不被客户端支持（如 MKV）时，用 `-c copy` 直接打成 HLS，几乎不占 CPU，画质无损。
-2. **转码**：编码或码率不兼容时，用 ffmpeg 重新编码为 H.264 + AAC 的 HLS。
+1. **转封装**：视频为 H.264 / HEVC / AV1 / VP9，音频为 AAC 或客户端支持的 AC-3 / E-AC-3 / FLAC / Opus，只是容器不被客户端支持（如 MKV）时，用 `-c copy` 打成 fMP4 HLS，视频画质无损；音频不被支持时只把音频转成 AAC，视频仍不重编码。
+2. **转码**：编码或码率不兼容时，用 ffmpeg 重新编码为 HLS（视频可选 H.264 / HEVC / AV1 / VP9，音频 AAC）。
 
 转码相关行为：
 
-- 自动选择可用的 H.264 编码器：`libx264` → `libopenh264` → `h264_v4l2m2m`。
+- 自动选择可用的 H.264 编码器：`libx264` → `libopenh264` → `h264_v4l2m2m`；其他输出编码使用所选硬件编码器，没有可用硬件时回退对应软件编码器。
+- 转封装只能从关键帧开始复制，因此会话从文件开头生成，播放器加载后自己跳到续播位置；缓存占用约等于片源大小。
 - 服务端默认码率、编码预设可在「设置 → 服务器」中修改；转码与转封装也可分别全局关闭。
 - 安装方式：`apt install ffmpeg` / `dnf install ffmpeg-free` / `brew install ffmpeg`。
 - 也可以通过 `NUVIO_FFMPEG`、`NUVIO_FFPROBE` 环境变量或设置页填写绝对路径。
@@ -166,7 +210,7 @@ Shows/
 
 ## 安全说明
 
-- 密码使用 PBKDF2-HMAC-SHA256（210,000 次迭代）加盐哈希；数据库文件 `data/nuvio.db` 以 `0600` 权限写入。
+- 密码使用 PBKDF2-HMAC-SHA256（210,000 次迭代）加盐哈希；用户、令牌与观看进度都存放在 `data/nuvio.db`，部署时应限制数据目录的访问权限。
 - Nuvio 本身只提供 HTTP。若要从公网访问，请放在 Caddy/Nginx 后并启用 HTTPS。
 - 关闭「首次运行」后没有注册入口；新增账号只能由管理员在设置页创建。
 - `/users` 页面可以为每个账号勾选可见媒体库、允许转码、允许转封装；禁用后服务器不会为该账号启动对应的 ffmpeg 任务。
@@ -180,7 +224,7 @@ internal/server     路由、扫描编排、管理 API、SPA
 internal/jellyfin   Jellyfin 兼容 API、播放决策、HLS/字幕/图片
 internal/catalog    内存目录与查询
 internal/media      扫描、探测、字幕转换
-internal/hls        ffmpeg 转码会话
+internal/hls        ffmpeg 转码 / 转封装会话
 internal/store       SQLite：用户/令牌/媒体库/片库索引/进度
 internal/metadata    TMDb 元数据补全
 internal/demo       内置演示内容
