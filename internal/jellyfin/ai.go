@@ -2,7 +2,6 @@ package jellyfin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,8 +9,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"nuvio/internal/ai"
 	"nuvio/internal/media"
@@ -240,14 +241,51 @@ func parseIndex(s string) int {
 	return n
 }
 
-// translateVTT translates the text lines of a WebVTT file, keeping cue timing
-// untouched. The whole track is sent as one request; if the model truncates
-// the reply the batch is split in halves and retried, so a long film still
-// completes without a fixed 30-cue chunk size.
+var (
+	assTagRe     = regexp.MustCompile(`\{\\[^}]*\}`)
+	vttTagRe     = regexp.MustCompile(`<[^>]{1,40}>`)
+	translatedRe = regexp.MustCompile(`^\s*(\d+)\|[^|]*\|[^|]*\|(.*)$`)
+)
+
+// translateVTT translates a track in a compact line format:
+//
+//	1|321.2|323.5|Hello, how are you?
+//
+// Styling and positioning are dropped locally before the request and never
+// restored, so the result is plain WebVTT with the original timings.
 func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (string, error) {
+	cues := parseCues(vtt)
+	if len(cues) == 0 {
+		return "", fmt.Errorf("subtitle has no text")
+	}
+	if err := translateJobs(ctx, client, cues, lang); err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("WEBVTT\n")
+	for _, c := range cues {
+		if c.text == "" {
+			continue
+		}
+		b.WriteString("\n" + c.start + " --> " + c.end + "\n" + escapeVTTText(c.text) + "\n")
+	}
+	return b.String(), nil
+}
+
+type cueJob struct {
+	start    string
+	end      string
+	startSec float64
+	endSec   float64
+	text     string
+}
+
+// parseCues reads the timing of every cue and reduces its text to plain
+// characters: override blocks, HTML tags, entities and line breaks are gone.
+func parseCues(vtt string) []cueJob {
 	blocks := strings.Split(strings.ReplaceAll(vtt, "\r\n", "\n"), "\n\n")
-	jobs := []cueJob{}
-	for bi, block := range blocks {
+	out := []cueJob{}
+	for _, block := range blocks {
 		lines := strings.Split(block, "\n")
 		timing := -1
 		for i, line := range lines {
@@ -259,45 +297,66 @@ func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (str
 		if timing < 0 {
 			continue
 		}
-		for i := timing + 1; i < len(lines); i++ {
-			if strings.TrimSpace(lines[i]) == "" {
-				continue
-			}
-			jobs = append(jobs, cueJob{block: bi, line: i, text: lines[i]})
+		parts := strings.SplitN(lines[timing], "-->", 2)
+		start := strings.TrimSpace(parts[0])
+		end := strings.SplitN(strings.TrimSpace(parts[1]), " ", 2)[0]
+		text := cleanCueText(strings.Join(lines[timing+1:], " "))
+		if text == "" {
+			continue
 		}
+		startSec, endSec := parseTimestamp(start), parseTimestamp(end)
+		// A single character on screen for a fraction of a second is a
+		// karaoke syllable, not dialogue; the ASS converter drops most of
+		// them, and VTT sidecars need the same rule.
+		if duration := endSec - startSec; duration > 0 && duration < 0.4 && utf8.RuneCountInString(text) <= 1 {
+			continue
+		}
+		out = append(out, cueJob{
+			start: start, end: end,
+			startSec: startSec, endSec: endSec,
+			text: text,
+		})
 	}
-	if len(jobs) == 0 {
-		return "", fmt.Errorf("subtitle has no text")
-	}
-	if err := translateJobs(ctx, client, jobs, lang); err != nil {
-		return "", err
-	}
-	for _, j := range jobs {
-		lines := strings.Split(blocks[j.block], "\n")
-		lines[j.line] = j.text
-		blocks[j.block] = strings.Join(lines, "\n")
-	}
-	return strings.Join(blocks, "\n\n"), nil
+	return out
 }
 
-type cueJob struct {
-	block int
-	line  int
-	text  string
+// escapeVTTText keeps subtitle text from being read as WebVTT markup.
+func escapeVTTText(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
-// translateJobs sends one contiguous run of cues. A malformed or truncated
-// JSON reply is retried in two halves, down to a single cue.
+func cleanCueText(s string) string {
+	s = assTagRe.ReplaceAllString(s, "")
+	s = vttTagRe.ReplaceAllString(s, "")
+	s = strings.NewReplacer(
+		"&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "　", " ",
+	).Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.ReplaceAll(s, "|", "｜")
+	return strings.TrimSpace(s)
+}
+
+func parseTimestamp(ts string) float64 {
+	parts := strings.Split(ts, ":")
+	seconds := 0.0
+	for _, p := range parts {
+		v, _ := strconv.ParseFloat(strings.ReplaceAll(p, ",", "."), 64)
+		seconds = seconds*60 + v
+	}
+	return seconds
+}
+
+// translateJobs sends one contiguous run of cues as pipe separated lines and
+// fills the translated text back. A truncated reply is retried in halves, and
+// a missing tail is retried on its own.
 func translateJobs(ctx context.Context, client *ai.Client, jobs []cueJob, lang string) error {
 	if len(jobs) == 0 {
 		return nil
 	}
-	payload := make(map[string]string, len(jobs))
+	lines := make([]string, len(jobs))
 	for i := range jobs {
-		payload[fmt.Sprintf("%d", i)] = jobs[i].text
+		lines[i] = fmt.Sprintf("%d|%.1f|%.1f|%s", i+1, jobs[i].startSec, jobs[i].endSec, jobs[i].text)
 	}
-	raw, _ := json.Marshal(payload)
-	// Leave room for the JSON envelope and for languages that expand.
 	maxTokens := len(jobs)*48 + 512
 	if maxTokens < 4096 {
 		maxTokens = 4096
@@ -306,13 +365,38 @@ func translateJobs(ctx context.Context, client *ai.Client, jobs []cueJob, lang s
 		maxTokens = 16000
 	}
 	reply, err := client.ChatWith(ctx,
-		"You translate subtitles. Keep names, tone and line breaks. Reply with JSON only: an object with the same keys and the translated text as values.",
-		"Target language: "+lang+"\n"+string(raw), true, maxTokens, true)
+		"You translate subtitles. The input is one cue per line in the form index|start|end|text. Reply with exactly the same lines, keeping index and timestamps unchanged and translating only the text. Never split a cue across lines, never merge two cues. No commentary, no extra lines, no markdown fences.",
+		"Target language: "+lang+"\n"+strings.Join(lines, "\n"), false, maxTokens, true)
 	if err != nil {
 		return fmt.Errorf("translation failed: %w", err)
 	}
-	var out map[string]string
-	if err := json.Unmarshal([]byte(stripJSONFence(reply)), &out); err != nil {
+	translated := map[int]string{}
+	last := 0
+	for _, raw := range strings.Split(reply, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "```") {
+			continue
+		}
+		if m := translatedRe.FindStringSubmatch(line); len(m) == 3 {
+			idx, err := strconv.Atoi(m[1])
+			if err != nil || idx < 1 || idx > len(jobs) {
+				continue
+			}
+			if text := strings.TrimSpace(m[2]); text != "" {
+				translated[idx-1] = text
+				last = idx
+			}
+			continue
+		}
+		// The model wrapped a cue over two lines; keep it as one cue instead
+		// of dropping the continuation.
+		if last > 0 {
+			if text, ok := translated[last-1]; ok {
+				translated[last-1] = text + " " + line
+			}
+		}
+	}
+	if len(translated) == 0 {
 		if len(jobs) > 1 {
 			mid := len(jobs) / 2
 			if err := translateJobs(ctx, client, jobs[:mid], lang); err != nil {
@@ -320,12 +404,18 @@ func translateJobs(ctx context.Context, client *ai.Client, jobs []cueJob, lang s
 			}
 			return translateJobs(ctx, client, jobs[mid:], lang)
 		}
-		return fmt.Errorf("translation reply was not valid JSON")
+		return fmt.Errorf("translation reply was not in the expected format")
 	}
+	firstMissing := -1
 	for i := range jobs {
-		if translated := strings.TrimSpace(out[fmt.Sprintf("%d", i)]); translated != "" {
-			jobs[i].text = translated
+		if text, ok := translated[i]; ok {
+			jobs[i].text = text
+		} else if firstMissing < 0 {
+			firstMissing = i
 		}
+	}
+	if firstMissing > 0 {
+		return translateJobs(ctx, client, jobs[firstMissing:], lang)
 	}
 	return nil
 }

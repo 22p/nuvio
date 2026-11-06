@@ -286,10 +286,11 @@ var assTime = regexp.MustCompile(`^\s*(\d+):(\d{2}):(\d{2})[.:](\d{1,3})\s*$`)
 var assTag = regexp.MustCompile(`\{[^}]*\}`)
 
 var (
-	assPosRe   = regexp.MustCompile(`\\pos\(\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*\)`)
-	assMoveRe  = regexp.MustCompile(`\\move\(\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)`)
-	assAlignRe = regexp.MustCompile(`\\an([1-9])`)
-	assDrawRe  = regexp.MustCompile(`\\p[1-9]`)
+	assPosRe     = regexp.MustCompile(`\\pos\(\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*\)`)
+	assMoveRe    = regexp.MustCompile(`\\move\(\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)`)
+	assAlignRe   = regexp.MustCompile(`\\an([1-9])`)
+	assDrawRe    = regexp.MustCompile(`\\p[1-9]`)
+	assKaraokeRe = regexp.MustCompile(`\\k[fot]?`)
 )
 
 type assStyle struct {
@@ -387,6 +388,16 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 		// Vector drawings cannot be rendered as text.
 		return "", false
 	}
+	if assNonDialogueStyle(field("Style")) {
+		// Credits, on-screen titles and typesetting styles are not dialogue;
+		// keeping them would mix signs and staff lists into the subtitles.
+		return "", false
+	}
+	if assKaraoke(field("Style"), field("Effect"), body, (end - start).Seconds()) {
+		// Karaoke syllables and animated typesetting fragments become piles
+		// of overlapping one-character cues in WebVTT.
+		return "", false
+	}
 
 	st := styles[field("Style")]
 	if st.alignment == 0 {
@@ -464,6 +475,43 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 	}
 	return fmt.Sprintf("%s --> %s line:%.1f%% line-align:%s position:%.1f%% align:%s\n%s\n\n",
 		vttTime(start), vttTime(end), clampPercent(y/playH*100), lineAlign, clampPercent(x/playW*100), alignName, body), true
+}
+
+// assKaraoke reports whether an event is a karaoke syllable or a typesetting
+// fragment. Such events are one or two characters shown for a fraction of a
+// second and cannot be represented in WebVTT.
+// assNonDialogueStyle reports whether a style carries credits, screen text or
+// typesetting rather than spoken dialogue.
+func assNonDialogueStyle(style string) bool {
+	name := strings.ToLower(strings.TrimSpace(style))
+	switch name {
+	case "staff", "title":
+		return true
+	}
+	return strings.HasPrefix(name, "spe_ed_")
+}
+
+func assKaraoke(style, effect, body string, seconds float64) bool {
+	name := strings.ToLower(strings.TrimSpace(style))
+	if strings.Contains(name, "syl") || strings.Contains(name, "karaoke") || strings.Contains(name, "karo") {
+		return true
+	}
+	text := assTag.ReplaceAllString(body, "")
+	text = strings.ReplaceAll(text, `\N`, "")
+	text = strings.ReplaceAll(text, `\n`, "")
+	text = strings.TrimSpace(text)
+	// A \k tag alone is normal for song lyrics: the whole line is readable
+	// once the tags are stripped. Only syllable-sized pieces are dropped.
+	if assKaraokeRe.MatchString(body) && (seconds < 0.6 || utf8.RuneCountInString(text) <= 2) {
+		return true
+	}
+	if seconds > 0 && seconds < 0.35 && utf8.RuneCountInString(text) <= 1 {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(effect), "fx") && seconds < 0.6 {
+		return true
+	}
+	return false
 }
 
 func parseFloatDefault(s string, def float64) float64 {

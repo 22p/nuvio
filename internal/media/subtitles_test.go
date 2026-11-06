@@ -305,3 +305,66 @@ func TestSubtitleLanguageFallbackInScan(t *testing.T) {
 		}
 	}
 }
+
+func TestASSKaraokeAndTypesettingDropped(t *testing.T) {
+	ass := `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,75,&H00FFFFFF,&H00000000,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,45,45,15,1
+Style: spe_ed_syl,Arial,75,&H00FFFFFF,&H00000000,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,15,15,15,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:01.10,spe_ed_syl,,0,0,0,fx,{\pos(100,100)}信
+Dialogue: 0,0:00:02.00,0:00:02.10,Default,,0,0,0,,{\pos(200,200)}信
+Dialogue: 0,0:00:03.00,0:00:03.40,Default,,0,0,0,,危险
+Dialogue: 0,0:00:04.00,0:00:05.00,Default,,0,0,0,,{\k20}か
+Dialogue: 0,0:00:06.00,0:00:08.00,Default,,0,0,0,,正常台词
+Dialogue: 0,0:00:09.00,0:00:14.00,Default,,0,0,0,,{\k20}君と見た世界
+`
+	out := string(ASSBytesToVTT([]byte(ass)))
+	if strings.Contains(out, "信") || strings.Contains(out, "か") {
+		t.Fatalf("karaoke survived:\n%s", out)
+	}
+	if !strings.Contains(out, "危险") || !strings.Contains(out, "正常台词") {
+		t.Fatalf("dialogue was dropped:\n%s", out)
+	}
+	if !strings.Contains(out, "君と見た世界") {
+		t.Fatalf("full karaoke lyric line was dropped:\n%s", out)
+	}
+}
+
+func TestASSNonDialogueStylesDropped(t *testing.T) {
+	ass := `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,75,&H00FFFFFF,&H00000000,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,45,45,15,1
+Style: Staff,Arial,53,&H00FFFFFF,&H00000000,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,2,45,45,15,1
+Style: Title,Arial,75,&H00FFFFFF,&H00000000,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,7,45,45,15,1
+Style: spe_ed_syl_ch,Arial,69,&H00FFFFFF,&H00000000,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,8,15,15,15,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:04.00,Staff,,0,0,0,,本字幕由某某字幕组制作
+Dialogue: 0,0:00:05.00,0:00:08.00,Title,,0,0,0,,新手冒险者街道
+Dialogue: 0,0:00:09.00,0:00:12.00,spe_ed_syl_ch,,0,0,0,,信
+Dialogue: 0,0:00:13.00,0:00:16.00,Default,,0,0,0,,这是一句正常台词
+`
+	out := string(ASSBytesToVTT([]byte(ass)))
+	for _, dropped := range []string{"本字幕由", "新手冒险者街道", "信"} {
+		if strings.Contains(out, dropped) {
+			t.Fatalf("%q should have been dropped:\n%s", dropped, out)
+		}
+	}
+	if !strings.Contains(out, "这是一句正常台词") {
+		t.Fatalf("dialogue missing:\n%s", out)
+	}
+}
