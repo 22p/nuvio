@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"nuvio/internal/model"
@@ -361,5 +363,85 @@ func TestScanAttachesSeasonExtrasToSeries(t *testing.T) {
 	}
 	if names["PV S01E02"] != "Trailer" {
 		t.Fatalf("trailer name/type: %+v", names)
+	}
+}
+
+func TestScanReusesProbeForUnchangedFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake ffprobe is a shell script")
+	}
+	root := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "probe.log")
+	ffprobe := filepath.Join(t.TempDir(), "ffprobe.sh")
+	script := "#!/bin/sh\nprintf 'x\\n' >> " + logPath + "\nexit 1\n"
+	if err := os.WriteFile(ffprobe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	movieDir := filepath.Join(root, "Movie Name (2020)")
+	if err := os.MkdirAll(movieDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(movieDir, "Movie Name (2020).mkv")
+	writeTestFile(t, videoPath, "")
+	writeTestFile(t, filepath.Join(movieDir, "Movie Name (2020).zh.srt"), "1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+
+	lib := &model.Library{ID: "lib", Type: model.LibraryMovies, Paths: []string{root}}
+	probes := func() int {
+		data, err := os.ReadFile(logPath)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(data), "x\n")
+	}
+	findMovie := func(items []*model.Item) *model.Item {
+		for _, it := range items {
+			if it.Type == model.TypeMovie {
+				return it
+			}
+		}
+		t.Fatalf("movie missing: %+v", items)
+		return nil
+	}
+
+	first, err := (&Scanner{FFprobe: ffprobe}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := probes(); got != 1 {
+		t.Fatalf("first scan probes = %d, want 1", got)
+	}
+
+	cache := NewProbeCache(first)
+	second, err := (&Scanner{FFprobe: ffprobe, Cached: cache}).Scan(context.Background(), lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := probes(); got != 1 {
+		t.Fatalf("unchanged scan probed again: %d", got)
+	}
+	movie := findMovie(second)
+	if movie.Media == nil || len(movie.Media.Subtitles) != 1 {
+		t.Fatalf("sidecar subtitle was lost or duplicated: %+v", movie.Media)
+	}
+
+	// A changed size invalidates the cached entry.
+	writeTestFile(t, videoPath, "new content")
+	if _, err := (&Scanner{FFprobe: ffprobe, Cached: cache}).Scan(context.Background(), lib); err != nil {
+		t.Fatal(err)
+	}
+	if got := probes(); got != 2 {
+		t.Fatalf("changed file probes = %d, want 2", got)
+	}
+
+	// A full scan ignores the cache even when the file is unchanged.
+	if _, err := (&Scanner{FFprobe: ffprobe, Cached: cache, Full: true}).Scan(context.Background(), lib); err != nil {
+		t.Fatal(err)
+	}
+	if got := probes(); got != 3 {
+		t.Fatalf("full scan probes = %d, want 3", got)
 	}
 }

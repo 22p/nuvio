@@ -23,6 +23,71 @@ import (
 // Scanner walks a library path and produces catalog items.
 type Scanner struct {
 	FFprobe string
+	// Cached holds probe results from the previous scan, keyed by file path.
+	// A file whose size and modification time still match is not probed again.
+	Cached map[string]ProbeCacheEntry
+	// Full ignores Cached and probes every file. It is used after ffprobe
+	// changes or when an administrator asks for a full rescan.
+	Full bool
+}
+
+// ProbeCacheEntry is the technical metadata remembered for one file between
+// scans. Subtitles are limited to embedded tracks: sidecar files are matched
+// again on every scan and must not be carried over as if they were embedded.
+type ProbeCacheEntry struct {
+	Size    int64
+	ModTime time.Time
+	Media   model.MediaInfo
+}
+
+// NewProbeCache builds a probe cache from a previous catalog. Movies, episodes
+// and extras carry MediaInfo; series and seasons do not.
+func NewProbeCache(items []*model.Item) map[string]ProbeCacheEntry {
+	cache := make(map[string]ProbeCacheEntry)
+	for _, it := range items {
+		if it == nil || it.Demo || it.Path == "" || it.Media == nil {
+			continue
+		}
+		switch it.Type {
+		case model.TypeMovie, model.TypeEpisode, model.TypeVideo:
+		default:
+			continue
+		}
+		media := cloneMedia(*it.Media)
+		embedded := make([]model.Subtitle, 0, len(media.Subtitles))
+		for _, sub := range media.Subtitles {
+			if sub.Embedded {
+				embedded = append(embedded, sub)
+			}
+		}
+		media.Subtitles = embedded
+		size := it.Size
+		if size == 0 {
+			size = media.Size
+		}
+		cache[it.Path] = ProbeCacheEntry{Size: size, ModTime: it.AddedAt, Media: media}
+	}
+	return cache
+}
+
+func cloneMedia(m model.MediaInfo) model.MediaInfo {
+	out := m
+	out.AudioTracks = append([]model.AudioTrack(nil), m.AudioTracks...)
+	out.Subtitles = append([]model.Subtitle(nil), m.Subtitles...)
+	return out
+}
+
+// reuseProbe copies the cached result when the file has not changed.
+func (s *Scanner) reuseProbe(ve *videoEntry) bool {
+	if s.Full || len(s.Cached) == 0 {
+		return false
+	}
+	entry, ok := s.Cached[ve.path]
+	if !ok || entry.ModTime.IsZero() || entry.Size != ve.size || !entry.ModTime.Equal(ve.modTime) {
+		return false
+	}
+	ve.media = cloneMedia(entry.Media)
+	return true
 }
 
 type videoEntry struct {
@@ -237,6 +302,9 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 		}()
 	}
 	for _, ve := range videos {
+		if s.reuseProbe(ve) {
+			continue
+		}
 		jobs <- ve
 	}
 	close(jobs)

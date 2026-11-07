@@ -614,11 +614,11 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
     }
   }
 
-  const scan = async () => {
+  const scan = async (full = false) => {
     setScanning(true)
     setNotice('')
     try {
-      await triggerScan()
+      await triggerScan(full)
     } catch (err) {
       setScanning(false)
       setError(err instanceof Error ? err.message : t("Could not start the scan"))
@@ -805,9 +805,19 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
         <div className="admin-block">
           <div className="admin-block-head">
             <h3>{t("Media libraries")}</h3>
-            <button className="btn btn-ghost btn-sm" onClick={scan} disabled={scanning}>
-              <IconRefresh size={16} /> {scanning ? t("Scanning…") : t("Scan now")}
-            </button>
+            <div className="admin-block-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => scan(false)} disabled={scanning}>
+                <IconRefresh size={16} /> {scanning ? t("Scanning…") : t("Scan now")}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => scan(true)}
+                disabled={scanning}
+                title={t("Probe every file again, including unchanged ones.")}
+              >
+                {t("Full scan")}
+              </button>
+            </div>
           </div>
           <div className="library-list">
             {overview.libraries.map((lib) => (

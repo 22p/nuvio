@@ -320,7 +320,11 @@ export const getSessions = () => api<DeviceSession[]>('/api/app/sessions')
 export const revokeSession = (id: string) =>
   api<void>(`/api/app/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getAdminOverview = () => api<AdminOverview>('/api/admin/overview')
-export const triggerScan = () => api<{ scanning: boolean }>('/api/admin/scan', { method: 'POST' })
+export const triggerScan = (full = false) =>
+  api<{ scanning: boolean; full?: boolean }>(
+    `/api/admin/scan${full ? '?full=true' : ''}`,
+    { method: 'POST' },
+  )
 
 export const addLibrary = (name: string, type: string, paths: string[]) =>
   api<{ id: string }>('/api/admin/libraries', {

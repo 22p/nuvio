@@ -457,4 +457,6 @@ export const zh: Record<string, string> = {
   'Translating…': '翻译中…',
   'Translate subtitles with AI': '用 AI 翻译字幕',
   'Subtitle translation failed': '字幕翻译失败',
+  'Full scan': '全量扫描',
+  'Probe every file again, including unchanged ones.': '重新探测所有文件，包括未修改的文件。',
 }

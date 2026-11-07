@@ -53,6 +53,7 @@ type Server struct {
 	scanMu      sync.Mutex
 	scanning    bool
 	pendingScan bool
+	pendingFull bool
 	lastScanErr string
 }
 
@@ -311,21 +312,33 @@ func (s *Server) ScanIfNeeded() {
 	}
 }
 
-// StartScan launches a catalog scan in the background.
+// StartScan launches a catalog scan in the background. Files whose size and
+// modification time are unchanged reuse the previous probe result.
 func (s *Server) StartScan() {
+	s.startScan(false)
+}
+
+// StartScanFull launches a scan that probes every file, even when it has not
+// changed. Use it after changing ffprobe or when technical metadata is suspect.
+func (s *Server) StartScanFull() {
+	s.startScan(true)
+}
+
+func (s *Server) startScan(full bool) {
 	s.scanMu.Lock()
 	if s.scanning {
 		s.pendingScan = true
+		s.pendingFull = s.pendingFull || full
 		s.scanMu.Unlock()
 		return
 	}
 	s.scanning = true
 	s.scanMu.Unlock()
 	s.Catalog.SetScanning(true)
-	go s.runScan()
+	go s.runScan(full)
 }
 
-func (s *Server) runScan() {
+func (s *Server) runScan(full bool) {
 	start := time.Now()
 	libs := s.Store.Libraries()
 	oldItems, _ := s.Store.Items()
@@ -352,7 +365,10 @@ func (s *Server) runScan() {
 		if lib.Demo {
 			continue
 		}
-		scanner := media.Scanner{FFprobe: s.API.FFprobe()}
+		scanner := media.Scanner{FFprobe: s.API.FFprobe(), Full: full}
+		if !full {
+			scanner.Cached = media.NewProbeCache(oldByLibrary[lib.ID])
+		}
 		got, err := scanner.Scan(context.Background(), lib)
 		if err != nil {
 			log.Printf("Failed to scan library %s: %v", lib.Name, err)
@@ -402,14 +418,16 @@ func (s *Server) runScan() {
 	s.scanning = false
 	s.lastScanErr = strings.Join(errs, "; ")
 	pending := s.pendingScan
+	pendingFull := s.pendingFull
 	s.pendingScan = false
+	s.pendingFull = false
 	s.scanMu.Unlock()
 	if len(errs) > 0 {
 		s.Catalog.SetScanError(strings.Join(errs, "; "))
 	}
 	log.Printf("Scan finished: %d items in %s", len(kept), time.Since(start).Round(time.Millisecond))
 	if pending {
-		s.StartScan()
+		s.startScan(pendingFull)
 	}
 }
 
@@ -1282,8 +1300,17 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
-	s.StartScan()
-	writeJSON(w, 202, map[string]any{"scanning": true})
+	full := false
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("full"))) {
+	case "1", "true", "yes":
+		full = true
+	}
+	if full {
+		s.StartScanFull()
+	} else {
+		s.StartScan()
+	}
+	writeJSON(w, 202, map[string]any{"scanning": true, "full": full})
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -1409,7 +1436,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		applyHardware(s.API, ffmpeg)
 	}
 	metadataChanged := oldSettings.TMDBAPIKey != settings.TMDBAPIKey || oldSettings.MetadataLanguage != settings.MetadataLanguage
-	if ffprobe != oldProbe || (metadataChanged && (settings.TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "")) {
+	if ffprobe != oldProbe {
+		// Probe results were produced by another binary; do not reuse them.
+		go s.StartScanFull()
+	} else if metadataChanged && (settings.TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "") {
 		go s.StartScan()
 	}
 	writeJSON(w, 200, settings)

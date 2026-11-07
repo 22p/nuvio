@@ -457,4 +457,6 @@ export const ja: Record<string, string> = {
   'Translating…': '翻訳中…',
   'Translate subtitles with AI': 'AI で字幕を翻訳',
   'Subtitle translation failed': '字幕の翻訳に失敗しました',
+  'Full scan': '全体スキャン',
+  'Probe every file again, including unchanged ones.': '変更されていないファイルも含めてすべて再解析します。',
 }

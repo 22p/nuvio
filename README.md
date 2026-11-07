@@ -1,36 +1,33 @@
 # Nuvio
 
-一个用 Go 编写的、**Jellyfin 兼容**的自托管流媒体服务器。自带现代响应式 Web 客户端，同时把核心 Jellyfin HTTP 接口开放给现有的手机、电视和桌面客户端使用。
+一个用 Go 编写的 **Jellyfin 兼容**自托管流媒体服务器。自带现代响应式 Web 客户端，同时把核心 Jellyfin HTTP 接口开放给现有的手机、电视和桌面客户端使用。
 
-不实现插件系统。目标很明确：**扫描你自己的媒体、用浏览器或第三方 Jellyfin 客户端登录、看片、记住进度。**
+不实现插件系统。目标很明确：**扫描自己的媒体、用浏览器或第三方 Jellyfin 客户端登录、看片、记住进度。**
 
 ## 功能
 
-- **现代 Web 界面**：桌面与移动端响应式布局，首页推荐、继续观看、接下来、片库、收藏、搜索、剧集详情、播放器、设置。收藏页集中展示所有已收藏的电影与剧集。
-- **多语言界面**：English、简体中文、繁體中文、日本語、한국어。英文为源语言，所有文案通过 `t()` 查表；可在「设置 → 界面语言」或登录页切换，浏览器语言会自动作为初始值（`zh-Hant` / `zh-TW` 自动使用繁體中文）。
-- **英文优先的服务端**：API 错误、扫描日志、演示库名称、语言名称等响应一律使用英文原文，前端词典直接以这些英文 key 翻译，无需在客户端做中文替换。
-- **Jellyfin 兼容接口**：按 Jellyfin 12.4.0 接口实现登录、用户视图（`/UserViews`）、媒体库浏览（`/Items`）、最近添加（`/Items/Latest`）、继续观看（`/UserItems/Resume`）、搜索、详情、图片、`PlaybackInfo`、直连串流（HTTP Range）、HLS 转码、外挂字幕、播放进度上报、已看/收藏（`/UserPlayedItems`、`/UserFavoriteItems`）、`/Genres`、`/Persons` 与显示偏好持久化。
-- **媒体扫描**：电影目录、剧集 `Show/Season 01/S01E01`、扁平目录、电影/剧集混合库；从文件名解析标题与年份。读取同目录下的 `movie.nfo` / `剧集名.nfo`（标题、简介、评分、分级、类型、演员）以及 `folder.jpg`、`backdrop.jpg`、`landscape.jpg`、`logo.png`，本地元数据与图片优先于在线数据。扫描结果写入 SQLite，重启后直接读取，不会重复扫描。
-- **在线元数据（可选）**：填写 TMDb API Key 后，重新扫描会补全标题、海报、背景图、标题 logo、简介、评分、类型与演员表；剧集海报和演员会继承给季和单集，单集会补全剧照、简介和播出日期，图片经服务器代理并缓存到磁盘。
-- **字幕**：自动发现同名字幕 `.srt` / `.vtt` / `.ass` / `.ssa`；网页播放器统一按 WebVTT 渲染，外挂 ASS/SSA 同时以原格式提供给支持 libass 的客户端；ffmpeg 可提取内嵌字幕；支持语言、字号、颜色、背景、描边等偏好，并可在播放器里以 0.1 秒为步长微调时间轴（按条目记忆）。
-- **播放**：浏览器兼容格式直连播放；容器不兼容但编码兼容（视频 H.264 / HEVC / AV1 / VP9，音频 AAC 或客户端支持的 AC-3 / E-AC-3 / FLAC / Opus）时优先**转封装**（`-c copy`，视频不重新编码）；只有编码或码率不兼容时才转码为 HLS（输出编码可选 H.264、HEVC、AV1、VP9）。可选用 VAAPI（Intel / AMD）或 QSV（Intel）硬件解码与编码，失败自动回退软件。播放器支持音轨切换、字幕与时间轴微调、0.5×–2× 倍速，以及实时播放信息（源/输出分辨率、编解码器、帧率、码率、缓冲、丢帧、HLS 档位、会话）。
-- **账户与权限**：管理员/普通用户、PBKDF2-SHA256 密码哈希、持久化访问令牌；独立「用户」页面可为每个账号设置可见媒体库、转码、转封装，并支持重置密码与删除账号。设置页的「登录设备」会记录每个令牌的设备名、客户端、IP 与最近活跃时间，可撤销其他设备——被撤销的设备需要重新登录，当前设备保留。
-- **AI（可选）**：兼容 OpenAI 的接口（默认预填 DeepSeek），用于按文件名识别元数据、把字幕翻译成指定语言（按条目缓存）、生成首页主题片单。默认关闭，只发送文本。
-- **自生成封面**：没有海报的条目会生成确定性的抽象封面与背景图，媒体库开箱即用。
-- **SQLite 存储**：用户、令牌、媒体库、片库索引与观看进度统一存放在 `data/nuvio.db`（WAL 模式，纯 Go 驱动，无需 CGO）。
-- **演示片库**：首次运行自动创建，可随时删除。
+- **Web 客户端**：首页、继续观看、片库、收藏、搜索、剧集详情、播放器、设置；桌面与移动端响应式，支持 English / 简体中文 / 繁體中文 / 日本語 / 한국어。
+- **Jellyfin 兼容**：按 12.4.0 实现登录、浏览、搜索、`PlaybackInfo`、直连串流、HLS、字幕、进度与收藏等核心接口，第三方客户端可直接连接。
+- **媒体库**：电影、剧集、混合库；支持 `Show/Season 01/S01E01`、扁平目录、NFO 与本地图片。普通扫描会跳过未修改文件的 ffprobe，也可以手动全量扫描。
+- **播放**：直连优先，其次转封装（`-c copy`），最后 HLS 转码；可选 VAAPI / QSV 硬件加速，失败自动回退软件。
+- **字幕**：自动发现 `.srt` / `.vtt` / `.ass` / `.ssa`，可提取内嵌字幕；网页统一按 WebVTT 渲染，支持样式偏好与 0.1 秒时间轴微调。
+- **账户与存储**：管理员/普通用户、可见媒体库与转码权限、登录设备管理；SQLite（WAL、纯 Go、无 CGO）。
+- **AI（可选）**：兼容 OpenAI 的接口，用于元数据识别、字幕翻译和首页主题片单；默认关闭，只发送文本。
 
 ## 文档
 
-更细的说明在 [`docs/`](docs/README.md)：
+| 文档 | 内容 |
+| --- | --- |
+| [媒体目录与显示规则](docs/media-layout.md) | 库类型、目录结构、季集编号、花絮、图片、NFO、网页显示顺序 |
+| [元数据](docs/metadata.md) | 本地 NFO、TMDb 匹配、Provider ID、手动匹配、AI 识别 |
+| [字幕](docs/subtitles.md) | 外挂与内嵌字幕、语言识别、ASS 过滤、AI 翻译 |
+| [播放与转码](docs/playback.md) | 直连 / 转封装 / 转码、硬件加速、缓存 |
+| [AI](docs/ai.md) | 兼容 OpenAI 的接口与三项 AI 功能 |
+| [配置](docs/configuration.md) | 环境变量、数据目录、设置页、备份 |
+| [部署](docs/deployment.md) | 源码构建、Docker、Podman、硬件直通、反向代理 |
+| [第三方客户端](docs/jellyfin-clients.md) | 连接方式、接口范围、未实现的功能 |
 
-- [媒体目录与显示规则](docs/media-layout.md)：库类型、电影/剧集目录结构、季集编号、花絮、图片、NFO、网页里的显示顺序
-- [元数据](docs/metadata.md)：本地 NFO、TMDb 匹配、Provider ID、手动匹配、AI 识别
-- [字幕](docs/subtitles.md)：外挂与内嵌字幕、语言识别、ASS 过滤、AI 翻译
-- [播放与转码](docs/playback.md)：直连 / 转封装 / 转码、硬件加速、缓存
-- [AI](docs/ai.md)：兼容 OpenAI 的接口与三项 AI 功能
-- [配置](docs/configuration.md)：环境变量、数据目录、设置页、备份
-- [第三方客户端](docs/jellyfin-clients.md)：连接方式、接口范围、未实现的功能
+完整索引见 [`docs/`](docs/README.md)。
 
 ## 快速开始
 
@@ -41,15 +38,13 @@ make build          # 安装前端依赖、构建 Web、编译单文件二进制
 ./nuvio             # 默认 http://localhost:8096，数据写入 ./data
 ```
 
-如果 8096 已被 Jellyfin 占用，换一个端口即可：
+如果 8096 已被 Jellyfin 占用：
 
 ```bash
 ./nuvio -addr :8097
 ```
 
-首次打开网页会进入初始化页，创建管理员账号后即可进入内置演示片库。
-
-界面语言可在设置页切换。管理员还可以打开 `http://localhost:8096/users` 管理账号与权限。
+首次打开网页会进入初始化页，创建管理员账号后即可进入内置演示片库。管理员可以在 `http://localhost:8096/users` 管理账号与权限。
 
 开发模式：
 
@@ -58,208 +53,43 @@ go run ./cmd/nuvio -addr :8096          # 终端 1
 cd web/ui && npm run dev                # 终端 2（默认代理到 :8096）
 ```
 
-### Docker
+## 部署
 
 ```bash
 docker build -t nuvio .
 docker run -d --name nuvio -p 8096:8096 -v nuvio-data:/data nuvio
 ```
 
-### Podman（Quadlet）
+媒体目录、`/dev/dri` 硬件直通、Podman Quadlet、独立缓存盘和反向代理见 [部署](docs/deployment.md)。
 
-rootless 放在 `~/.config/containers/systemd/nuvio.container`，系统级放在 `/etc/containers/systemd/`：
+## 连接第三方客户端
 
-```ini
-# ~/.config/containers/systemd/nuvio.container
-[Unit]
-Description=Nuvio media server
-
-[Container]
-Image=ghcr.io/22p/nuvio:latest
-ContainerName=nuvio
-AutoUpdate=registry
-Environment=TZ=Asia/Shanghai
-AddDevice=/dev/dri:/dev/dri
-Volume=nuvio:/data
-#Tmpfs=/data/transcode:rw,size=4g
-#Volume=/opt/data:/video:ro,z
-PublishPort=8096:8096
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now nuvio   # 系统级去掉 --user，改用 sudo
-```
-
-- `Volume=nuvio:/data` 是命名卷。媒体目录用 `Volume=/opt/data:/video:ro,z` 挂进来后，在网页里把媒体库路径填 `/video`；SELinux 发行版上的 bind mount 需要 `:z`（共享）或 `:Z`（独占）。
-- 转码缓存默认写在 `/data/transcode`。想单独用一块盘，直接嵌套挂载即可，Podman 会按容器内路径深度先挂父再挂子：
-
-  ```ini
-  Volume=/mnt/nvme/nuvio-cache:/data/transcode
-  ```
-
-  同时要在 `[Unit]` 里加 `RequiresMountsFor=/mnt/nvme/nuvio-cache`，否则盘还没就绪时缓存会落进数据卷。
-- `Tmpfs=/data/transcode:rw,size=4g` 可以完全不写盘，但 remux 会把整片切成 fMP4，4g 对高码率单集可能不够，按单集大小留余量或改用独立卷。
-- rootless 下访问 `/dev/dri` 需要当前用户在 `render`（部分发行版是 `video`）组里。
-
-### 硬件转码（VAAPI / QSV）
-
-Docker 镜像内置 Intel（`intel-media-driver` / `libva-intel-driver`）与 AMD（`mesa-va-gallium`）的 VAAPI 驱动，以及 Intel QSV 运行时 `libvpl` 和 `onevpl-intel-gpu`（仅 x86_64）。把宿主机的渲染节点传入容器即可：
-
-```bash
-docker run -d --name nuvio -p 8096:8096 \
-  --device /dev/dri:/dev/dri \
-  -v nuvio-data:/data nuvio
-```
-
-启动时会实际编码/解码一帧来验证能力，而不是只看设备节点是否存在：日志会打印 `Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / decode h264, hevc, av1, vp9`，设置 → 服务器 → 转码中也会逐后端展示可用的编码与解码格式。硬件加速可选 `Auto`、`VAAPI (Intel / AMD)`、`QSV (Intel)` 或 `Off`；输出编码可选 H.264、HEVC、AV1 和 VP9（仅列出当前 ffmpeg 与硬件确实支持的项目）。所有输出（含 H.264）统一封装为分片 MP4（fMP4）HLS，客户端必须支持对应编码；所选编码无可用硬件编码器时使用该编码的软件编码器。Remux（仅换容器）同样输出 fMP4，并且按客户端声明的解码能力逐条决定：视频为 H.264 / HEVC / AV1 / VP9 时直接复制，音频为 AAC / AC-3 / E-AC-3 / FLAC / Opus 且客户端支持时直接复制，其余（MP3、Vorbis、DTS 或客户端不支持）只把音频转成 AAC，视频始终不重编码。硬件初始化失败或某个文件无法硬解时会自动回退到软件编码。转码会话 90 秒内没有收到播放列表或分片请求时会自动停止 ffmpeg，客户端再次请求时从上次分片继续，避免关闭播放器后进程常驻。宿主机需要安装对应的内核驱动（Intel `i915`/`xe`、AMD `amdgpu`）和 VAAPI 驱动（Debian/Ubuntu 可安装 `mesa-va-drivers`、`intel-media-va-driver-non-free`），裸机运行时把运行用户加入 `render` 组。
-
-## 连接第三方 Jellyfin 客户端
-
-在 Jellyfin 手机、Android TV 或桌面客户端中添加服务器：
+在 Jellyfin 手机、Android TV 或桌面客户端中添加：
 
 ```
 http://<服务器地址>:8096
 ```
 
-使用在 Nuvio 网页里创建的同一账号登录即可浏览和播放。Nuvio 对外声明的接口版本为 `12.4.0`（对齐官方最新稳定版），核心播放链路使用与第三方客户端完全相同的 `PlaybackInfo` / `stream` / `Sessions` 接口，没有网页专用后门。这个版本号只是客户端的功能门槛：Nuvio 实现的是下表里的核心子集，12.x 新增的 MediaSegments、Trickplay、插件化搜索/推荐等没有实现，客户端会按 404 或空结果降级。
-
-已实现的核心接口范围：
-
-| 领域 | 接口 |
-| --- | --- |
-| 系统 | `/System/Info/Public`、`/System/Info`、`/Branding/Configuration` |
-| 认证 | `/Users/AuthenticateByName`、`/Users/Me`、`/Users/Public`、`/Users/{id}` |
-| 浏览 | `/UserViews`、`/Items`、`/Items/Latest`、`/UserItems/Resume`、`/Items/{id}`、`/Items/{id}/Similar`、`/Genres`、`/Persons` |
-| 剧集 | `/Shows/{id}/Seasons`、`/Shows/{id}/Episodes`、`/Shows/NextUp` |
-| 播放 | `/Items/{id}/PlaybackInfo`、`/Videos/{id}/stream`、`/Videos/{id}/master.m3u8`、HLS 分片、字幕 |
-| 进度 | `/Sessions/Playing`、`/Sessions/Playing/Progress`、`/Sessions/Playing/Stopped`、`/Sessions/Capabilities/Full` |
-| 用户数据 | `/UserPlayedItems/{itemId}`、`/UserFavoriteItems/{itemId}`、`/UserItems/{itemId}/UserData` |
-
-接口以 Jellyfin **12.4.0** 路由为主，同时保留 10.x 的 `/Users/{id}/Views`、`/Users/{id}/Items`、`/Users/{id}/PlayedItems`、`/Users/{id}/FavoriteItems` 等兼容别名，旧版客户端（Filebar、JellyWatch 等）可继续使用；内置 Web 客户端使用新路径。
-
-路由大小写不敏感（`/items/{id}/Images/Primary` 与 `/Items/...` 等价），未实现的 API 路径返回 404 JSON 而不是网页。与官方一致，`/Videos/{id}/stream` 允许匿名访问（客户端会把 URL 直接交给播放器，Findroid 等不会附带 token），`/Videos/{id}/master.m3u8` 和字幕仍需鉴权；知道条目 ID 即可拉流，公网部署请自行加访问控制。
-
-**未实现**：插件、Live TV、音乐库、Quick Connect、远程控制/投屏、部分高级筛选参数（如 `studioIds`、`tags`、`officialRatings`）。如果你的客户端依赖其中某项，会得到 404 或空结果，但登录、浏览和视频播放不依赖它们。
-
-## 媒体目录约定
-
-电影库：
-
-```
-Movies/
-  Arrival (2016)/
-    Arrival (2016).mkv
-    poster.jpg
-    fanart.jpg
-    Arrival (2016).zh.srt
-```
-
-剧集库：
-
-```
-Shows/
-  Severance/
-    poster.jpg
-    Season 01/
-      Severance S01E01.mkv
-      Severance S01E01.zh-CN.srt
-      Severance S01E02.mkv
-```
-
-也支持扁平结构 `Shows/Show.Name.S01E01.mkv`，以及 `Season 01/03 Episode Title.mkv` 这类不带 `SxxExx` 的写法。
-
-- 海报文件名：`poster` / `folder` / `cover` / `default` / `movie`（`.jpg` `.png` `.webp`）。
-- 背景图文件名：`fanart` / `backdrop` / `background`。
-- 字幕语言从后缀识别，如 `.zh.srt`、`.en.forced.srt`、`.zh-CN.ass`。
-- 没有图片时 Nuvio 会自动生成艺术封面；配置 TMDb 后优先使用在线海报（本地图片仍然优先）。
-- 花絮与预告片：电影或剧集目录下的 `trailers`、`extras`、`featurettes`、`behind the scenes`、`deleted scenes`、`interviews`、`scenes`、`shorts` 会作为该条目的花絮，在详情页「花絮」中列出并可播放；它们不会出现在片库列表或「最近添加」里。
-
-## 转码与 ffmpeg
-
-直连播放永远优先。客户端无法直接播放时按以下顺序降级：
-
-1. **转封装**：视频为 H.264 / HEVC / AV1 / VP9，音频为 AAC 或客户端支持的 AC-3 / E-AC-3 / FLAC / Opus，只是容器不被客户端支持（如 MKV）时，用 `-c copy` 打成 fMP4 HLS，视频画质无损；音频不被支持时只把音频转成 AAC，视频仍不重编码。
-2. **转码**：编码或码率不兼容时，用 ffmpeg 重新编码为 HLS（视频可选 H.264 / HEVC / AV1 / VP9，音频 AAC）。
-
-转码相关行为：
-
-- 自动选择可用的 H.264 编码器：`libx264` → `libopenh264` → `h264_v4l2m2m`；其他输出编码使用所选硬件编码器，没有可用硬件时回退对应软件编码器。
-- 转封装只能从关键帧开始复制，因此会话从文件开头生成，播放器加载后自己跳到续播位置；缓存占用约等于片源大小。
-- 服务端默认码率、编码预设可在「设置 → 服务器」中修改；转码与转封装也可分别全局关闭。
-- 安装方式：`apt install ffmpeg` / `dnf install ffmpeg-free` / `brew install ffmpeg`。
-- 也可以通过 `NUVIO_FFMPEG`、`NUVIO_FFPROBE` 环境变量或设置页填写绝对路径。
-
-没有 ffmpeg 时服务器仍可运行，只是不能转码；浏览器通常仍能直连 MP4（H.264/AAC）。
+用 Nuvio 网页里创建的同一账号登录。对外声明的接口版本为 `12.4.0`，实现的是核心子集；插件、Live TV、音乐库、Quick Connect、下载/离线同步等没有实现，客户端会按 404 或空结果降级。接口清单见 [第三方客户端](docs/jellyfin-clients.md)。
 
 ## 配置
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `NUVIO_ADDR` | `:8096` | HTTP 监听地址 |
-| `NUVIO_DATA` | `./data` | 数据目录（用户、令牌、媒体库、转码缓存） |
-| `NUVIO_DEMO` | `1` | 首次初始化时是否加入演示片库 |
+| `NUVIO_DATA` | `./data` | 数据目录（数据库、缓存、字幕） |
+| `NUVIO_DEMO` | `1` | 首次初始化是否加入演示片库 |
 | `NUVIO_FFMPEG` | 自动检测 | ffmpeg 路径 |
 | `NUVIO_FFPROBE` | 自动检测 | ffprobe 路径 |
-| `NUVIO_TMDB_API_KEY` | 空 | TMDb v3 API Key；也可在「设置 → 元数据」中填写 |
+| `NUVIO_TMDB_API_KEY` | 空 | TMDb v3 Key |
 
-对应命令行参数：`-addr`、`-data`、`-demo=false`、`-ffmpeg`、`-ffprobe`。
+对应命令行参数：`-addr`、`-data`、`-demo=false`、`-ffmpeg`、`-ffprobe`。设置页、数据目录和备份说明见 [配置](docs/configuration.md)。
 
-## 元数据（TMDb）
+## 安全
 
-在 [TMDb](https://www.themoviedb.org/settings/api) 申请免费 API Key，填入「设置 → 元数据」后保存，服务器会自动重新扫描：
-
-- 按标题与年份匹配电影/剧集，匹配置信度不足时保留本地信息；本地语言匹配不到时（例如动漫的罗马音文件夹名）会用英文名再匹配一次并换回本地语言标题。
-- 补全标题、海报、背景图、标题 logo、简介、评分、类型与首播日期；剧集图片会继承给季和单集，单集会补全剧照、简介与播出日期。
-- 图片通过 `/Items/{id}/Images/{type}` 代理并缓存，客户端无需直接访问外网。缓存按类型分目录保存：`metadata/movies`、`metadata/tvshows`、`metadata/people`。
-- 元数据语言可选 `zh-CN` / `zh-TW` / `en-US` / `ja-JP` 等。
-
-本产品使用 TMDb API，但未获得 TMDb 认可或认证。
-
-## AI（可选）
-
-设置 → 服务器 → AI 助手，填写兼容 OpenAI 的接口地址与 Key。默认地址是 `https://api.deepseek.com/v1`；本地模型可用 Ollama（`http://127.0.0.1:11434/v1`）或 LM Studio。点「获取模型」会读取 `/models` 并填入下拉框。
-
-开启后有三项能力：
-
-| 功能 | 位置 | 说明 |
-| --- | --- | --- |
-| 元数据识别 | 设置 → 元数据匹配 → AI 识别 | 把不规范的目录名交给模型，再按建议标题去 TMDb 校验；仍需配置 TMDb API Key |
-| 字幕翻译 | 播放器 → 字幕菜单 → 用 AI 翻译字幕 | 仅管理员可见，翻译为目标语言并缓存在 `data/subtitles`，之后的字幕菜单会一直显示该轨道 |
-| 主题片单 | 设置 → AI 助手 → 生成片单 | 从片库挑选条目组合成 4 个主题列表，显示在首页；重新生成会覆盖旧的 |
-
-只发送文本（字幕内容、文件名、片库条目摘要），不发送媒体文件。关闭开关后不会发出任何请求。
-
-## 安全说明
-
-- 密码使用 PBKDF2-HMAC-SHA256（210,000 次迭代）加盐哈希；用户、令牌与观看进度都存放在 `data/nuvio.db`，部署时应限制数据目录的访问权限。
-- Nuvio 本身只提供 HTTP。若要从公网访问，请放在 Caddy/Nginx 后并启用 HTTPS。
-- 关闭「首次运行」后没有注册入口；新增账号只能由管理员在设置页创建。
-- `/users` 页面可以为每个账号勾选可见媒体库、允许转码、允许转封装；禁用后服务器不会为该账号启动对应的 ffmpeg 任务。
-- 播放令牌等同于账号权限，不要分享带 `api_key` 的媒体链接。
-
-## 项目结构
-
-```
-cmd/nuvio           入口
-internal/server     路由、扫描编排、管理 API、SPA
-internal/jellyfin   Jellyfin 兼容 API、播放决策、HLS/字幕/图片
-internal/catalog    内存目录与查询
-internal/media      扫描、探测、字幕转换
-internal/hls        ffmpeg 转码 / 转封装会话
-internal/store       SQLite：用户/令牌/媒体库/片库索引/进度
-internal/metadata    TMDb 元数据补全
-internal/demo       内置演示内容
-internal/art        程序化封面
-web/ui              React + TypeScript + Vite 客户端
-docs                详细文档（目录结构、元数据、字幕、播放、配置）
-```
+- Nuvio 只提供 HTTP，公网访问请放在 Caddy / Nginx 后并启用 HTTPS。
+- `/Videos/{id}/stream` 允许匿名访问，知道条目 ID 即可拉流；公网部署请自行加访问控制。
+- 密码使用 PBKDF2-HMAC-SHA256 加盐哈希；数据目录包含数据库与 API Key，应限制访问权限。
 
 ## 演示素材
 
@@ -267,9 +97,4 @@ docs                详细文档（目录结构、元数据、字幕、播放、
 
 ## 许可证
 
-本项目源代码采用 [MIT 许可证](LICENSE)。
-
-第三方内容保留各自许可证：
-
-- 内置演示片段是 Blender Foundation 的 Sintel 预告片，按 **CC BY 3.0** 提供，不适用 MIT；署名见上一节。
-- 依赖项按其自身许可证分发，主要包括 MIT、BSD-3-Clause、Apache-2.0 与 SIL OFL 1.1。
+源代码采用 [MIT 许可证](LICENSE)。内置演示片段按 **CC BY 3.0** 提供，不适用 MIT；依赖项保留各自的 MIT、BSD-3-Clause、Apache-2.0 与 SIL OFL 1.1 许可证。

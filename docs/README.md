@@ -14,13 +14,14 @@
 | [播放与转码](playback.md) | 直连 / 转封装 / 转码的选择、HLS、硬件加速、缓存与超时 | 卡顿、无法播放、CPU 占用高 |
 | [AI](ai.md) | 兼容 OpenAI 的接口配置，元数据识别、字幕翻译、主题片单 | 想接入 DeepSeek / Ollama / 本地模型 |
 | [配置](configuration.md) | 环境变量、命令行参数、数据目录、设置页各项、备份 | 部署、迁移、清理缓存 |
+| [部署](deployment.md) | 源码构建、Docker、Podman、硬件直通、反向代理、源码结构 | 安装、容器化、硬件加速 |
 | [第三方客户端](jellyfin-clients.md) | 连接方式、实现的 Jellyfin 接口、认证、未实现的功能 | 手机 / TV / 桌面客户端连不上或功能缺失 |
 
 ## 阅读顺序
 
 第一次部署：
 
-1. [配置](configuration.md) —— 端口、数据目录、ffmpeg
+1. [部署](deployment.md) —— 构建、容器、端口、数据目录、ffmpeg
 2. [媒体目录与显示规则](media-layout.md) —— 把文件放对位置
 3. [第三方客户端](jellyfin-clients.md) —— 用现有客户端连接
 

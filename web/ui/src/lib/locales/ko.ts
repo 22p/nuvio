@@ -457,4 +457,6 @@ export const ko: Record<string, string> = {
   'Translating…': '번역 중…',
   'Translate subtitles with AI': 'AI로 자막 번역',
   'Subtitle translation failed': '자막 번역에 실패했습니다',
+  'Full scan': '전체 스캔',
+  'Probe every file again, including unchanged ones.': '변경되지 않은 파일을 포함해 모든 파일을 다시 분석합니다.',
 }
