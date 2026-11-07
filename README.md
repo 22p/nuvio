@@ -20,6 +20,18 @@
 - **SQLite 存储**：用户、令牌、媒体库、片库索引与观看进度统一存放在 `data/nuvio.db`（WAL 模式，纯 Go 驱动，无需 CGO）。
 - **演示片库**：首次运行自动创建，可随时删除。
 
+## 文档
+
+更细的说明在 [`docs/`](docs/README.md)：
+
+- [媒体目录与显示规则](docs/media-layout.md)：库类型、电影/剧集目录结构、季集编号、花絮、图片、NFO、网页里的显示顺序
+- [元数据](docs/metadata.md)：本地 NFO、TMDb 匹配、Provider ID、手动匹配、AI 识别
+- [字幕](docs/subtitles.md)：外挂与内嵌字幕、语言识别、ASS 过滤、AI 翻译
+- [播放与转码](docs/playback.md)：直连 / 转封装 / 转码、硬件加速、缓存
+- [AI](docs/ai.md)：兼容 OpenAI 的接口与三项 AI 功能
+- [配置](docs/configuration.md)：环境变量、数据目录、设置页、备份
+- [第三方客户端](docs/jellyfin-clients.md)：连接方式、接口范围、未实现的功能
+
 ## 快速开始
 
 要求：Go 1.27+；构建 Web 界面需要 Node.js 20+。播放时可选安装 `ffmpeg` / `ffprobe`。
@@ -246,8 +258,18 @@ internal/metadata    TMDb 元数据补全
 internal/demo       内置演示内容
 internal/art        程序化封面
 web/ui              React + TypeScript + Vite 客户端
+docs                详细文档（目录结构、元数据、字幕、播放、配置）
 ```
 
 ## 演示素材
 
 内置演示片库使用 Blender Foundation 的 **Sintel** 预告片（CC BY 3.0，© Blender Foundation，durian.blender.org），仅用于演示播放链路。其余标题、简介与封面均为虚构或程序生成。
+
+## 许可证
+
+本项目源代码采用 [MIT 许可证](LICENSE)。
+
+第三方内容保留各自许可证：
+
+- 内置演示片段是 Blender Foundation 的 Sintel 预告片，按 **CC BY 3.0** 提供，不适用 MIT；署名见上一节。
+- 依赖项按其自身许可证分发，主要包括 MIT、BSD-3-Clause、Apache-2.0 与 SIL OFL 1.1。
