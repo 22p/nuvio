@@ -2519,6 +2519,17 @@ select option:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 14px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.user-admin-grid .setting-row {
+  align-items: flex-start;
+  padding: 0;
+  border-top: 0;
+}
+.user-admin-grid .setting-row > .switch {
+  margin-top: 1px;
 }
 .user-admin-actions,
 .user-admin-pass {

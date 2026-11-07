@@ -459,4 +459,6 @@ export const ja: Record<string, string> = {
   'Subtitle translation failed': '字幕の翻訳に失敗しました',
   'Full scan': '全体スキャン',
   'Probe every file again, including unchanged ones.': '変更されていないファイルも含めてすべて再解析します。',
+  'Metadata settings saved': 'メタデータ設定を保存しました',
+  'AI settings saved': 'AI 設定を保存しました',
 }

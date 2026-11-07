@@ -459,4 +459,6 @@ export const ko: Record<string, string> = {
   'Subtitle translation failed': '자막 번역에 실패했습니다',
   'Full scan': '전체 스캔',
   'Probe every file again, including unchanged ones.': '변경되지 않은 파일을 포함해 모든 파일을 다시 분석합니다.',
+  'Metadata settings saved': '메타데이터 설정이 저장되었습니다',
+  'AI settings saved': 'AI 설정이 저장되었습니다',
 }

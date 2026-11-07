@@ -484,11 +484,20 @@ const CODEC_LABELS: Record<string, string> = {
   vp9: 'VP9',
 }
 
+type AdminSaveSection = 'server' | 'metadata' | 'ai'
+
+const EMPTY_NOTICES: Record<AdminSaveSection, string> = {
+  server: '',
+  metadata: '',
+  ai: '',
+}
+
 function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknown> }) {
   const [overview, setOverview] = useState<AdminOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [saving, setSaving] = useState<AdminSaveSection | ''>('')
+  const [notices, setNotices] = useState<Record<AdminSaveSection, string>>(EMPTY_NOTICES)
   const [serverName, setServerName] = useState('')
   const [transcode, setTranscode] = useState(true)
   const [remux, setRemux] = useState(true)
@@ -500,7 +509,6 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   const [ffprobePath, setFfprobePath] = useState('')
   const [tmdbApiKey, setTmdbApiKey] = useState('')
   const [metadataLanguage, setMetadataLanguage] = useState('zh-CN')
-  const [saving, setSaving] = useState(false)
   const [scanning, setScanning] = useState(false)
 
   const [unmatched, setUnmatched] = useState<UnmatchedItem[]>([])
@@ -581,42 +589,48 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanning])
 
-  const save = async () => {
-    setSaving(true)
+  const save = async (section: AdminSaveSection) => {
+    if (saving) return
+    setSaving(section)
     setError('')
-    setNotice('')
+    setNotices((prev) => ({ ...prev, [section]: '' }))
+    const payload =
+      section === 'server'
+        ? {
+            serverName,
+            transcodeEnabled: transcode,
+            remuxEnabled: remux,
+            hardwareAccel,
+            transcodeCodec: selectedCodec,
+            maxBitrateMbps: maxBitrate,
+            transcodePreset: preset,
+            ffmpegPath,
+            ffprobePath,
+          }
+        : section === 'metadata'
+          ? { tmdbApiKey, metadataLanguage }
+          : { aiEnabled, aiBaseUrl, aiApiKey, aiModel, aiTargetLanguage }
+    const message =
+      section === 'server'
+        ? t("Server settings saved")
+        : section === 'metadata'
+          ? t("Metadata settings saved")
+          : t("AI settings saved")
     try {
-      await saveServerSettings({
-        serverName,
-        transcodeEnabled: transcode,
-        remuxEnabled: remux,
-        hardwareAccel,
-        transcodeCodec: selectedCodec,
-        maxBitrateMbps: maxBitrate,
-        transcodePreset: preset,
-        ffmpegPath,
-        ffprobePath,
-        tmdbApiKey,
-        metadataLanguage,
-        aiEnabled,
-        aiBaseUrl,
-        aiApiKey,
-        aiModel,
-        aiTargetLanguage,
-      })
-      setNotice(t("Server settings saved"))
+      await saveServerSettings(payload)
+      setNotices((prev) => ({ ...prev, [section]: message }))
       await onConfigChange()
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : t("Save failed"))
     } finally {
-      setSaving(false)
+      setSaving('')
     }
   }
 
   const scan = async (full = false) => {
     setScanning(true)
-    setNotice('')
+    setNotices((prev) => ({ ...prev, server: '' }))
     try {
       await triggerScan(full)
     } catch (err) {
@@ -986,12 +1000,12 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               <input value={ffprobePath} onChange={(e) => setFfprobePath(e.target.value)} placeholder={t("Leave blank to auto-detect")} />
             </label>
             <div className="field field-align">
-              <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
-                {saving ? t("Saving…") : t("Save settings")}
+              <button className="btn btn-primary btn-sm" onClick={() => save('server')} disabled={saving !== ''}>
+                {saving === 'server' ? t("Saving…") : t("Save settings")}
               </button>
             </div>
           </div>
-          {notice && <div className="inline-ok">{notice}</div>}
+          {notices.server && <div className="inline-ok">{notices.server}</div>}
           <div className="path-line">{t("Data directory: ")}<code>{overview.dataPath}</code>
             {overview.dbPath && (
               <>
@@ -1030,12 +1044,13 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               </select>
             </label>
             <div className="field field-align">
-              <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
-                {saving ? t("Saving…") : t("Save metadata settings")}
+              <button className="btn btn-primary btn-sm" onClick={() => save('metadata')} disabled={saving !== ''}>
+                {saving === 'metadata' ? t("Saving…") : t("Save metadata settings")}
               </button>
             </div>
           </div>
           <div className="path-line">{t("Saving triggers a rescan. Artwork is cached locally.")}</div>
+          {notices.metadata && <div className="inline-ok" style={{ marginTop: 10 }}>{notices.metadata}</div>}
         </div>
 
         <div className="admin-block">
@@ -1092,11 +1107,12 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               </select>
             </label>
             <div className="field field-align">
-              <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
-                {saving ? t("Saving…") : t("Save AI settings")}
+              <button className="btn btn-primary btn-sm" onClick={() => save('ai')} disabled={saving !== ''}>
+                {saving === 'ai' ? t("Saving…") : t("Save AI settings")}
               </button>
             </div>
           </div>
+          {notices.ai && <div className="inline-ok" style={{ marginTop: 10 }}>{notices.ai}</div>}
           {aiNotice && <div className="path-line">{aiNotice}</div>}
           <div className="setting-row" style={{ marginTop: 12 }}>
             <div>

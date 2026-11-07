@@ -459,4 +459,6 @@ export const zhTW: Record<string, string> = {
   'Subtitle translation failed': '字幕翻譯失敗',
   'Full scan': '完整掃描',
   'Probe every file again, including unchanged ones.': '重新探測所有檔案，包括未修改的檔案。',
+  'Metadata settings saved': '中繼資料設定已儲存',
+  'AI settings saved': 'AI 設定已儲存',
 }

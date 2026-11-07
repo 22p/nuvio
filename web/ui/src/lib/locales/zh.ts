@@ -459,4 +459,6 @@ export const zh: Record<string, string> = {
   'Subtitle translation failed': '字幕翻译失败',
   'Full scan': '全量扫描',
   'Probe every file again, including unchanged ones.': '重新探测所有文件，包括未修改的文件。',
+  'Metadata settings saved': '元数据设置已保存',
+  'AI settings saved': 'AI 设置已保存',
 }
