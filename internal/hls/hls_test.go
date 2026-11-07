@@ -1,6 +1,7 @@
 package hls
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -517,5 +518,80 @@ func TestValidPreset(t *testing.T) {
 		if validPreset(name) {
 			t.Fatalf("%q should be rejected", name)
 		}
+	}
+}
+
+func TestValidSessionID(t *testing.T) {
+	valid := []string{"abc123", "play-session_1", "550e8400-e29b-41d4-a716-446655440000"}
+	for _, id := range valid {
+		if !ValidSessionID(id) {
+			t.Fatalf("%q should be accepted", id)
+		}
+	}
+	invalid := []string{"", ".", "..", "../escape", "a/b", `a\\b`, "has space", "bad:name", strings.Repeat("a", 129)}
+	for _, id := range invalid {
+		if ValidSessionID(id) {
+			t.Fatalf("%q should be rejected", id)
+		}
+	}
+}
+
+func TestEnsureRejectsTraversalSessionID(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "transcode")
+	outside := filepath.Join(filepath.Dir(root), "escape")
+	m := New(root, func() string { return "" })
+	defer m.StopAll()
+
+	if _, err := m.Ensure("../../escape", "item", "/media/movie.mkv", Options{}); err == nil {
+		t.Fatal("traversal session id was accepted")
+	}
+	if _, err := os.Stat(outside); err == nil {
+		t.Fatalf("session directory escaped the transcode root: %s", outside)
+	}
+}
+
+func TestStopDoesNotRemoveOutsideDirectory(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	m := New(root, func() string { return "" })
+	defer m.StopAll()
+
+	s := &Session{ID: "outside", Dir: outside, done: make(chan struct{})}
+	m.mu.Lock()
+	m.sessions[s.ID] = s
+	m.mu.Unlock()
+
+	m.Stop(s.ID)
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("Stop removed a directory outside the transcode root: %v", err)
+	}
+}
+
+func TestManagerLimitsSessionsPerUser(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-ffmpeg.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	media := filepath.Join(dir, "movie.mkv")
+	if err := os.WriteFile(media, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := New(filepath.Join(dir, "transcode"), func() string { return script })
+	defer m.StopAll()
+
+	opts := Options{UserID: "alice", BitrateKbps: 1000, Height: 720}
+	for i := 0; i < maxUserSessions; i++ {
+		if _, err := m.Start("item", media, opts); err != nil {
+			t.Fatalf("session %d: %v", i, err)
+		}
+	}
+	if _, err := m.Start("item", media, opts); !errors.Is(err, ErrTooManySessions) {
+		t.Fatalf("fourth session = %v, want ErrTooManySessions", err)
+	}
+
+	other := Options{UserID: "bob", BitrateKbps: 1000, Height: 720}
+	if _, err := m.Start("item", media, other); err != nil {
+		t.Fatalf("another user should still get a slot: %v", err)
 	}
 }

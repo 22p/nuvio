@@ -95,6 +95,7 @@ data/
 关闭转码/转封装后，服务器不会为该账号启动对应的 ffmpeg 任务；客户端仍可能直连原文件。
 
 密码使用 PBKDF2-HMAC-SHA256（210,000 次迭代）加盐哈希。令牌是持久化的，撤销后该设备需要重新登录。
+连续登录失败会按“客户端 IP + 用户名”限流，并限制同时进行的密码校验数量；触发限制时返回 `429` 和 `Retry-After`。
 
 ## 备份与迁移
 
@@ -118,7 +119,7 @@ Nuvio 只提供 HTTP。公网访问建议放在 Caddy / Nginx 后启用 HTTPS：
 - 需要转发 `Authorization`、`X-Emby-Token`、`X-Emby-Authorization` 头
 - HLS 分片是普通 GET 请求，不要缓存或缓冲
 - `/Videos/{id}/stream` 支持 Range，代理必须保留 `Range` 请求头并返回 `206`
-- 不要给 `/Videos/...` 加额外鉴权，否则第三方客户端会把 URL 直接交给播放器时失败（见 [第三方客户端](jellyfin-clients.md)）
+- `/Videos/...` 需要 token；代理不要剥离 `api_key`，也不要用自己的鉴权替换 `Authorization` / `X-Emby-Token`（见 [第三方客户端](jellyfin-clients.md)）
 
 ## 日志
 

@@ -27,7 +27,7 @@
 /Videos/{id}/stream?static=true&mediaSourceId=...
 ```
 
-这个地址支持 HTTP Range，允许匿名访问（客户端会把 URL 直接交给播放器）。
+这个地址支持 HTTP Range，但必须携带有效的 `api_key` 或 `X-Emby-Token`；`DirectStreamUrl` 已经带好 token。第三方客户端如果把裸 URL 交给不支持附加请求头的播放器，直连会返回 401。
 
 ## 转封装
 
@@ -82,6 +82,8 @@ Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / deco
 - 会话目录：`data/transcode/<会话ID>/`
 - 90 秒内没有播放列表或分片请求 → 自动停止 ffmpeg；客户端再次请求时从上次分片继续
 - 已暂停或 ffmpeg 已结束的会话超过 3 小时会被清理（持续有请求的会话不受这个时间限制）
+- 同时最多 6 个活动会话，单个账号最多 3 个；超出返回 `429`，避免一个账号启动无限个 ffmpeg 进程
+- 输出宽度上限 7680，超出会退回按高度推导
 - 服务重启会清理转码目录
 - 两个用户看同一集、参数相同时，目前仍各自生成一份会话；缓存不共享
 

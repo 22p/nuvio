@@ -3,6 +3,7 @@ package jellyfin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -132,6 +133,10 @@ func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.UserId == "" {
 		req.UserId = u.ID
+	}
+	if req.PlaySessionId != "" && !hls.ValidSessionID(req.PlaySessionId) {
+		writeError(w, 400, "Invalid PlaySessionId")
+		return
 	}
 	psid := req.PlaySessionId
 	if psid == "" {
@@ -599,25 +604,13 @@ func (a *API) handleStreamFile(w http.ResponseWriter, r *http.Request) {
 	a.handleStream(w, r)
 }
 
-// streamUser resolves the caller for direct streaming. Jellyfin serves
-// /Videos/{itemId}/stream without authentication (clients such as Findroid
-// open the URL with no credentials), so a missing token is allowed while a
-// supplied token is still validated.
-func (a *API) streamUser(r *http.Request) (*model.User, bool) {
-	if a.tokenFromRequest(r) == "" {
-		return nil, true
-	}
-	return a.userFromRequest(r)
-}
-
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.streamUser(r)
+	u, ok := a.requireUser(w, r)
 	if !ok {
-		writeError(w, 401, "Not signed in")
 		return
 	}
 	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
-	if !ok || (u != nil && !canSeeItem(u, it)) {
+	if !ok || !canSeeItem(u, it) {
 		writeError(w, 404, "Item does not exist")
 		return
 	}
@@ -706,6 +699,10 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	psid := q.Get("PlaySessionId")
+	if psid != "" && !hls.ValidSessionID(psid) {
+		writeError(w, 400, "Invalid PlaySessionId")
+		return
+	}
 	if psid == "" {
 		psid = randomHex(12)
 	}
@@ -768,6 +765,11 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := a.HLS.Ensure(psid, it.ID, mediaPath, opts)
 	if err != nil {
+		if errors.Is(err, hls.ErrTooManySessions) {
+			w.Header().Set("Retry-After", "30")
+			writeError(w, 429, "Too many transcoding sessions; try again shortly")
+			return
+		}
 		writeError(w, 500, "Could not start transcoding: "+err.Error())
 		return
 	}
@@ -780,6 +782,10 @@ func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 	itemID := normalizeID(r.PathValue("itemId"))
 	sid := r.PathValue("sessionId")
 	file := r.PathValue("file")
+	if !hls.ValidSessionID(sid) {
+		http.Error(w, "Transcoding session not found", http.StatusNotFound)
+		return
+	}
 	sess, ok := a.HLS.Get(sid)
 	if !ok || sess.ItemID != itemID {
 		http.Error(w, "Transcoding session not found", http.StatusNotFound)

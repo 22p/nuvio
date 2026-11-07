@@ -1339,6 +1339,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "Invalid request format"})
 		return
 	}
+	if body.AITargetLanguage != nil {
+		if lang := strings.TrimSpace(*body.AITargetLanguage); lang != "" && !jellyfin.ValidLanguageCode(lang) {
+			writeJSON(w, 400, map[string]any{"error": "Invalid subtitle language"})
+			return
+		}
+	}
 	for _, p := range []*string{body.FFmpegPath, body.FFprobePath} {
 		if p == nil || strings.TrimSpace(*p) == "" {
 			continue

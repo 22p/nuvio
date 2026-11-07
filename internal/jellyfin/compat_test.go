@@ -524,34 +524,40 @@ func TestMediaBrowserParamAfterMultibyte(t *testing.T) {
 	}
 }
 
-// Jellyfin's direct stream endpoint is anonymous: clients such as Findroid
-// hand the URL straight to the player without any credentials.
-func TestDirectStreamIsAnonymous(t *testing.T) {
-	_, h := newTestAPI(t)
+// Direct streaming now requires a token. Part of the client compatibility
+// cost is that clients which hand the URL to a player without carrying the
+// query token fail instead of streaming anonymously.
+func TestDirectStreamRequiresToken(t *testing.T) {
+	a, h := newTestAPI(t)
+	_, tok := testUser(t, a)
 	movie := demo.Items()[0]
 
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true", nil))
-	if rec.Code != 200 {
-		t.Fatalf("anonymous stream = %d: %s", rec.Code, rec.Body.String())
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "video/") {
-		t.Fatalf("anonymous stream content type = %q", ct)
-	}
-
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream.mp4", nil))
-	if rec.Code != 200 {
-		t.Fatalf("anonymous stream.{container} = %d", rec.Code)
+	for _, path := range []string{
+		"/Videos/" + movie.ID + "/stream?static=true",
+		"/Videos/" + movie.ID + "/stream.mp4",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 401 {
+			t.Fatalf("anonymous %s = %d, want 401", path, rec.Code)
+		}
 	}
 
-	// An explicitly supplied token is still checked.
 	req := httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true", nil)
 	req.Header.Set("X-Emby-Token", "definitely-not-a-token")
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 401 {
 		t.Fatalf("invalid token stream = %d, want 401", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true&api_key="+tok, nil))
+	if rec.Code != 200 {
+		t.Fatalf("authorized stream = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "video/") {
+		t.Fatalf("authorized stream content type = %q", ct)
 	}
 
 	// HLS stays protected, matching the reference server.

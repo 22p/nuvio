@@ -73,7 +73,7 @@ X-Emby-Token: <token>
 
 服务端按客户端提交的 `DeviceProfile` 决定直连、转封装或转码，见 [播放与转码](playback.md)。
 
-`/Videos/{id}/stream` 允许匿名访问：客户端会把 URL 直接交给系统播放器，Findroid 等不会附带令牌。知道条目 ID 就能拉流，公网部署请自行加访问控制。
+`/Videos/{id}/stream` 现在要求 token：`DirectStreamUrl` 已经带上 `api_key`，客户端也可以使用 `X-Emby-Token`。把裸 URL 交给系统播放器、又不保留 query token 的客户端会收到 401；这是为了提高权限模型而接受的兼容性代价。
 
 `/Videos/{id}/master.m3u8` 和字幕仍然需要鉴权。
 

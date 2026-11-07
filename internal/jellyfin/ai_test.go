@@ -214,3 +214,16 @@ func TestTranslateVTTEscapesMarkup(t *testing.T) {
 		t.Fatalf("markup was not escaped:\n%s", out)
 	}
 }
+
+func TestValidLanguageCode(t *testing.T) {
+	for _, code := range []string{"zh-CN", "en-US", "ja", "pt-BR", "zh-Hans", "es-419"} {
+		if !ValidLanguageCode(code) {
+			t.Fatalf("%q should be accepted", code)
+		}
+	}
+	for _, code := range []string{"", ".", "..", "../../etc", "zh/CN", "a", "abcdefghi", "zh CN"} {
+		if ValidLanguageCode(code) {
+			t.Fatalf("%q should be rejected", code)
+		}
+	}
+}

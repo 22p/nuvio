@@ -119,7 +119,7 @@ Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / deco
 
 ## 反向代理
 
-Nuvio 只提供 HTTP。公网访问建议放在 Caddy / Nginx 后并启用 HTTPS。代理需要保留 `Authorization`、`X-Emby-Token`、`Range` 请求头，并正确返回 `206`。`/Videos/{id}/stream` 允许匿名访问，不要在代理层额外加鉴权，否则第三方客户端可能无法播放。细节见 [配置](configuration.md#反向代理)。
+Nuvio 只提供 HTTP。公网访问建议放在 Caddy / Nginx 后并启用 HTTPS。代理需要保留 `Authorization`、`X-Emby-Token`、`Range` 请求头，并正确返回 `206`。`/Videos/{id}/stream` 现在要求 token；代理不要剥离 URL 中的 `api_key`，也不要替换客户端传来的 `Authorization` / `X-Emby-Token`，否则直连会返回 401。细节见 [配置](configuration.md#反向代理)。
 
 ## 源码结构
 

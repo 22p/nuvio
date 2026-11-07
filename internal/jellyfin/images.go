@@ -93,6 +93,7 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 
 	if path != "" {
 		f, err := os.Open(path)
@@ -102,14 +103,15 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 			head := make([]byte, 512)
 			n, _ := f.Read(head)
 			_, _ = f.Seek(0, io.SeekStart)
-			ct := http.DetectContentType(head[:n])
-			if ct == "application/octet-stream" {
-				ct = "image/jpeg"
-			}
-			w.Header().Set("Content-Type", ct)
-			if st != nil {
-				http.ServeContent(w, r, filepath.Base(path), st.ModTime(), f)
-				return
+			// A file named poster.jpg is not necessarily an image. Only serve
+			// recognized raster types: HTML or SVG content in a media folder
+			// must not become a same-origin page.
+			if ct := safeImageContentType(http.DetectContentType(head[:n])); ct != "" {
+				w.Header().Set("Content-Type", ct)
+				if st != nil {
+					http.ServeContent(w, r, filepath.Base(path), st.ModTime(), f)
+					return
+				}
 			}
 		}
 	}
@@ -293,11 +295,26 @@ func imageExt(urlPath string) string {
 }
 
 func writeImageBytes(w http.ResponseWriter, data []byte) {
-	ct := http.DetectContentType(data)
-	if !strings.HasPrefix(ct, "image/") {
+	ct := safeImageContentType(http.DetectContentType(data))
+	if ct == "" {
 		ct = "image/jpeg"
 	}
 	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	_, _ = w.Write(data)
+}
+
+// safeImageContentType returns the media type only for image formats a browser
+// may safely render from a media library. SVG and HTML are intentionally
+// excluded because they can execute script on the server origin.
+func safeImageContentType(ct string) string {
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	switch strings.ToLower(strings.TrimSpace(ct)) {
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/bmp":
+		return ct
+	}
+	return ""
 }

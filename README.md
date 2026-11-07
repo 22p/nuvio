@@ -70,7 +70,7 @@ docker run -d --name nuvio -p 8096:8096 -v nuvio-data:/data nuvio
 http://<服务器地址>:8096
 ```
 
-用 Nuvio 网页里创建的同一账号登录。对外声明的接口版本为 `12.4.0`，实现的是核心子集；插件、Live TV、音乐库、Quick Connect、下载/离线同步等没有实现，客户端会按 404 或空结果降级。接口清单见 [第三方客户端](docs/jellyfin-clients.md)。
+用 Nuvio 网页里创建的同一账号登录。对外声明的接口版本为 `12.4.0`，实现的是核心子集；插件、Live TV、音乐库、Quick Connect、下载/离线同步等没有实现，客户端会按 404 或空结果降级。直连播放现在需要 token，不能把不带 `api_key` 的裸 URL 直接交给系统播放器。接口清单见 [第三方客户端](docs/jellyfin-clients.md)。
 
 ## 配置
 
@@ -88,7 +88,7 @@ http://<服务器地址>:8096
 ## 安全
 
 - Nuvio 只提供 HTTP，公网访问请放在 Caddy / Nginx 后并启用 HTTPS。
-- `/Videos/{id}/stream` 允许匿名访问，知道条目 ID 即可拉流；公网部署请自行加访问控制。
+- `/Videos/{id}/stream` 需要有效的 `api_key` / `X-Emby-Token`；不再允许匿名拉流。第三方客户端如果只把裸 URL 交给播放器，需要能带上查询参数中的 token。
 - 密码使用 PBKDF2-HMAC-SHA256 加盐哈希；数据目录包含数据库与 API Key，应限制访问权限。
 
 ## 演示素材

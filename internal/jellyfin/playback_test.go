@@ -1,8 +1,12 @@
 package jellyfin
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"nuvio/internal/demo"
 	"nuvio/internal/model"
 )
 
@@ -116,3 +120,27 @@ func TestLibraryVisibility(t *testing.T) {
 
 func boolPtr(v bool) *bool { return &v }
 func intPtr(v int) *int    { return &v }
+
+func TestPlaybackInfoRejectsTraversalSessionID(t *testing.T) {
+	a, h := newTestAPI(t)
+	_, tok := testUser(t, a)
+
+	movieID := ""
+	for _, it := range demo.Items() {
+		if it.Type == model.TypeMovie {
+			movieID = it.ID
+			break
+		}
+	}
+	if movieID == "" {
+		t.Fatal("demo movie missing")
+	}
+
+	req := httptest.NewRequest("POST", "/Items/"+movieID+"/PlaybackInfo?api_key="+tok,
+		strings.NewReader(`{"PlaySessionId":"../../escape"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}

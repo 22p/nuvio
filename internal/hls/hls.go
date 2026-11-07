@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,7 +90,20 @@ type Manager struct {
 	maxAge      time.Duration
 	idleTimeout time.Duration
 	sweep       time.Duration
+	// Reservations cover sessions that are being created but are not in the
+	// map yet, so concurrent requests cannot all pass the limit check.
+	starting       int
+	startingByUser map[string]int
 }
+
+const (
+	maxActiveSessions = 6
+	maxUserSessions   = 3
+	maxSessionEntries = 64
+)
+
+// ErrTooManySessions is returned when the transcode pool is full.
+var ErrTooManySessions = errors.New("too many transcoding sessions")
 
 // New creates a manager rooted at dir. ffmpeg is resolved lazily so the admin
 // can change the binary path at runtime.
@@ -134,6 +148,45 @@ func (m *Manager) Ensure(sessionID, itemID, itemPath string, opts Options) (*Ses
 const segmentSeconds = 4
 
 const segmentTicks = int64(segmentSeconds) * 10_000_000
+
+// ValidSessionID reports whether a client supplied PlaySessionId can be used
+// as a directory name. Clients normally send a UUID or an opaque hex token;
+// only a single path element of those characters is accepted so a session
+// directory cannot escape the transcode root.
+func ValidSessionID(id string) bool {
+	if id == "" || len(id) > 128 || id == "." || id == ".." {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// sessionDir resolves a session directory and rejects anything that is not a
+// direct child of the transcode root, even if the caller bypassed
+// ValidSessionID.
+func (m *Manager) sessionDir(id string) (string, bool) {
+	if !ValidSessionID(id) {
+		return "", false
+	}
+	root := filepath.Clean(m.dir)
+	dir := filepath.Join(root, id)
+	if filepath.Dir(dir) != root {
+		return "", false
+	}
+	return dir, true
+}
+
+// isSessionDir reports whether dir is a directory this manager may remove.
+func (m *Manager) isSessionDir(dir string) bool {
+	want, ok := m.sessionDir(filepath.Base(dir))
+	return ok && want == filepath.Clean(dir)
+}
 
 // Resume restarts a session that the janitor suspended for inactivity. from
 // is the first segment number the client needs; a negative value continues
@@ -185,7 +238,55 @@ func resumeTarget(base int64, baseNumber, last, from int) (int64, int) {
 	return ticks, from
 }
 
+// reserve checks the active and total session limits and counts a session that
+// is about to be created. The reservation is released when start returns; by
+// then the session is either in the map or gone.
+func (m *Manager) reserve(userID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	active, byUser := 0, 0
+	for _, s := range m.sessions {
+		s.mu.Lock()
+		running := !s.suspended && !s.finished
+		s.mu.Unlock()
+		if !running {
+			continue
+		}
+		active++
+		if userID != "" && s.UserID == userID {
+			byUser++
+		}
+	}
+	if active+m.starting >= maxActiveSessions || len(m.sessions)+m.starting >= maxSessionEntries {
+		return false
+	}
+	if userID != "" && byUser+m.startingByUser[userID] >= maxUserSessions {
+		return false
+	}
+	m.starting++
+	if m.startingByUser == nil {
+		m.startingByUser = map[string]int{}
+	}
+	m.startingByUser[userID]++
+	return true
+}
+
+func (m *Manager) releaseReservation(userID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.starting > 0 {
+		m.starting--
+	}
+	if m.startingByUser[userID] > 0 {
+		m.startingByUser[userID]--
+	}
+}
+
 func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, error) {
+	dir, ok := m.sessionDir(id)
+	if !ok {
+		return nil, fmt.Errorf("invalid session id")
+	}
 	ff := m.ffmpeg()
 	if ff == "" {
 		return nil, fmt.Errorf("ffmpeg is not available")
@@ -204,6 +305,13 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	if opts.Height <= 0 || opts.Height > 2160 {
 		opts.Height = 1080
 	}
+	if opts.Width < 0 || opts.Width > 7680 {
+		opts.Width = 0
+	}
+	if !m.reserve(opts.UserID) {
+		return nil, ErrTooManySessions
+	}
+	defer m.releaseReservation(opts.UserID)
 	if !validPreset(opts.Preset) {
 		opts.Preset = "veryfast"
 	}
@@ -215,7 +323,6 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	if !opts.Copy {
 		opts.AudioCopy = false
 	}
-	dir := filepath.Join(m.dir, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -532,7 +639,12 @@ func (m *Manager) Stop(id string) {
 		return
 	}
 	s.stop()
-	_ = os.RemoveAll(s.Dir)
+	// Only remove a directory this manager created. The session id is
+	// validated on creation, but keep the check here as a second line of
+	// defence in case a session comes from older state.
+	if m.isSessionDir(s.Dir) {
+		_ = os.RemoveAll(s.Dir)
+	}
 }
 
 // StopItem terminates sessions for an item.
@@ -586,8 +698,10 @@ func (m *Manager) suspend(id string) {
 	s.suspendedAt = time.Now()
 	s.mu.Unlock()
 	s.stop()
-	_ = os.RemoveAll(s.Dir)
-	_ = os.MkdirAll(s.Dir, 0o755)
+	if m.isSessionDir(s.Dir) {
+		_ = os.RemoveAll(s.Dir)
+		_ = os.MkdirAll(s.Dir, 0o755)
+	}
 }
 
 // StopAll terminates every session (shutdown).

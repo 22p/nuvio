@@ -20,7 +20,29 @@ import (
 )
 
 // translatedNameRe matches <itemID>-<sourceIndex>.<language>.vtt.
-var translatedNameRe = regexp.MustCompile(`^([0-9a-f]+)-(\d+)\.([A-Za-z-]+)\.vtt$`)
+var translatedNameRe = regexp.MustCompile(`^([0-9a-f]+)-(\d+)\.([A-Za-z0-9-]+)\.vtt$`)
+
+// ValidLanguageCode accepts the language tags used by the settings page and
+// the translated subtitle URL. It deliberately allows only a dotted-free
+// sequence of short alphanumeric groups, so a tag cannot become a path.
+func ValidLanguageCode(code string) bool {
+	if code == "" || len(code) > 35 {
+		return false
+	}
+	for _, part := range strings.Split(code, "-") {
+		if len(part) < 2 || len(part) > 8 {
+			return false
+		}
+		for i := 0; i < len(part); i++ {
+			c := part[i]
+			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
 
 func (a *API) registerAI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /Items/AI/Lists", a.handleAILists)
@@ -134,12 +156,23 @@ func (a *API) handleTranslatedSubtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lang := r.PathValue("lang")
-	paths, _ := filepath.Glob(filepath.Join(a.translatedDir(), it.ID+"-*."+lang+".vtt"))
-	if len(paths) == 0 {
+	if !ValidLanguageCode(lang) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	var track *translatedFile
+	for _, f := range a.translatedFiles(it) {
+		if strings.EqualFold(f.Lang, lang) {
+			found := f
+			track = &found
+			break
+		}
+	}
+	if track == nil {
 		http.Error(w, "subtitle unavailable", http.StatusNotFound)
 		return
 	}
-	data, err := os.ReadFile(paths[0])
+	data, err := os.ReadFile(track.Path)
 	if err != nil {
 		http.Error(w, "subtitle unavailable", http.StatusNotFound)
 		return
@@ -191,6 +224,10 @@ func (a *API) handleTranslateSubtitle(w http.ResponseWriter, r *http.Request) {
 	}
 	if lang == "" {
 		lang = "zh-CN"
+	}
+	if !ValidLanguageCode(lang) {
+		writeError(w, 400, "Invalid subtitle language")
+		return
 	}
 	data, err := a.loadSubtitle(r, it, sub)
 	if err != nil {

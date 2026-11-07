@@ -56,6 +56,11 @@ type API struct {
 	imageHTTP    *http.Client
 	imageSem     chan struct{}
 	imageFail    sync.Map
+
+	loginMu      sync.Mutex
+	loginAttempt map[string]*loginAttempt
+	loginOnce    sync.Once
+	loginSem     chan struct{}
 }
 
 // HardwareCapability is one backend's probed encoder and decoder support.
@@ -705,11 +710,30 @@ func (a *API) handleAuthenticate(w http.ResponseWriter, r *http.Request) {
 	if pass == "" {
 		pass = body.Password
 	}
-	u, ok := a.Store.Authenticate(strings.TrimSpace(body.Username), pass)
+	username := strings.TrimSpace(body.Username)
+	key := a.loginKey(r, username)
+	if wait, allowed := a.loginBlocked(key); !allowed {
+		seconds := int(wait.Seconds())
+		if seconds < 1 {
+			seconds = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeError(w, 429, "Too many login attempts; try again later")
+		return
+	}
+	if !a.acquireLogin(r.Context()) {
+		w.Header().Set("Retry-After", "2")
+		writeError(w, 429, "Too many login attempts; try again later")
+		return
+	}
+	defer a.releaseLogin()
+	u, ok := a.Store.Authenticate(username, pass)
 	if !ok {
+		a.loginFailed(key)
 		writeError(w, 401, "Invalid username or password")
 		return
 	}
+	a.loginSucceeded(key)
 	now := time.Now().UTC()
 	meta := SessionMetaFromRequest(r)
 	client, deviceName, clientVersion := meta.Client, meta.DeviceName, meta.Version
