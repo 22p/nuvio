@@ -119,7 +119,93 @@ Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / deco
 
 ## 反向代理
 
-Nuvio 只提供 HTTP。公网访问建议放在 Caddy / Nginx 后并启用 HTTPS。代理需要保留 `Authorization`、`X-Emby-Token`、`Range` 请求头，并正确返回 `206`。`/Videos/{id}/stream` 现在要求 token；代理不要剥离 URL 中的 `api_key`，也不要替换客户端传来的 `Authorization` / `X-Emby-Token`，否则直连会返回 401。细节见 [配置](configuration.md#反向代理)。
+Nuvio 只提供 HTTP。公网访问、需要 HTTPS 或要安装 PWA 时，建议放在 Caddy / Nginx 后面。让 Nuvio 只监听回环地址，避免绕过代理直接访问 8096：
+
+```bash
+./nuvio -addr 127.0.0.1:8096
+# 或设置 NUVIO_ADDR=127.0.0.1:8096
+```
+
+Docker 同理，只把端口发布到本机：
+
+```bash
+docker run -d --name nuvio -p 127.0.0.1:8096:8096 -v nuvio-data:/data nuvio
+```
+
+### Caddy
+
+```caddy
+nuvio.example.com {
+    reverse_proxy 127.0.0.1:8096 {
+        flush_interval -1
+    }
+}
+```
+
+Caddy 自动申请和续期证书，默认设置 `X-Forwarded-For` / `X-Forwarded-Proto`。`flush_interval -1` 让直连流和 HLS 分片立即输出，不等待缓冲区填满。
+
+### Nginx
+
+```nginx
+server {
+    listen 80;
+    server_name nuvio.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name nuvio.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/nuvio.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/nuvio.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8096;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # 覆盖客户端自带的 X-Forwarded-For，避免伪造来源 IP。
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 直连流和 HLS 需要持续输出，不要缓冲。
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 12h;
+        proxy_send_timeout 12h;
+    }
+}
+```
+
+证书可以用 certbot 申请，或换成自己的证书路径。`Range` 和 `If-Range` 由 Nginx 默认转发，不要给 `/Videos/` 配置 `proxy_cache`。
+
+### 代理要求
+
+- 保留 `Authorization`、`X-Emby-Token`、`X-Emby-Authorization` 头；不要用自己的登录页或 `auth_basic` 替换它们，否则第三方客户端无法登录
+- `/Videos/{id}/stream` 支持 Range，代理必须原样转发 `Range` 并返回 `206 Partial Content`
+- 不要剥离 URL 中的 `api_key`；直连流现在需要 token
+- 关闭响应缓冲；直连播放是长连接，读超时至少按单部影片时长设置
+- 把真实客户端 IP 写入 `X-Forwarded-For` 或 `X-Real-IP`，登录限流才能按客户端区分。多个代理串联时只信任最外层代理写入的值
+- 不要缓存 `/sw.js` 和 `/manifest.webmanifest`；`/assets/` 是带哈希的静态文件，可以长期缓存
+- HTTPS 是安装 PWA 和注册 Service Worker 的前提，见[安装为应用（PWA）](#安装为应用pwa)
+
+## 安装为应用（PWA）
+
+网页自带 Web App Manifest 和 Service Worker，可以在浏览器里安装成独立窗口的应用：
+
+- **桌面 Chrome / Edge**：地址栏右侧的安装图标，或菜单「安装 Nuvio」
+- **Android Chrome**：菜单「添加到主屏幕 / 安装应用」
+- **iOS Safari**：分享菜单「添加到主屏幕」
+
+安装和 Service Worker 都需要**安全上下文**：HTTPS，或通过 `localhost` / `127.0.0.1` 访问。用 `http://192.168.x.x:8096` 打开时页面正常，但不会注册 Service Worker，也不会出现安装入口。局域网使用请在 Caddy / Nginx 上配好 HTTPS，或使用自签证书并在客户端信任。
+
+离线行为：
+
+- 只缓存网页外壳（`index.html`、带哈希的 JS/CSS、图标和 manifest）
+- 媒体流、`/api/`、Jellyfin 接口、字幕和图片一律不缓存，因此离线时只能打开界面，浏览和播放仍需服务器在线
+- 服务器更新后，在线打开的页面会拿到新的 `index.html`，新资源按需下载；旧缓存会在 Service Worker 版本升级时清理
+- 反向代理不要缓存 `/sw.js` 和 `/manifest.webmanifest`（Nuvio 已经返回 `Cache-Control: no-cache`）
 
 ## 源码结构
 

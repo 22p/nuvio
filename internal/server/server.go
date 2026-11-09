@@ -1486,6 +1486,11 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, name string) 
 		return
 	}
 	ct := mime.TypeByExtension(path.Ext(name))
+	if path.Ext(name) == ".webmanifest" {
+		// Not in Go's built-in MIME table and often missing from the
+		// container's mime.types.
+		ct = "application/manifest+json"
+	}
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
@@ -1494,6 +1499,10 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, name string) 
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")
+	}
+	if name == "sw.js" {
+		// A worker served from the root may control the whole origin.
+		w.Header().Set("Service-Worker-Allowed", "/")
 	}
 	if rs, ok := f.(io.ReadSeeker); ok {
 		http.ServeContent(w, r, name, st.ModTime(), rs)

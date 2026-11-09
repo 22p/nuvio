@@ -6,7 +6,7 @@
 
 ## 功能
 
-- **Web 客户端**：首页、继续观看、片库、收藏、搜索、剧集详情、播放器、设置；桌面与移动端响应式，支持 English / 简体中文 / 繁體中文 / 日本語 / 한국어。
+- **Web 客户端**：首页、继续观看、片库、收藏、搜索、剧集详情、播放器、设置；桌面与移动端响应式，支持 English / 简体中文 / 繁體中文 / 日本語 / 한국어。可安装为 PWA（需要 HTTPS 或 localhost），离线时仍能打开界面外壳。
 - **Jellyfin 兼容**：按 12.4.0 实现登录、浏览、搜索、`PlaybackInfo`、直连串流、HLS、字幕、进度与收藏等核心接口，第三方客户端可直接连接。
 - **媒体库**：电影、剧集、混合库；支持 `Show/Season 01/S01E01`、扁平目录、NFO 与本地图片。普通扫描会跳过未修改文件的 ffprobe，也可以手动全量扫描。
 - **播放**：直连优先，其次转封装（`-c copy`），最后 HLS 转码；可选 VAAPI / QSV 硬件加速，失败自动回退软件。
@@ -61,6 +61,26 @@ docker run -d --name nuvio -p 8096:8096 -v nuvio-data:/data nuvio
 ```
 
 媒体目录、`/dev/dri` 硬件直通、Podman Quadlet、独立缓存盘和反向代理见 [部署](docs/deployment.md)。
+
+## 反向代理
+
+公网访问、需要 HTTPS 或要安装 PWA 时，建议把 Nuvio 放在反向代理后面。Caddy 会自动申请证书：
+
+```caddy
+nuvio.example.com {
+    reverse_proxy 127.0.0.1:8096 {
+        flush_interval -1
+    }
+}
+```
+
+代理需要保留 `Authorization`、`X-Emby-Token` 和 `Range`（并返回 `206`），关闭响应缓冲，把真实客户端 IP 写入 `X-Forwarded-For`。同机部署时让 Nuvio 只监听回环地址，避免绕过代理访问 8096：
+
+```bash
+./nuvio -addr 127.0.0.1:8096
+```
+
+完整的 Caddy / Nginx 配置和超时、缓存注意事项见 [部署](docs/deployment.md#反向代理)。
 
 ## 连接第三方客户端
 

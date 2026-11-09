@@ -24,3 +24,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </React.StrictMode>,
 )
+
+// The service worker only precaches the app shell; it is skipped in dev so
+// Vite's module graph is never served from a stale cache.
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Registration needs HTTPS or localhost. The app works without it.
+    })
+  })
+}
