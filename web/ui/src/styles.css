@@ -2920,6 +2920,16 @@ select option:disabled {
   background: #000;
   outline: 0;
 }
+.subtitle-viewport {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+}
 .subtitle-layer {
   position: absolute;
   left: 50%;

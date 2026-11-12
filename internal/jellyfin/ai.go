@@ -288,8 +288,9 @@ var (
 //
 //	1|321.2|323.5|Hello, how are you?
 //
-// Styling and positioning are dropped locally before the request and never
-// restored, so the result is plain WebVTT with the original timings.
+// Only text is sent to the model. Cue identifiers and cue settings (position,
+// line, alignment, region) stay local and are written back unchanged, so a
+// translated sign keeps the place and shape of the original cue.
 func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (string, error) {
 	cues := parseCues(vtt)
 	if len(cues) == 0 {
@@ -300,25 +301,54 @@ func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (str
 	}
 	var b strings.Builder
 	b.WriteString("WEBVTT\n")
+	for _, header := range vttHeaderBlocks(vtt) {
+		b.WriteString("\n" + header + "\n")
+	}
 	for _, c := range cues {
 		if c.text == "" {
 			continue
 		}
-		b.WriteString("\n" + c.start + " --> " + c.end + "\n" + escapeVTTText(c.text) + "\n")
+		b.WriteString("\n")
+		if c.id != "" {
+			b.WriteString(c.id + "\n")
+		}
+		b.WriteString(c.start + " --> " + c.end)
+		if c.settings != "" {
+			b.WriteString(" " + c.settings)
+		}
+		b.WriteString("\n" + escapeVTTText(c.text) + "\n")
 	}
 	return b.String(), nil
 }
 
 type cueJob struct {
+	id       string
 	start    string
 	end      string
+	settings string
 	startSec float64
 	endSec   float64
 	text     string
 }
 
-// parseCues reads the timing of every cue and reduces its text to plain
-// characters: override blocks, HTML tags, entities and line breaks are gone.
+// vttHeaderBlocks returns STYLE and REGION blocks verbatim. They describe how
+// cues are painted, so translating the cue text must not drop them.
+func vttHeaderBlocks(vtt string) []string {
+	blocks := strings.Split(strings.ReplaceAll(vtt, "\r\n", "\n"), "\n\n")
+	out := []string{}
+	for _, block := range blocks {
+		first := strings.ToUpper(strings.TrimSpace(strings.SplitN(block, "\n", 2)[0]))
+		if first == "STYLE" || first == "REGION" {
+			out = append(out, strings.TrimSpace(block))
+		}
+	}
+	return out
+}
+
+// parseCues reads the timing and layout of every cue and reduces its text to
+// plain characters: override blocks, HTML tags, entities and line breaks are
+// gone. The cue identifier and the settings after the end timestamp are kept
+// so callers can rebuild the original layout around the translated text.
 func parseCues(vtt string) []cueJob {
 	blocks := strings.Split(strings.ReplaceAll(vtt, "\r\n", "\n"), "\n\n")
 	out := []cueJob{}
@@ -334,9 +364,19 @@ func parseCues(vtt string) []cueJob {
 		if timing < 0 {
 			continue
 		}
+		// WEBVTT, STYLE, REGION and NOTE blocks are not cues.
+		first := strings.ToUpper(strings.TrimSpace(lines[0]))
+		if strings.HasPrefix(first, "WEBVTT") || first == "STYLE" || first == "REGION" ||
+			first == "NOTE" || strings.HasPrefix(first, "NOTE ") {
+			continue
+		}
 		parts := strings.SplitN(lines[timing], "-->", 2)
 		start := strings.TrimSpace(parts[0])
-		end := strings.SplitN(strings.TrimSpace(parts[1]), " ", 2)[0]
+		end, settings := splitVTTSettings(strings.TrimSpace(parts[1]))
+		id := ""
+		if timing > 0 {
+			id = strings.TrimSpace(lines[timing-1])
+		}
 		text := cleanCueText(strings.Join(lines[timing+1:], " "))
 		if text == "" {
 			continue
@@ -349,12 +389,21 @@ func parseCues(vtt string) []cueJob {
 			continue
 		}
 		out = append(out, cueJob{
-			start: start, end: end,
+			id: id, start: start, end: end, settings: settings,
 			startSec: startSec, endSec: endSec,
 			text: text,
 		})
 	}
 	return out
+}
+
+// splitVTTSettings separates the end timestamp from the cue settings that
+// follow it, for example "00:00:04.000 line:9% position:50% align:center".
+func splitVTTSettings(s string) (end, settings string) {
+	if i := strings.IndexAny(s, " \t"); i >= 0 {
+		return s[:i], strings.TrimSpace(s[i+1:])
+	}
+	return s, ""
 }
 
 // escapeVTTText keeps subtitle text from being read as WebVTT markup.

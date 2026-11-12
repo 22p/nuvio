@@ -41,26 +41,51 @@ func echoTranslator(requests *int) http.HandlerFunc {
 	}
 }
 
-func TestTranslateVTTStripsEffectsAndKeepsTiming(t *testing.T) {
+func TestTranslateVTTKeepsCueSettingsAndStripsInlineEffects(t *testing.T) {
 	server := httptest.NewServer(echoTranslator(nil))
 	defer server.Close()
 
 	client := ai.New(server.URL, "key", "test")
 	vtt := "WEBVTT\n\n" +
-		"00:00:01.000 --> 00:00:04.000 align:start position:0%\n<i>Hello</i> {\\an8}there\n\n" +
+		"sign-1\n00:00:01.000 --> 00:00:04.000 line:9.3% line-align:start position:50.0% align:center\n<i>Hello</i> {\\an8}there\n\n" +
 		"00:00:05.000 --> 00:00:08.000\nGeneral <b>Kenobi</b>\n"
 	out, err := translateVTT(context.Background(), client, vtt, "zh-CN")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "00:00:01.000 --> 00:00:04.000") {
-		t.Fatalf("timing or settings wrong:\n%s", out)
+	if !strings.Contains(out, "sign-1\n00:00:01.000 --> 00:00:04.000 line:9.3% line-align:start position:50.0% align:center") {
+		t.Fatalf("cue id, timing or settings were lost:\n%s", out)
 	}
-	if strings.Contains(out, "align:") || strings.Contains(out, "<i>") || strings.Contains(out, "\\an8") {
-		t.Fatalf("effects were not stripped:\n%s", out)
+	if strings.Contains(out, "<i>") || strings.Contains(out, "\\an8") {
+		t.Fatalf("inline effects were not stripped:\n%s", out)
 	}
 	if !strings.Contains(out, "译:Hello there") || !strings.Contains(out, "译:General Kenobi") {
 		t.Fatalf("translated text missing:\n%s", out)
+	}
+}
+
+func TestTranslateVTTKeepsStyleAndRegionBlocks(t *testing.T) {
+	server := httptest.NewServer(echoTranslator(nil))
+	defer server.Close()
+
+	client := ai.New(server.URL, "key", "test")
+	vtt := "WEBVTT\n\n" +
+		"STYLE\n::cue(.sign) { color: yellow }\n\n" +
+		"REGION\nid:top\nwidth:40%\n\n" +
+		"sign-1\n00:00:01.000 --> 00:00:02.000 region:top line:5% align:start\nTop sign\n"
+	out, err := translateVTT(context.Background(), client, vtt, "zh-CN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"STYLE\n::cue(.sign) { color: yellow }",
+		"REGION\nid:top\nwidth:40%",
+		"sign-1\n00:00:01.000 --> 00:00:02.000 region:top line:5% align:start",
+		"译:Top sign",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("translated VTT missing %q:\n%s", want, out)
+		}
 	}
 }
 

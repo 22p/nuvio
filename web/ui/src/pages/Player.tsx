@@ -253,6 +253,7 @@ export function PlayerPage() {
   const [duration, setDuration] = useState(0)
   const [buffered, setBuffered] = useState(0)
   const [cues, setCues] = useState<Cue[]>([])
+  const [videoBox, setVideoBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [subDelay, setSubDelay] = useState(0)
   const [extraSubs, setExtraSubs] = useState<MediaStream[]>([])
   const [translating, setTranslating] = useState(false)
@@ -312,6 +313,43 @@ export function PlayerPage() {
   useEffect(() => {
     stateRef.current = { item, source, sessionId, mode, offset, audioIndex, duration, dragging }
   }, [item, source, sessionId, mode, offset, audioIndex, duration, dragging])
+
+  // VTT positions are percentages of the source frame. The video is letterboxed
+  // with object-fit: contain, so anchor the subtitle layer to the visible frame
+  // instead of the player container; otherwise every positioned cue drifts.
+  useEffect(() => {
+    const video = videoRef.current
+    const container = containerRef.current
+    if (!video || !container) return
+
+    const update = () => {
+      const vw = video.videoWidth
+      const vh = video.videoHeight
+      const cw = container.clientWidth
+      const ch = container.clientHeight
+      if (!vw || !vh || !cw || !ch) {
+        setVideoBox(null)
+        return
+      }
+      const scale = Math.min(cw / vw, ch / vh)
+      const width = vw * scale
+      const height = vh * scale
+      setVideoBox({ left: (cw - width) / 2, top: (ch - height) / 2, width, height })
+    }
+
+    update()
+    video.addEventListener('loadedmetadata', update)
+    video.addEventListener('resize', update)
+    window.addEventListener('resize', update)
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    observer?.observe(container)
+    return () => {
+      video.removeEventListener('loadedmetadata', update)
+      video.removeEventListener('resize', update)
+      window.removeEventListener('resize', update)
+      observer?.disconnect()
+    }
+  }, [loadingMeta, item])
 
   const streams = useMemo(() => source?.MediaStreams || item?.MediaSources?.[0]?.MediaStreams || [], [source, item])
   const subtitleStreams = useMemo(() => {
@@ -1176,17 +1214,26 @@ export function PlayerPage() {
         onDoubleClick={toggleFullscreen}
       />
 
-      {!error && plainCues.length > 0 && (
-        <div className="subtitle-layer" style={cueTextStyle(prefs)}>
-          {plainCues.map((c) => c.text).join('\n')}
-        </div>
-      )}
-      {!error &&
-        positionedCues.map((cue, i) => (
-          <div key={i} className="subtitle-layer" style={{ ...cueTextStyle(prefs), ...cuePositionStyle(cue) }}>
-            {cue.text}
+      <div
+        className="subtitle-viewport"
+        style={
+          videoBox
+            ? { left: videoBox.left, top: videoBox.top, width: videoBox.width, height: videoBox.height }
+            : undefined
+        }
+      >
+        {!error && plainCues.length > 0 && (
+          <div className="subtitle-layer" style={cueTextStyle(prefs)}>
+            {plainCues.map((c) => c.text).join('\n')}
           </div>
-        ))}
+        )}
+        {!error &&
+          positionedCues.map((cue, i) => (
+            <div key={i} className="subtitle-layer" style={{ ...cueTextStyle(prefs), ...cuePositionStyle(cue) }}>
+              {cue.text}
+            </div>
+          ))}
+      </div>
 
       <div className="player-shade top" />
       <div className="player-shade bottom" />

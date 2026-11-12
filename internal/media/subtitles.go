@@ -388,9 +388,10 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 		// Vector drawings cannot be rendered as text.
 		return "", false
 	}
-	if assNonDialogueStyle(field("Style")) {
-		// Credits, on-screen titles and typesetting styles are not dialogue;
-		// keeping them would mix signs and staff lists into the subtitles.
+	if assCreditStyle(field("Style")) {
+		// Staff rolls are credits, not subtitles. Screen text, titles and
+		// readable typesetting are kept as positioned cues; per-syllable
+		// fragments are filtered by assKaraoke below.
 		return "", false
 	}
 	if assKaraoke(field("Style"), field("Effect"), body, (end - start).Seconds()) {
@@ -480,15 +481,10 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 // assKaraoke reports whether an event is a karaoke syllable or a typesetting
 // fragment. Such events are one or two characters shown for a fraction of a
 // second and cannot be represented in WebVTT.
-// assNonDialogueStyle reports whether a style carries credits, screen text or
-// typesetting rather than spoken dialogue.
-func assNonDialogueStyle(style string) bool {
-	name := strings.ToLower(strings.TrimSpace(style))
-	switch name {
-	case "staff", "title":
-		return true
-	}
-	return strings.HasPrefix(name, "spe_ed_")
+// assCreditStyle reports whether a style carries credits rather than dialogue
+// or on-screen text.
+func assCreditStyle(style string) bool {
+	return strings.EqualFold(strings.TrimSpace(style), "staff")
 }
 
 func assKaraoke(style, effect, body string, seconds float64) bool {
