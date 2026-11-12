@@ -1357,7 +1357,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.HardwareAccel != nil {
 		switch strings.ToLower(strings.TrimSpace(*body.HardwareAccel)) {
-		case "auto", "vaapi", "qsv", "none":
+		case "auto", "vaapi", "qsv", "vulkan", "none":
 		default:
 			writeJSON(w, 400, map[string]any{"error": "Invalid hardware acceleration mode"})
 			return
