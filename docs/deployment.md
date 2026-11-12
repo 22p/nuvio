@@ -95,9 +95,9 @@ systemctl --user enable --now nuvio   # 系统级去掉 --user，改用 sudo
 - `Tmpfs=/data/transcode:rw,size=4g` 可以完全不写盘，但 remux 会把整片切成 fMP4，4g 对高码率单集可能不够，按单集大小留余量或改用独立卷。
 - rootless 下访问 `/dev/dri` 需要当前用户在 `render`（部分发行版是 `video`）组里。
 
-## 硬件转码（VAAPI / QSV）
+## 硬件转码（VAAPI / QSV / Vulkan）
 
-Docker 镜像内置 Intel（`intel-media-driver` / `libva-intel-driver`）与 AMD（`mesa-va-gallium`）的 VAAPI 驱动，以及 Intel QSV 运行时 `libvpl` 和 `onevpl-intel-gpu`（仅 x86_64）。把宿主机的渲染节点传入容器即可：
+Docker 镜像内置 Intel（`intel-media-driver` / `libva-intel-driver`）与 AMD（`mesa-va-gallium`）的 VAAPI 驱动、Intel QSV 运行时 `libvpl` / `onevpl-intel-gpu`，以及 Vulkan loader 和 Mesa 的 Intel / AMD ICD（x86_64）。把宿主机的渲染节点传入容器即可：
 
 ```bash
 docker run -d --name nuvio -p 8096:8096 \
@@ -109,11 +109,20 @@ docker run -d --name nuvio -p 8096:8096 \
 
 ```
 Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / decode h264, hevc, av1, vp9
+Hardware acceleration: vulkan (0) encode h264, hevc, av1 / decode h264, hevc, av1
 ```
 
-设置 → 服务器 → 转码中也会逐后端展示可用的编码与解码格式。硬件加速可选 `Auto`、`VAAPI (Intel / AMD)`、`QSV (Intel)` 或 `Off`。
+设置 → 服务器 → 转码中也会逐后端展示可用的编码与解码格式。硬件加速可选 `Auto`、`VAAPI (Intel / AMD)`、`QSV (Intel)`、`Vulkan` 或 `Off`；`Auto` 按 VAAPI → QSV → Vulkan 的顺序选择第一个有可用编码器的后端。
 
-宿主机需要安装对应的内核驱动（Intel `i915`/`xe`、AMD `amdgpu`）和 VAAPI 驱动（Debian/Ubuntu 可安装 `mesa-va-drivers`、`intel-media-va-driver-non-free`）；裸机运行时把运行用户加入 `render` 组。
+Vulkan 使用 FFmpeg 的 `vulkan` hwaccel 和 `h264_vulkan` / `hevc_vulkan` / `av1_vulkan` 编码器：
+
+- 需要 FFmpeg 构建时启用 Vulkan：`ffmpeg -hwaccels` 应包含 `vulkan`，`ffmpeg -encoders | grep vulkan` 应能看到对应编码器
+- 设备用 Vulkan 物理设备索引选择（例如 `vk:0`），不是 `/dev/dri/renderD128`；多 GPU 时会依次尝试 0–3
+- 编解码器支持取决于驱动：Mesa RADV / ANV 或厂商驱动；Vulkan 编码通常比解码要求更高，NVIDIA 容器还需要 nvidia-container-toolkit
+- Vulkan 编码覆盖 H.264 / HEVC / AV1，没有 VP9 编码器；解码范围取决于 FFmpeg 和驱动（FFmpeg 8+ 可解 VP9），VP9 转码仍应使用 VAAPI / QSV 或软件编码
+- 如果 Vulkan 初始化、编码或解码失败，会自动回退到软件编码
+
+宿主机需要安装对应的内核驱动（Intel `i915`/`xe`、AMD `amdgpu`）和驱动包（Debian/Ubuntu 可安装 `mesa-va-drivers`、`mesa-vulkan-drivers`、`intel-media-va-driver-non-free`）；裸机运行时把运行用户加入 `render` 组。
 
 播放决策、编码器和缓存行为见 [播放与转码](playback.md)。
 

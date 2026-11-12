@@ -98,6 +98,55 @@ func TestBuildArgsQSV(t *testing.T) {
 	}
 }
 
+func TestBuildArgsVulkan(t *testing.T) {
+	cases := []struct {
+		codec   string
+		encoder string
+		profile string
+		tag     string
+	}{
+		{codec: "h264", encoder: "h264_vulkan", profile: "high"},
+		{codec: "hevc", encoder: "hevc_vulkan", profile: "main", tag: "hvc1"},
+		{codec: "av1", encoder: "av1_vulkan", tag: "av01"},
+	}
+	for _, c := range cases {
+		args := buildArgs(Options{
+			BitrateKbps:    4000,
+			Width:          1281,
+			Height:         721,
+			Hardware:       "vulkan",
+			HardwareDevice: "0",
+			Codec:          c.codec,
+		}, "/media/movie.mkv", "/tmp/session")
+		got := strings.Join(args, " ")
+
+		for _, want := range []string{
+			"-init_hw_device vulkan=vk:0",
+			"-filter_hw_device vk",
+			"-hwaccel vulkan",
+			"-hwaccel_output_format vulkan",
+			"-c:v " + c.encoder,
+			"-vf scale_vulkan=w=1280:h=720:format=nv12",
+			"-hls_segment_type fmp4",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s: missing %q in %s", c.codec, want, got)
+			}
+		}
+		if c.profile != "" && !strings.Contains(got, "-profile:v "+c.profile) {
+			t.Fatalf("%s: missing profile %q in %s", c.codec, c.profile, got)
+		}
+		if c.tag != "" && !strings.Contains(got, "-tag:v "+c.tag) {
+			t.Fatalf("%s: missing tag %q in %s", c.codec, c.tag, got)
+		}
+		for _, unwanted := range []string{"libx264", "libx265", "libsvtav1", "vaapi", "qsv"} {
+			if strings.Contains(got, unwanted) {
+				t.Fatalf("%s: unexpected %q in %s", c.codec, unwanted, got)
+			}
+		}
+	}
+}
+
 func TestBuildArgsCopyIgnoresHardware(t *testing.T) {
 	args := buildArgs(Options{
 		BitrateKbps:    4000,

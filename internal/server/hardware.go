@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ type videoCodecProbe struct {
 	Codec    string
 	VAAPI    string
 	QSV      string
+	Vulkan   string
 	Software []string
 	// Sample lists software encoders that can synthesise a probe clip for the
 	// decode test. Hardware-only encoders are deliberately absent.
@@ -31,6 +33,7 @@ var videoCodecProbes = []videoCodecProbe{
 		Codec:    "h264",
 		VAAPI:    "h264_vaapi",
 		QSV:      "h264_qsv",
+		Vulkan:   "h264_vulkan",
 		Software: []string{"libx264", "libopenh264"},
 		Sample:   []string{"libx264", "libopenh264"},
 	},
@@ -38,6 +41,7 @@ var videoCodecProbes = []videoCodecProbe{
 		Codec:    "hevc",
 		VAAPI:    "hevc_vaapi",
 		QSV:      "hevc_qsv",
+		Vulkan:   "hevc_vulkan",
 		Software: []string{"libx265"},
 		Sample:   []string{"libx265"},
 	},
@@ -45,6 +49,7 @@ var videoCodecProbes = []videoCodecProbe{
 		Codec:    "av1",
 		VAAPI:    "av1_vaapi",
 		QSV:      "av1_qsv",
+		Vulkan:   "av1_vulkan",
 		Software: []string{"libsvtav1", "libaom-av1", "librav1e"},
 		Sample:   []string{"libsvtav1", "libaom-av1", "librav1e"},
 	},
@@ -97,25 +102,62 @@ func probeHardware(ffmpeg, encoders, decoders string) hardwareInfo {
 	}
 
 	device := detectRenderDevice()
-	if device == "" {
-		return info
+	if device != "" {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, backend := range []string{"vaapi", "qsv"} {
+			wg.Add(1)
+			go func(backend string) {
+				defer wg.Done()
+				if cap, ok := probeBackend(ffmpeg, backend, device, encoders, decoders); ok {
+					mu.Lock()
+					info.Capabilities = append(info.Capabilities, cap)
+					mu.Unlock()
+				}
+			}(backend)
+		}
+		wg.Wait()
 	}
-
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	for _, backend := range []string{"vaapi", "qsv"} {
-		wg.Add(1)
-		go func(backend string) {
-			defer wg.Done()
-			if cap, ok := probeBackend(ffmpeg, backend, device, encoders, decoders); ok {
-				mu.Lock()
-				info.Capabilities = append(info.Capabilities, cap)
-				mu.Unlock()
-			}
-		}(backend)
+	if cap, ok := probeVulkan(ffmpeg, encoders, decoders); ok {
+		info.Capabilities = append(info.Capabilities, cap)
 	}
-	wg.Wait()
 	return info
+}
+
+// probeVulkan picks the first Vulkan physical device that can actually encode
+// or decode video. Vulkan selects devices by index, not by a DRM path, and a
+// machine may expose a display GPU without video queues before the useful one.
+func probeVulkan(ffmpeg, encoders, decoders string) (jellyfin.HardwareCapability, bool) {
+	hasEncoder := false
+	for _, p := range videoCodecProbes {
+		if p.Vulkan != "" && codecListed(encoders, p.Vulkan) {
+			hasEncoder = true
+			break
+		}
+	}
+	if !hasEncoder {
+		return jellyfin.HardwareCapability{}, false
+	}
+	for index := 0; index < 4; index++ {
+		device := strconv.Itoa(index)
+		if !vulkanDeviceWorks(ffmpeg, device) {
+			continue
+		}
+		if cap, ok := probeBackend(ffmpeg, "vulkan", device, encoders, decoders); ok {
+			return cap, true
+		}
+	}
+	return jellyfin.HardwareCapability{}, false
+}
+
+func vulkanDeviceWorks(ffmpeg, device string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return runProbe(ctx, ffmpeg,
+		"-hide_banner", "-loglevel", "error",
+		"-init_hw_device", "vulkan=vk:"+device,
+		"-f", "lavfi", "-i", "nullsrc",
+		"-frames:v", "1", "-f", "null", "-")
 }
 
 func probeBackend(ffmpeg, backend, device, encoders, decoders string) (jellyfin.HardwareCapability, bool) {
@@ -127,8 +169,11 @@ func probeBackend(ffmpeg, backend, device, encoders, decoders string) (jellyfin.
 			break
 		}
 		name := p.VAAPI
-		if backend == "qsv" {
+		switch backend {
+		case "qsv":
 			name = p.QSV
+		case "vulkan":
+			name = p.Vulkan
 		}
 		if name != "" && codecListed(encoders, name) && hardwareEncodeWorks(ctx, ffmpeg, backend, device, p.Codec, name) {
 			cap.Encoders = append(cap.Encoders, p.Codec)
@@ -147,23 +192,32 @@ func probeBackend(ffmpeg, backend, device, encoders, decoders string) (jellyfin.
 // presence is not enough: a missing user-space driver fails here.
 func hardwareEncodeWorks(ctx context.Context, ffmpeg, backend, device, codec, encoder string) bool {
 	args := []string{"-hide_banner", "-loglevel", "error"}
-	if backend == "vaapi" {
+	switch backend {
+	case "vaapi":
 		args = append(args, "-vaapi_device", device)
-	} else {
+	case "qsv":
 		args = append(args,
 			"-qsv_device", device,
 			"-init_hw_device", "qsv=hw",
 			"-filter_hw_device", "hw",
+		)
+	case "vulkan":
+		args = append(args,
+			"-init_hw_device", "vulkan=vk:"+device,
+			"-filter_hw_device", "vk",
 		)
 	}
 	args = append(args,
 		"-f", "lavfi", "-i", "testsrc2=size=160x120:rate=1",
 		"-frames:v", "1",
 	)
-	if backend == "vaapi" {
+	switch backend {
+	case "vaapi":
 		args = append(args, "-vf", "format=nv12,hwupload")
-	} else {
+	case "qsv":
 		args = append(args, "-vf", "format=nv12,hwupload=extra_hw_frames=64,format=qsv")
+	case "vulkan":
+		args = append(args, "-vf", "format=nv12,hwupload")
 	}
 	args = append(args, "-c:v", encoder, "-f", "null", "-")
 	return runProbe(ctx, ffmpeg, args...)
@@ -175,17 +229,29 @@ func hardwareEncodeWorks(ctx context.Context, ffmpeg, backend, device, codec, en
 func hardwareDecodeWorks(ctx context.Context, ffmpeg, backend, device string, probe videoCodecProbe, encoders, decoders string) bool {
 	sample := probeSample(ffmpeg, probe, encoders)
 	if sample == "" {
-		name := probe.VAAPI
-		if backend == "qsv" {
-			name = probe.QSV
+		// Vulkan decoders are not listed separately; without a sample there
+		// is no way to prove the hardware path works, so do not report it.
+		switch backend {
+		case "vaapi":
+			return codecListed(decoders, probe.VAAPI)
+		case "qsv":
+			return codecListed(decoders, probe.QSV)
+		default:
+			return false
 		}
-		return codecListed(decoders, name)
 	}
 	args := []string{"-hide_banner", "-loglevel", "error"}
-	if backend == "vaapi" {
+	switch backend {
+	case "vaapi":
 		args = append(args, "-hwaccel", "vaapi", "-hwaccel_device", device)
-	} else {
+	case "qsv":
 		args = append(args, "-hwaccel", "qsv", "-qsv_device", device)
+	case "vulkan":
+		args = append(args,
+			"-init_hw_device", "vulkan=vk:"+device,
+			"-hwaccel", "vulkan",
+			"-hwaccel_output_format", "vulkan",
+		)
 	}
 	args = append(args, "-i", sample, "-frames:v", "1", "-f", "null", "-")
 	return runProbe(ctx, ffmpeg, args...)
@@ -293,7 +359,7 @@ func applyHardware(api *jellyfin.API, ffmpeg string) hardwareInfo {
 	api.SetEncoder(detectEncoder(encoders))
 	api.SetSoftwareEncoders(info.Software)
 	api.SetCapabilities(info.Capabilities)
-	vaapi, qsv := "", ""
+	vaapi, qsv, vulkan := "", "", ""
 	for _, cap := range info.Capabilities {
 		if len(cap.Encoders) == 0 {
 			continue
@@ -303,9 +369,11 @@ func applyHardware(api *jellyfin.API, ffmpeg string) hardwareInfo {
 			vaapi = cap.Device
 		case "qsv":
 			qsv = cap.Device
+		case "vulkan":
+			vulkan = cap.Device
 		}
 	}
-	api.SetHardware(vaapi, qsv)
+	api.SetHardware(vaapi, qsv, vulkan)
 	for _, cap := range info.Capabilities {
 		if cap.Backend == "software" {
 			log.Printf("Hardware acceleration: software only (%s)", strings.Join(cap.Encoders, ", "))
@@ -314,7 +382,7 @@ func applyHardware(api *jellyfin.API, ffmpeg string) hardwareInfo {
 		log.Printf("Hardware acceleration: %s (%s) encode %s / decode %s",
 			cap.Backend, cap.Device, joinOrNone(cap.Encoders), joinOrNone(cap.Decoders))
 	}
-	if vaapi == "" && qsv == "" {
+	if vaapi == "" && qsv == "" && vulkan == "" {
 		log.Printf("Hardware acceleration: not available, using software")
 	}
 	return info

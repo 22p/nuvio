@@ -27,7 +27,8 @@ type Options struct {
 	Width       int
 	Preset      string
 	Hardware    string
-	// HardwareDevice is the VAAPI render node, e.g. /dev/dri/renderD128.
+	// HardwareDevice is a VAAPI/QSV render node or a Vulkan physical-device
+	// index, depending on Hardware.
 	HardwareDevice string
 	// VideoCodec is the source codec, used to pick a QSV decoder.
 	VideoCodec string
@@ -391,8 +392,8 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	return s, nil
 }
 
-// buildArgs assembles the ffmpeg command line for one session. VAAPI is used
-// for both decoding and encoding when the caller selected hardware mode.
+// buildArgs assembles the ffmpeg command line for one session. The selected
+// hardware backend is used for both decoding and encoding.
 func buildArgs(opts Options, itemPath, dir string) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	if opts.StartTicks > 0 {
@@ -400,6 +401,7 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 	}
 	vaapi := !opts.Copy && opts.Hardware == "vaapi" && opts.HardwareDevice != ""
 	qsv := !opts.Copy && opts.Hardware == "qsv" && opts.HardwareDevice != ""
+	vulkan := !opts.Copy && opts.Hardware == "vulkan" && opts.HardwareDevice != ""
 	if vaapi {
 		args = append(args,
 			"-hwaccel", "vaapi",
@@ -416,6 +418,14 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		if decoder := qsvDecoder(opts.VideoCodec); decoder != "" {
 			args = append(args, "-c:v", decoder)
 		}
+	}
+	if vulkan {
+		args = append(args,
+			"-init_hw_device", "vulkan=vk:"+opts.HardwareDevice,
+			"-filter_hw_device", "vk",
+			"-hwaccel", "vulkan",
+			"-hwaccel_output_format", "vulkan",
+		)
 	}
 	encoder := opts.Encoder
 	if encoder == "" {
@@ -462,6 +472,20 @@ func buildArgs(opts Options, itemPath, dir string) []string {
 		args = append(args,
 			"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds),
 			"-vf", fmt.Sprintf("scale_qsv=w=%d:h=%d:format=nv12", width, height),
+			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
+			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
+			"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),
+			"-c:a", "aac",
+			"-b:a", "160k",
+			"-ac", "2",
+		)
+	case vulkan:
+		width, height := evenDimensions(opts.Width, opts.Height)
+		args = append(args, "-c:v", codec+"_vulkan")
+		args = append(args, profileArgs(codec)...)
+		args = append(args,
+			"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds),
+			"-vf", fmt.Sprintf("scale_vulkan=w=%d:h=%d:format=nv12", width, height),
 			"-b:v", fmt.Sprintf("%dk", opts.BitrateKbps*3/4),
 			"-maxrate", fmt.Sprintf("%dk", opts.BitrateKbps),
 			"-bufsize", fmt.Sprintf("%dk", opts.BitrateKbps*2),

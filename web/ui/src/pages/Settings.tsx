@@ -902,9 +902,11 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               <span className={`status-dot ${overview.hardware ? 'ok' : 'warn'}`}>
                 {overview.hardware === 'qsv'
                   ? t("QSV ready")
-                  : overview.hardware
-                    ? t("VAAPI ready")
-                    : t("Hardware unavailable")}
+                  : overview.hardware === 'vulkan'
+                    ? t("Vulkan ready")
+                    : overview.hardware
+                      ? t("VAAPI ready")
+                      : t("Hardware unavailable")}
               </span>
             </div>
           </div>
@@ -944,7 +946,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
           <div className="setting-row">
             <div>
               <div className="setting-label">{t("Hardware acceleration")}</div>
-              <div className="setting-hint">{t("Uses VAAPI (Intel / AMD) or QSV (Intel) through /dev/dri. Falls back to software when unavailable.")}</div>
+              <div className="setting-hint">{t("Uses VAAPI (Intel / AMD), QSV (Intel) or Vulkan. Falls back to software when unavailable.")}</div>
             </div>
             <Select
               value={hardwareAccel}
@@ -952,6 +954,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
                 { value: 'auto', label: t("Auto") },
                 { value: 'vaapi', label: 'VAAPI (Intel / AMD)' },
                 { value: 'qsv', label: 'QSV (Intel)' },
+                { value: 'vulkan', label: 'Vulkan' },
                 { value: 'none', label: t("Off") },
               ]}
               onChange={setHardwareAccel}

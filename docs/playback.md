@@ -64,18 +64,20 @@ vp9
 
 | 设置 | 后端 |
 | --- | --- |
-| Auto | 启动时探测 VAAPI / QSV，选择可用的一项 |
+| Auto | 启动时探测 VAAPI / QSV / Vulkan，选择第一个有可用编码器的后端 |
 | VAAPI | Intel / AMD，经 `/dev/dri` |
 | QSV | Intel Quick Sync |
+| Vulkan | Intel / AMD / NVIDIA，编码 H.264 / HEVC / AV1；VP9 只能解码 |
 | Off | 仅软件 |
 
 启动时会实际编码/解码一帧来验证，而不是只看设备节点是否存在。日志会打印类似：
 
-```
+```text
 Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / decode h264, hevc, av1, vp9
+Hardware acceleration: vulkan (0) encode h264, hevc, av1 / decode h264, hevc, av1
 ```
 
-硬件初始化失败、或某个文件无法硬解时，自动回退软件编码。
+硬件初始化失败、或某个文件无法硬解时，自动回退软件编码。Vulkan 使用物理设备索引（`vk:0`），不是渲染节点路径；编码器支持取决于 FFmpeg 构建和驱动。
 
 ## HLS 会话与缓存
 
@@ -102,7 +104,7 @@ Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / deco
 | --- | --- | --- |
 | 允许转码 | 开 | 关闭后不启动转码 ffmpeg |
 | 允许转封装 | 开 | 关闭后容器不兼容时只能直连或转码 |
-| 硬件加速 | Auto | Auto / VAAPI / QSV / Off |
+| 硬件加速 | Auto | Auto / VAAPI / QSV / Vulkan / Off |
 | 视频编码 | h264 | 转码输出编码 |
 | 默认码率 | 20 Mbps | 客户端没有指定时的上限 |
 | 编码预设 | veryfast | `ultrafast` 到 `slow` |
@@ -118,7 +120,7 @@ Hardware acceleration: vaapi (/dev/dri/renderD128) encode h264, hevc, av1 / deco
 
 **播放很卡、CPU 占满**
 
-可能是转码而不是转封装。查看播放器信息面板的「输出编码」；如果是软件转码，考虑开启 VAAPI / QSV，或把默认码率调低。
+可能是转码而不是转封装。查看播放器信息面板的「输出编码」；如果是软件转码，考虑开启 VAAPI / QSV / Vulkan，或把默认码率调低。
 
 **没有声音**
 

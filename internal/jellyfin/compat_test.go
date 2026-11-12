@@ -847,7 +847,7 @@ func TestTranscodeTarget(t *testing.T) {
 		a := &API{}
 		a.SetEncoder("libx264")
 		a.SetSoftwareEncoders(map[string]string{"h264": "libx264", "av1": "libsvtav1"})
-		a.SetHardware("/dev/dri/renderD128", "")
+		a.SetHardware("/dev/dri/renderD128", "", "")
 		a.SetCapabilities([]HardwareCapability{
 			{Backend: "software", Encoders: []string{"h264", "av1"}},
 			{Backend: "vaapi", Device: "/dev/dri/renderD128", Encoders: []string{"h264", "hevc"}},
@@ -869,15 +869,34 @@ func TestTranscodeTarget(t *testing.T) {
 
 	// An explicit backend that has no render node must not be used.
 	a := build()
-	a.SetHardware("", "")
+	a.SetHardware("", "", "")
 	mode, device, codec, _ = a.transcodeTarget("vaapi", "h264")
 	if mode != "" || device != "" || codec != "h264" {
 		t.Fatalf("missing device = %q %q %q", mode, device, codec)
 	}
 
+	// Vulkan is used when it is the only working backend.
+	v := &API{}
+	v.SetEncoder("libx264")
+	v.SetSoftwareEncoders(map[string]string{"h264": "libx264", "hevc": "libx265"})
+	v.SetHardware("", "", "0")
+	v.SetCapabilities([]HardwareCapability{
+		{Backend: "software", Encoders: []string{"h264", "hevc"}},
+		{Backend: "vulkan", Device: "0", Encoders: []string{"h264", "hevc"}},
+	})
+	mode, device, codec, _ = v.transcodeTarget("auto", "hevc")
+	if mode != "vulkan" || device != "0" || codec != "hevc" {
+		t.Fatalf("auto/vulkan = %q %q %q", mode, device, codec)
+	}
+	v.SetHardware("", "", "")
+	mode, device, codec, _ = v.transcodeTarget("vulkan", "h264")
+	if mode != "" || device != "" || codec != "h264" {
+		t.Fatalf("missing vulkan device = %q %q %q", mode, device, codec)
+	}
+
 	// With neither hardware nor software support for HEVC, fall back to H.264.
 	a = build()
-	a.SetHardware("", "")
+	a.SetHardware("", "", "")
 	mode, device, codec, encoder = a.transcodeTarget("none", "hevc")
 	if mode != "" || device != "" || codec != "h264" || encoder != "libx264" {
 		t.Fatalf("hevc fallback = %q %q %q %q", mode, device, codec, encoder)

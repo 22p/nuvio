@@ -16,9 +16,9 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /out/nuvio ./cmd/nuvio
 
 FROM alpine:3.24
-RUN apk add --no-cache ffmpeg ca-certificates tzdata libva libva-utils mesa-va-gallium \
+RUN apk add --no-cache ffmpeg ca-certificates tzdata libva libva-utils mesa-va-gallium vulkan-loader \
     && if [ "$(apk --print-arch)" = "x86_64" ]; then \
-         apk add --no-cache libvpl onevpl-intel-gpu intel-media-driver libva-intel-driver; \
+         apk add --no-cache libvpl onevpl-intel-gpu intel-media-driver libva-intel-driver mesa-vulkan-intel mesa-vulkan-ati; \
        fi
 COPY --from=build /out/nuvio /usr/local/bin/nuvio
 VOLUME ["/data"]

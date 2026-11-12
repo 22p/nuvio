@@ -50,6 +50,7 @@ type API struct {
 	encoder      string
 	vaapiDevice  string
 	qsvDevice    string
+	vulkanDevice string
 	software     map[string]string
 	capabilities []HardwareCapability
 	imageMu      sync.Mutex
@@ -86,11 +87,12 @@ func (a *API) SetEncoder(name string) {
 	a.toolsMu.Unlock()
 }
 
-// SetHardware records the detected hardware render nodes. An empty string
-// means that backend is unavailable.
-func (a *API) SetHardware(vaapiDevice, qsvDevice string) {
+// SetHardware records the detected hardware device for each backend. An empty
+// string means that backend is unavailable. Vulkan devices are physical-device
+// indexes, while VAAPI and QSV use render-node paths.
+func (a *API) SetHardware(vaapiDevice, qsvDevice, vulkanDevice string) {
 	a.toolsMu.Lock()
-	a.vaapiDevice, a.qsvDevice = vaapiDevice, qsvDevice
+	a.vaapiDevice, a.qsvDevice, a.vulkanDevice = vaapiDevice, qsvDevice, vulkanDevice
 	a.toolsMu.Unlock()
 }
 
@@ -170,7 +172,7 @@ func (a *API) SupportsEncode(backend, codec string) bool {
 	return false
 }
 
-// HardwareDevice returns the render node for the requested backend.
+// HardwareDevice returns the device selector for the requested backend.
 func (a *API) HardwareDevice(mode string) string {
 	a.toolsMu.RLock()
 	defer a.toolsMu.RUnlock()
@@ -179,11 +181,15 @@ func (a *API) HardwareDevice(mode string) string {
 		return a.vaapiDevice
 	case "qsv":
 		return a.qsvDevice
+	case "vulkan":
+		return a.vulkanDevice
 	}
 	return ""
 }
 
-// HardwareMode returns the preferred detected backend (VAAPI first).
+// HardwareMode returns the preferred detected backend: VAAPI, then QSV, then
+// Vulkan. Explicit settings still go through HardwareDevice and capability
+// checks, so a backend without a usable encoder falls back to software.
 func (a *API) HardwareMode() string {
 	a.toolsMu.RLock()
 	defer a.toolsMu.RUnlock()
@@ -192,6 +198,9 @@ func (a *API) HardwareMode() string {
 	}
 	if a.qsvDevice != "" {
 		return "qsv"
+	}
+	if a.vulkanDevice != "" {
+		return "vulkan"
 	}
 	return ""
 }
