@@ -37,7 +37,7 @@ var langNames = map[string]string{
 // release groups) onto the two letter codes used internally. Fansub suffixes
 // such as "chi" and "chs" are included.
 var langAliases = map[string]string{
-	"chi": "zh", "zho": "zh", "chs": "zh-cn", "cht": "zh-tw",
+	"chi": "zh", "zho": "zh", "chs": "zh-cn", "cht": "zh-tw", "sc": "zh-cn", "tc": "zh-tw",
 	"eng": "en", "jpn": "ja", "kor": "ko",
 	"fre": "fr", "fra": "fr", "ger": "de", "deu": "de",
 	"spa": "es", "ita": "it", "rus": "ru", "por": "pt",
@@ -130,50 +130,6 @@ func DetectSubtitleLanguage(filename, base string) string {
 		}
 	}
 	return "und"
-}
-
-// DetectSubtitleTextLanguage guesses the language of a text subtitle from the
-// scripts it uses. Kana and Hangul are unambiguous; Han without kana is
-// treated as Chinese. It returns "" when there is not enough text.
-func DetectSubtitleTextLanguage(data []byte) string {
-	var han, kana, hangul int
-	for _, r := range string(data) {
-		switch {
-		case r >= 0x3040 && r <= 0x30FF:
-			kana++
-		case r >= 0xAC00 && r <= 0xD7AF:
-			hangul++
-		case r >= 0x4E00 && r <= 0x9FFF:
-			han++
-		}
-	}
-	switch {
-	case kana >= 20:
-		return "ja"
-	case hangul >= 20:
-		return "ko"
-	case han >= 20:
-		return "zh"
-	}
-	return ""
-}
-
-// DetectSubtitleFileLanguage reads the head of a text subtitle file and
-// guesses its language. Non-text formats return "".
-func DetectSubtitleFileLanguage(path string) string {
-	switch strings.ToLower(filepathExt(path)) {
-	case ".ass", ".ssa", ".srt", ".vtt":
-	default:
-		return ""
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	buf := make([]byte, 128<<10)
-	n, _ := f.Read(buf)
-	return DetectSubtitleTextLanguage(buf[:n])
 }
 
 func filepathExt(name string) string {

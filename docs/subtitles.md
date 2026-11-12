@@ -25,12 +25,14 @@ Other Name.zh.srt             ❌ 不会关联
 .zh-Hant.srt     zh-Hant（显示为 Chinese (Traditional)）
 .chs.srt         zh-CN
 .cht.srt         zh-TW
+.sc.srt          zh-CN
+.tc.srt          zh-TW
 .en.srt          en
 .en.forced.srt   en，并标记为 Forced
 .ja.srt          ja
 ```
 
-也接受 ISO 639-2 代码（`chi`、`eng`、`jpn`、`kor`、`fre`、`ger`……）。没有语言后缀时，会读取文件开头的内容判断：假名 → 日语，谚文 → 韩语，汉字 → 中文。文本量太少时保持 `und`。
+也接受 ISO 639-2 代码（`chi`、`eng`、`jpn`、`kor`、`fre`、`ger`……）。没有语言后缀时，不会读取内容猜测语言，直接保持 `und`（显示为 Unknown）；需要自动识别时请用文件名后缀。
 
 同一个视频有多条字幕时：
 
@@ -38,7 +40,7 @@ Other Name.zh.srt             ❌ 不会关联
 - 排序后的第一条是默认轨道
 - `forced` 会出现在轨道标题里
 
-已知限制：`.sc` / `.tc` 不在语言别名表里，简体/繁体后缀会被当成 `und`，再靠内容判断成同一个 `zh`，菜单里两条轨道都显示为「Chinese」。需要区分时请用 `.chs` / `.cht` 或 `.zh-CN` / `.zh-TW`。
+`.sc` / `.tc` 分别识别为简体/繁体中文；其他未知后缀保持 `und`（Unknown），不会再根据内容猜测。需要区分简繁时请用 `.chs` / `.cht`、`.sc` / `.tc` 或 `.zh-CN` / `.zh-TW`。
 
 ## 网页播放与 ASS
 
@@ -121,7 +123,7 @@ Other Name.zh.srt             ❌ 不会关联
 
 **两条中文字幕分不清简繁**
 
-用 `.chs` / `.cht` 或 `.zh-CN` / `.zh-TW`；`.sc` / `.tc` 目前识别不出区别。
+用 `.chs` / `.cht`、`.sc` / `.tc` 或 `.zh-CN` / `.zh-TW`。
 
 **ASS 特效没了**
 

@@ -243,6 +243,8 @@ func TestSubtitleLanguageCodes(t *testing.T) {
 		{"Konosuba S1E01.zho.ass", "Konosuba S1E01", "zh"},
 		{"Konosuba S1E01.chs.ass", "Konosuba S1E01", "zh-cn"},
 		{"Konosuba S1E01.cht.ass", "Konosuba S1E01", "zh-tw"},
+		{"Konosuba S1E01.sc.ass", "Konosuba S1E01", "zh-cn"},
+		{"Konosuba S1E01.tc.ass", "Konosuba S1E01", "zh-tw"},
 		{"Konosuba S1E01.eng.ass", "Konosuba S1E01", "en"},
 		{"Konosuba S1E01.jpn.ass", "Konosuba S1E01", "ja"},
 		{"Konosuba S1E01.ja.ass", "Konosuba S1E01", "ja"},
@@ -266,20 +268,7 @@ func TestSubtitleLanguageCodes(t *testing.T) {
 	}
 }
 
-func TestSubtitleLanguageFromContent(t *testing.T) {
-	if got := DetectSubtitleTextLanguage([]byte("在世界的尽头，光仍然记得回来的路。这里还有更多中文对白内容。")); got != "zh" {
-		t.Fatalf("chinese text = %q, want zh", got)
-	}
-	if got := DetectSubtitleTextLanguage([]byte("これは日本語の字幕です。かな文字が含まれているので日本語と判定します。")); got != "ja" {
-		t.Fatalf("japanese text = %q, want ja", got)
-	}
-	if got := DetectSubtitleTextLanguage([]byte("This is simply an English subtitle line.")); got != "" {
-		t.Fatalf("latin text = %q, want empty", got)
-	}
-}
-
-// Sidecars without a language suffix fall back to the script used in the file.
-func TestSubtitleLanguageFallbackInScan(t *testing.T) {
+func TestSubtitleLanguageFromFilenameOnly(t *testing.T) {
 	dir := t.TempDir()
 	base := "Konosuba S1E01"
 	plain := filepath.Join(dir, base+".ass")
@@ -297,11 +286,17 @@ func TestSubtitleLanguageFallbackInScan(t *testing.T) {
 		t.Fatalf("subs = %d, want 2", len(subs))
 	}
 	for _, s := range subs {
-		if s.Language != "zh" {
-			t.Fatalf("%s language = %q, want zh", filepath.Base(s.Path), s.Language)
-		}
-		if s.Title != "Chinese" {
-			t.Fatalf("%s title = %q", filepath.Base(s.Path), s.Title)
+		switch filepath.Base(s.Path) {
+		case base + ".chi.ass":
+			if s.Language != "zh" || s.Title != "Chinese" {
+				t.Fatalf("suffixed language = %q/%q, want zh/Chinese", s.Language, s.Title)
+			}
+		case base + ".ass":
+			if s.Language != "und" || s.Title != "Unknown" {
+				t.Fatalf("unsuffixed language = %q/%q, want und/Unknown", s.Language, s.Title)
+			}
+		default:
+			t.Fatalf("unexpected subtitle %s", s.Path)
 		}
 	}
 }
