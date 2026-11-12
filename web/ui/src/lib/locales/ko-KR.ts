@@ -462,4 +462,5 @@ export const koKR: Record<string, string> = {
   'Probe every file again, including unchanged ones.': '변경되지 않은 파일을 포함해 모든 파일을 다시 분석합니다.',
   'Metadata settings saved': '메타데이터 설정이 저장되었습니다',
   'AI settings saved': 'AI 설정이 저장되었습니다',
+  'Chinese varieties': '중국어 방언',
 }

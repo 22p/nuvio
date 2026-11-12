@@ -462,4 +462,5 @@ export const jaJP: Record<string, string> = {
   'Probe every file again, including unchanged ones.': '変更されていないファイルも含めてすべて再解析します。',
   'Metadata settings saved': 'メタデータ設定を保存しました',
   'AI settings saved': 'AI 設定を保存しました',
+  'Chinese varieties': '中国語の方言',
 }

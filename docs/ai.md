@@ -12,7 +12,7 @@ AI 是可选功能，默认关闭。Nuvio 只实现 **OpenAI 兼容的 Chat Comp
 | API 地址 | 需要包含版本前缀，默认 `https://api.deepseek.com/v1` |
 | API Key | 保存在服务器数据库的设置表里，不是加密存储 |
 | 模型 | 填 Key 后点「获取模型」，从 `/models` 的返回中选择；也可以手填 |
-| 字幕翻译目标语言 | 默认 `zh-CN` |
+| 字幕翻译目标语言 | 默认 `zh-CN`；支持标准语言标签和中文方言代码（`yue`、`wuu`、`cjy`、`cmn`、`nan`、`hak` 等） |
 
 常见端点：
 

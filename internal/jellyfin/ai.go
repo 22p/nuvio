@@ -453,9 +453,13 @@ func translateJobs(ctx context.Context, client *ai.Client, jobs []cueJob, lang s
 	if maxTokens > 16000 {
 		maxTokens = 16000
 	}
+	target := lang
+	if name := media.LanguageName(lang); name != "" && !strings.EqualFold(name, lang) {
+		target = name + " (" + lang + ")"
+	}
 	reply, err := client.ChatWith(ctx,
 		"You translate subtitles. The input is one cue per line in the form index|start|end|text. Reply with exactly the same lines, keeping index and timestamps unchanged and translating only the text. Never split a cue across lines, never merge two cues. No commentary, no extra lines, no markdown fences.",
-		"Target language: "+lang+"\n"+strings.Join(lines, "\n"), false, maxTokens, true)
+		"Target language: "+target+"\n"+strings.Join(lines, "\n"), false, maxTokens, true)
 	if err != nil {
 		return fmt.Errorf("translation failed: %w", err)
 	}

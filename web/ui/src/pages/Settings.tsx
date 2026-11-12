@@ -1104,6 +1104,24 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               <select value={aiTargetLanguage} onChange={(e) => setAITargetLanguage(e.target.value)}>
                 <option value="zh-CN">{t("Simplified Chinese")}</option>
                 <option value="zh-TW">{t("Traditional Chinese")}</option>
+                <optgroup label={t("Chinese varieties")}>
+                  <option value="yue">{t("Cantonese")}</option>
+                  <option value="wuu">{t("Wu Chinese")}</option>
+                  <option value="cjy">{t("Jinyu Chinese")}</option>
+                  <option value="cmn">{t("Mandarin Chinese")}</option>
+                  <option value="nan">{t("Min Nan Chinese")}</option>
+                  <option value="hak">{t("Hakka Chinese")}</option>
+                  <option value="gan">{t("Gan Chinese")}</option>
+                  <option value="hsn">{t("Xiang Chinese")}</option>
+                  <option value="cdo">{t("Min Dong Chinese")}</option>
+                  <option value="czh">{t("Huizhou Chinese")}</option>
+                  <option value="cpx">{t("Pu-Xian Chinese")}</option>
+                  <option value="czo">{t("Min Zhong Chinese")}</option>
+                  <option value="mnp">{t("Min Bei Chinese")}</option>
+                  <option value="lzh">{t("Literary Chinese")}</option>
+                  <option value="csp">{t("Southern Pinghua")}</option>
+                  <option value="cnp">{t("Northern Pinghua")}</option>
+                </optgroup>
                 <option value="en-US">English</option>
                 <option value="ja-JP">{t("Japanese")}</option>
                 <option value="ko-KR">한국어</option>
