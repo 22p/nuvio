@@ -144,3 +144,17 @@ func TestPlaybackInfoRejectsTraversalSessionID(t *testing.T) {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestVTTToSRTStripsCueSettings(t *testing.T) {
+	in := "WEBVTT\n\n00:00:01.000 --> 00:00:04.000 line:9.3%,start position:50% align:center\nHello\n"
+	out := string(vttToSRT([]byte(in)))
+	if !strings.Contains(out, "00:00:01,000 --> 00:00:04,000") {
+		t.Fatalf("timestamps were not converted:\n%s", out)
+	}
+	if strings.Contains(out, "line:") || strings.Contains(out, "position:") || strings.Contains(out, "align:") {
+		t.Fatalf("cue settings leaked into SRT:\n%s", out)
+	}
+	if !strings.Contains(out, "Hello") {
+		t.Fatalf("cue text missing:\n%s", out)
+	}
+}

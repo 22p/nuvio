@@ -47,13 +47,13 @@ func TestTranslateVTTKeepsCueSettingsAndStripsInlineEffects(t *testing.T) {
 
 	client := ai.New(server.URL, "key", "test")
 	vtt := "WEBVTT\n\n" +
-		"sign-1\n00:00:01.000 --> 00:00:04.000 line:9.3% line-align:start position:50.0% align:center\n<i>Hello</i> {\\an8}there\n\n" +
+		"sign-1\n00:00:01.000 --> 00:00:04.000 line:9.3%,start position:50.0% align:center\n<i>Hello</i> {\\an8}there\n\n" +
 		"00:00:05.000 --> 00:00:08.000\nGeneral <b>Kenobi</b>\n"
 	out, err := translateVTT(context.Background(), client, vtt, "zh-CN")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "sign-1\n00:00:01.000 --> 00:00:04.000 line:9.3% line-align:start position:50.0% align:center") {
+	if !strings.Contains(out, "sign-1\n00:00:01.000 --> 00:00:04.000 line:9.3%,start position:50.0% align:center") {
 		t.Fatalf("cue id, timing or settings were lost:\n%s", out)
 	}
 	if strings.Contains(out, "<i>") || strings.Contains(out, "\\an8") {
@@ -223,6 +223,21 @@ func TestTranslateVTTJoinsWrappedReplyLines(t *testing.T) {
 	}
 	if !strings.Contains(out, "译:前半 后半") {
 		t.Fatalf("wrapped line was not joined:\n%s", out)
+	}
+}
+
+func TestTranslateVTTSortsCues(t *testing.T) {
+	server := httptest.NewServer(echoTranslator(nil))
+	defer server.Close()
+
+	client := ai.New(server.URL, "key", "test")
+	vtt := "WEBVTT\n\n00:00:10.000 --> 00:00:11.000\nlate\n\n00:00:01.000 --> 00:00:02.000\nearly\n"
+	out, err := translateVTT(context.Background(), client, vtt, "zh-CN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Index(out, "00:00:01.000") > strings.Index(out, "00:00:10.000") {
+		t.Fatalf("translated cues are not sorted by start time:\n%s", out)
 	}
 }
 

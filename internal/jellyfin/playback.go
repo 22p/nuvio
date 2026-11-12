@@ -521,15 +521,22 @@ func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
 		}
 		// Report the format the delivery URL actually returns. External ASS
 		// files are served untouched so clients with a real ASS renderer keep
-		// their typesetting; everything else is converted on demand.
+		// their typesetting; embedded ASS is extracted as ASS and converted to
+		// WebVTT. Bitmap subtitles have no text delivery path.
 		codec, format := subtitleDelivery(s)
-		out = append(out, mediaStreamDTO{
+		text := format != ""
+		stream := mediaStreamDTO{
 			Type: "Subtitle", Index: s.Index, Codec: codec, Language: s.Language,
 			Title: title, DisplayTitle: title, DisplayLanguage: media.LanguageName(s.Language),
-			IsExternal: true, IsForced: s.Forced, IsDefault: s.Default,
-			DeliveryMethod: "External", DeliveryUrl: a.subtitleURL(it, s.Index, format, token),
-			SupportsExternalStream: true, IsTextSubtitleStream: true,
-		})
+			IsExternal: s.Path != "", IsForced: s.Forced, IsDefault: s.Default,
+			IsTextSubtitleStream: text,
+		}
+		if text {
+			stream.DeliveryMethod = "External"
+			stream.DeliveryUrl = a.subtitleURL(it, s.Index, format, token)
+			stream.SupportsExternalStream = true
+		}
+		out = append(out, stream)
 	}
 	out = append(out, a.translatedStreams(it, token)...)
 	return out
@@ -538,7 +545,8 @@ func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
 // subtitleDelivery returns the Jellyfin codec name and the file extension the
 // subtitle endpoint serves for a stream. External ASS/SSA sidecars keep their
 // native format so effects and positioning survive; embedded ASS is extracted
-// as ASS and then converted to WebVTT, so it is delivered as WebVTT.
+// as ASS and then converted to WebVTT, so it is delivered as WebVTT. Bitmap
+// subtitles return an empty format because they cannot be delivered as text.
 func subtitleDelivery(s model.Subtitle) (codec, format string) {
 	switch strings.ToLower(strings.TrimSpace(s.Codec)) {
 	case "ass", "ssa":
@@ -548,6 +556,14 @@ func subtitleDelivery(s model.Subtitle) (codec, format string) {
 		return "webvtt", "vtt"
 	case "vtt", "webvtt":
 		return "webvtt", "vtt"
+	case "hdmv_pgs_subtitle", "pgssub", "pgs":
+		return "pgssub", ""
+	case "dvd_subtitle", "dvdsub":
+		return "dvdsub", ""
+	case "dvb_subtitle", "dvbsub":
+		return "dvbsub", ""
+	case "xsub":
+		return "xsub", ""
 	}
 	return "subrip", "srt"
 }
@@ -960,8 +976,20 @@ func vttToSRT(data []byte) []byte {
 		if idx < 0 {
 			continue
 		}
+		// SRT has no cue settings. Keep only the two timestamps and drop
+		// line/position/align instead of turning "9.3%" into "9,3%".
+		parts := strings.SplitN(lines[idx], "-->", 2)
+		start := strings.TrimSpace(parts[0])
+		end := ""
+		if len(parts) == 2 {
+			if fields := strings.Fields(parts[1]); len(fields) > 0 {
+				end = fields[0]
+			}
+		}
 		n++
-		fmt.Fprintf(&b, "%d\n%s\n", n, strings.ReplaceAll(lines[idx], ".", ","))
+		fmt.Fprintf(&b, "%d\n%s --> %s\n", n,
+			strings.ReplaceAll(start, ".", ","),
+			strings.ReplaceAll(end, ".", ","))
 		for _, line := range lines[idx+1:] {
 			b.WriteString(line)
 			b.WriteByte('\n')

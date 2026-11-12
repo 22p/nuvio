@@ -299,6 +299,9 @@ func translateVTT(ctx context.Context, client *ai.Client, vtt, lang string) (str
 	if err := translateJobs(ctx, client, cues, lang); err != nil {
 		return "", err
 	}
+	// WebVTT requires cues ordered by start time; a translated ASS-derived
+	// track can arrive out of order.
+	sort.SliceStable(cues, func(i, j int) bool { return cues[i].startSec < cues[j].startSec })
 	var b strings.Builder
 	b.WriteString("WEBVTT\n")
 	for _, header := range vttHeaderBlocks(vtt) {

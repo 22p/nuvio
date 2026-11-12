@@ -2,7 +2,7 @@
 
 ## 从源码构建
 
-要求：Go 1.27+；构建 Web 界面需要 Node.js 20+。
+要求：Go 1.27+；构建 Web 界面需要 Node.js 24+。
 
 ```bash
 make build          # 安装前端依赖、构建 Web、编译单文件二进制
@@ -195,7 +195,7 @@ server {
 - `/Videos/{id}/stream` 支持 Range，代理必须原样转发 `Range` 并返回 `206 Partial Content`
 - 不要剥离 URL 中的 `api_key`；直连流现在需要 token
 - 关闭响应缓冲；直连播放是长连接，读超时至少按单部影片时长设置
-- 把真实客户端 IP 写入 `X-Forwarded-For` 或 `X-Real-IP`，登录限流才能按客户端区分。多个代理串联时只信任最外层代理写入的值
+- 把真实客户端 IP 写入 `X-Forwarded-For` 或 `X-Real-IP`，登录限流才能按客户端区分。Nuvio 只在直连对端是回环或私有地址时信任这两个头；如果反向代理在另一台公网机器上，它们会被忽略。多个代理串联时只信任最外层代理写入的值
 - 不要缓存 `/sw.js` 和 `/manifest.webmanifest`；`/assets/` 是带哈希的静态文件，可以长期缓存
 - HTTPS 是安装 PWA 和注册 Service Worker 的前提，见[安装为应用（PWA）](#安装为应用pwa)
 

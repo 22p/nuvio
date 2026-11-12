@@ -23,6 +23,7 @@ export interface MediaStream {
   IsDefault?: boolean
   IsForced?: boolean
   IsExternal?: boolean
+  IsTextSubtitleStream?: boolean
   DeliveryUrl?: string
   DeliveryMethod?: string
   Profile?: string

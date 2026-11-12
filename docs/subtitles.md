@@ -86,7 +86,7 @@ Other Name.zh.srt             ❌ 不会关联
 - 本地先去掉所有标签、定位、换行、实体；ASS（外挂或内嵌）还会去掉字幕组署名、卡拉 OK 碎片和绘图。内嵌 SubRip / WebVTT 没有样式信息，署名和屏幕字可能仍会发送。多行合并为一行；文本里的 `|` 换成全角 `｜`
 - 只采用模型返回的**文本**，时间码和 cue 设置使用原始字幕的值，所以译文不会因为模型写错时间或位置而错位
 - 提示词要求不拆行、不合并；模型仍然拆行时，解析端会把续行接回上一条
-- 输出是 WebVTT，保留原始 cue ID、`line` / `position` / `align` / `line-align` / `region` 等设置，以及文件头的 `STYLE` / `REGION` 块；文本里的 `&`、`<`、`>` 会转义
+- 输出是 WebVTT，保留原始 cue ID、`line`（含 `,start` / `,center` / `,end` 行对齐）、`position`、`align`、`region` 等设置，以及文件头的 `STYLE` / `REGION` 块；文本里的 `&`、`<`、`>` 会转义
 - 结果缓存在：
 
   ```

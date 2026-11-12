@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -227,8 +228,7 @@ func SRTBytesToVTT(raw []byte) []byte {
 	text := strings.ReplaceAll(string(stripBOM(raw)), "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	blocks := strings.Split(strings.TrimSpace(text), "\n\n")
-	var out strings.Builder
-	out.WriteString("WEBVTT\n\n")
+	var cues []vttCue
 	for _, block := range blocks {
 		lines := strings.Split(strings.TrimSpace(block), "\n")
 		if len(lines) == 0 {
@@ -244,27 +244,73 @@ func SRTBytesToVTT(raw []byte) []byte {
 		if !strings.Contains(lines[0], "-->") {
 			continue
 		}
-		stamp := strings.ReplaceAll(lines[0], ",", ".")
-		// Drop SRT positioning info after the end timestamp.
-		if i := strings.Index(stamp, "-->"); i >= 0 {
-			rest := stamp[i+3:]
-			parts := strings.SplitN(strings.TrimSpace(rest), " ", 2)
-			if len(parts) == 2 {
-				if t, ok := parseSRTTime(parts[0]); ok {
-					stamp = strings.TrimSpace(stamp[:i+3]) + " " + t
-				}
-			}
+		parts := strings.SplitN(lines[0], "-->", 2)
+		if len(parts) != 2 {
+			continue
 		}
-		body := strings.Join(lines[1:], "\n")
-		body = strings.ReplaceAll(body, "&", "&amp;")
-		body = strings.ReplaceAll(body, "<", "&lt;")
-		body = strings.ReplaceAll(body, ">", "&gt;")
-		out.WriteString(stamp)
-		out.WriteString("\n")
-		out.WriteString(body)
-		out.WriteString("\n\n")
+		startStamp, ok1 := parseSRTTime(strings.TrimSpace(parts[0]))
+		endFields := strings.Fields(strings.TrimSpace(parts[1]))
+		if len(endFields) == 0 {
+			continue
+		}
+		endStamp, ok2 := parseSRTTime(endFields[0])
+		if !ok1 || !ok2 {
+			continue
+		}
+		body := srtTextToVTT(strings.Join(lines[1:], "\n"))
+		cues = append(cues, vttCue{
+			start: srtDuration(startStamp),
+			body:  startStamp + " --> " + endStamp + "\n" + body + "\n\n",
+		})
+	}
+	sort.SliceStable(cues, func(i, j int) bool { return cues[i].start < cues[j].start })
+	var out strings.Builder
+	out.WriteString("WEBVTT\n\n")
+	for _, cue := range cues {
+		out.WriteString(cue.body)
 	}
 	return []byte(out.String())
+}
+
+var (
+	srtTagRe     = regexp.MustCompile(`(?i)</?(?:i|b|u)>`)
+	srtFontTagRe = regexp.MustCompile(`(?i)</?font[^>]*>`)
+)
+
+// srtTextToVTT keeps the inline SRT tags WebVTT understands and drops font
+// colour tags, which have no direct VTT equivalent.
+func srtTextToVTT(s string) string {
+	s = srtFontTagRe.ReplaceAllString(s, "")
+	var b strings.Builder
+	last := 0
+	for _, loc := range srtTagRe.FindAllStringIndex(s, -1) {
+		b.WriteString(escapeCueText(s[last:loc[0]]))
+		b.WriteString(strings.ToLower(s[loc[0]:loc[1]]))
+		last = loc[1]
+	}
+	b.WriteString(escapeCueText(s[last:]))
+	return b.String()
+}
+
+func escapeCueText(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+}
+
+func srtDuration(stamp string) time.Duration {
+	m := srtTime.FindStringSubmatch(stamp)
+	if len(m) != 5 {
+		return 0
+	}
+	h, _ := strconv.Atoi(m[1])
+	mi, _ := strconv.Atoi(m[2])
+	se, _ := strconv.Atoi(m[3])
+	ms := m[4]
+	for len(ms) < 3 {
+		ms += "0"
+	}
+	msInt, _ := strconv.Atoi(ms)
+	return time.Duration(h)*time.Hour + time.Duration(mi)*time.Minute +
+		time.Duration(se)*time.Second + time.Duration(msInt)*time.Millisecond
 }
 
 func parseSRTTime(s string) (string, bool) {
@@ -284,6 +330,7 @@ func parseSRTTime(s string) (string, bool) {
 
 var assTime = regexp.MustCompile(`^\s*(\d+):(\d{2}):(\d{2})[.:](\d{1,3})\s*$`)
 var assTag = regexp.MustCompile(`\{[^}]*\}`)
+var blankLineRe = regexp.MustCompile(`\n{2,}`)
 
 var (
 	assPosRe     = regexp.MustCompile(`\\pos\(\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*\)`)
@@ -304,13 +351,13 @@ type assStyle struct {
 // centre. Karaoke and drawing commands cannot be represented and are dropped.
 func ASSBytesToVTT(raw []byte) []byte {
 	text := strings.ReplaceAll(string(stripBOM(raw)), "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
 	playW, playH := 384.0, 288.0
 	section := ""
 	styles := map[string]assStyle{}
 	var styleFormat, eventFormat []string
-	var out strings.Builder
-	out.WriteString("WEBVTT\n\n")
+	var cues []vttCue
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -354,12 +401,26 @@ func ASSBytesToVTT(raw []byte) []byte {
 			if !strings.HasPrefix(lower, "dialogue:") {
 				continue
 			}
-			if cue, ok := assCueVTT(trimmed[len("dialogue:"):], eventFormat, styles, playW, playH); ok {
-				out.WriteString(cue)
+			if cue, start, ok := assCueVTT(trimmed[len("dialogue:"):], eventFormat, styles, playW, playH); ok {
+				cues = append(cues, vttCue{start: start, body: cue})
 			}
 		}
 	}
+
+	// WebVTT cues must be listed in start-time order; ASS events are usually
+	// sorted but the format does not require it.
+	sort.SliceStable(cues, func(i, j int) bool { return cues[i].start < cues[j].start })
+	var out strings.Builder
+	out.WriteString("WEBVTT\n\n")
+	for _, cue := range cues {
+		out.WriteString(cue.body)
+	}
 	return []byte(out.String())
+}
+
+type vttCue struct {
+	start time.Duration
+	body  string
 }
 
 func assField(format, fields []string) func(string) string {
@@ -373,7 +434,7 @@ func assField(format, fields []string) func(string) string {
 	}
 }
 
-func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, playH float64) (string, bool) {
+func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, playH float64) (string, time.Duration, bool) {
 	if len(format) == 0 {
 		format = []string{"Layer", "Start", "End", "Style", "Name", "MarginL", "MarginR", "MarginV", "Effect", "Text"}
 	}
@@ -381,23 +442,23 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 	start, ok1 := parseASSTime(field("Start"))
 	end, ok2 := parseASSTime(field("End"))
 	if !ok1 || !ok2 || end <= start {
-		return "", false
+		return "", 0, false
 	}
 	body := field("Text")
 	if body == "" || assDrawRe.MatchString(body) {
 		// Vector drawings cannot be rendered as text.
-		return "", false
+		return "", 0, false
 	}
 	if assCreditStyle(field("Style")) {
 		// Staff rolls are credits, not subtitles. Screen text, titles and
 		// readable typesetting are kept as positioned cues; per-syllable
 		// fragments are filtered by assKaraoke below.
-		return "", false
+		return "", 0, false
 	}
 	if assKaraoke(field("Style"), field("Effect"), body, (end - start).Seconds()) {
 		// Karaoke syllables and animated typesetting fragments become piles
 		// of overlapping one-character cues in WebVTT.
-		return "", false
+		return "", 0, false
 	}
 
 	st := styles[field("Style")]
@@ -452,8 +513,11 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 	body = assTag.ReplaceAllString(body, "")
 	body = strings.TrimSpace(body)
 	if body == "" {
-		return "", false
+		return "", 0, false
 	}
+	// A blank line terminates a WebVTT cue. Keep intentional line spacing
+	// with a non-breaking space instead of emitting two consecutive newlines.
+	body = blankLineRe.ReplaceAllString(body, "\n\u00a0\n")
 	body = strings.ReplaceAll(body, "&", "&amp;")
 	body = strings.ReplaceAll(body, "<", "&lt;")
 	body = strings.ReplaceAll(body, ">", "&gt;")
@@ -474,8 +538,8 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 	case 2:
 		lineAlign = "start"
 	}
-	return fmt.Sprintf("%s --> %s line:%.1f%% line-align:%s position:%.1f%% align:%s\n%s\n\n",
-		vttTime(start), vttTime(end), clampPercent(y/playH*100), lineAlign, clampPercent(x/playW*100), alignName, body), true
+	return fmt.Sprintf("%s --> %s line:%.1f%%,%s position:%.1f%% align:%s\n%s\n\n",
+		vttTime(start), vttTime(end), clampPercent(y/playH*100), lineAlign, clampPercent(x/playW*100), alignName, body), start, true
 }
 
 // assKaraoke reports whether an event is a karaoke syllable or a typesetting

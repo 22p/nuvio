@@ -62,8 +62,10 @@ interface Cue {
   end: number
   text: string
   line?: number
+  lineNumber?: number
   lineAlign?: 'start' | 'center' | 'end'
   position?: number
+  size?: number
   align?: 'start' | 'center' | 'end'
 }
 
@@ -103,19 +105,27 @@ function parseVTT(input: string): Cue[] {
       .trim()
     if (!text) continue
     const cue: Cue = { start: parse(from), end: parse(to), text }
-    const line = Number.parseFloat(settings.line)
+    // WebVTT puts line alignment after a comma (line:10%,start). A bare
+    // integer is a line number, not a percentage.
+    const [lineValue, lineAlignValue] = (settings.line || '').split(',')
+    const lineRaw = lineValue?.trim() ?? ''
     const position = Number.parseFloat(settings.position)
-    if (Number.isFinite(line)) cue.line = line
+    if (lineRaw.endsWith('%')) {
+      const line = Number.parseFloat(lineRaw)
+      if (Number.isFinite(line)) cue.line = line
+    } else if (/^-?\d+$/.test(lineRaw)) {
+      const lineNumber = Number.parseInt(lineRaw, 10)
+      if (Number.isFinite(lineNumber)) cue.lineNumber = lineNumber
+    }
     if (Number.isFinite(position)) cue.position = position
+    const size = Number.parseFloat(settings.size)
+    if (Number.isFinite(size)) cue.size = Math.min(100, Math.max(0, size))
     if (settings.align === 'start' || settings.align === 'center' || settings.align === 'end') {
       cue.align = settings.align
     }
-    if (
-      settings['line-align'] === 'start' ||
-      settings['line-align'] === 'center' ||
-      settings['line-align'] === 'end'
-    ) {
-      cue.lineAlign = settings['line-align']
+    const lineAlign = lineAlignValue?.trim()
+    if (lineAlign === 'start' || lineAlign === 'center' || lineAlign === 'end') {
+      cue.lineAlign = lineAlign
     }
     cues.push(cue)
   }
@@ -136,18 +146,48 @@ function cueTextStyle(prefs: ReturnType<typeof usePrefs>['prefs']): CSSPropertie
 // Cue settings come from the ASS converter, which maps \an / \pos and the
 // style margins onto line / position / align.
 function cuePositionStyle(cue: Cue): CSSProperties {
-  const x = cue.position ?? 50
-  const y = cue.line ?? 88
   const align = cue.align ?? 'center'
-  const lineAlign = cue.lineAlign ?? 'center'
+  // An omitted position follows the text alignment: start=0%, end=100%.
+  const x = cue.position ?? (align === 'start' ? 0 : align === 'end' ? 100 : 50)
   const tx = align === 'start' ? '0' : align === 'end' ? '-100%' : '-50%'
+  const textAlign = align === 'start' ? 'left' : align === 'end' ? 'right' : 'center'
+  const sizeStyle = cue.size !== undefined ? { width: `${cue.size}%`, maxWidth: `${cue.size}%` } : {}
+
+  if (cue.lineNumber !== undefined) {
+    const lines = Math.abs(cue.lineNumber)
+    if (cue.lineNumber < 0) {
+      // Negative line numbers count up from the bottom; -1 is the last line.
+      return {
+        left: `${x}%`,
+        top: 'auto',
+        bottom: `calc(${Math.max(lines - 1, 0)} * 1.45em)`,
+        transform: `translateX(${tx})`,
+        textAlign,
+        ...sizeStyle,
+      }
+    }
+    const lineAlign = cue.lineAlign ?? 'start'
+    const ty = lineAlign === 'start' ? '0' : lineAlign === 'end' ? '-100%' : '-50%'
+    return {
+      left: `${x}%`,
+      top: `calc(${lines} * 1.45em)`,
+      bottom: 'auto',
+      transform: `translate(${tx}, ${ty})`,
+      textAlign,
+      ...sizeStyle,
+    }
+  }
+
+  const y = cue.line ?? 88
+  const lineAlign = cue.lineAlign ?? 'start'
   const ty = lineAlign === 'start' ? '0' : lineAlign === 'end' ? '-100%' : '-50%'
   return {
     left: `${x}%`,
     top: `${y}%`,
     bottom: 'auto',
     transform: `translate(${tx}, ${ty})`,
-    textAlign: align === 'start' ? 'left' : align === 'end' ? 'right' : 'center',
+    textAlign,
+    ...sizeStyle,
   }
 }
 
@@ -353,7 +393,8 @@ export function PlayerPage() {
 
   const streams = useMemo(() => source?.MediaStreams || item?.MediaSources?.[0]?.MediaStreams || [], [source, item])
   const subtitleStreams = useMemo(() => {
-    const base = streams.filter((s) => s.Type === 'Subtitle')
+    // Bitmap subtitles (PGS/DVD) have no text to render in the custom player.
+    const base = streams.filter((s) => s.Type === 'Subtitle' && s.IsTextSubtitleStream !== false)
     if (!extraSubs.length) return base
     return [...base, ...extraSubs.filter((e) => !base.some((b) => b.Index === e.Index))]
   }, [streams, extraSubs])
@@ -1159,8 +1200,10 @@ export function PlayerPage() {
     !ended && cues.length
       ? cues.filter((c) => cueTime >= c.start - 0.02 && cueTime <= c.end)
       : []
-  const plainCues = activeCues.filter((c) => c.line === undefined && c.position === undefined)
-  const positionedCues = activeCues.filter((c) => c.line !== undefined || c.position !== undefined)
+  const positioned = (c: Cue) =>
+    c.line !== undefined || c.lineNumber !== undefined || c.position !== undefined || c.size !== undefined
+  const plainCues = activeCues.filter((c) => !positioned(c))
+  const positionedCues = activeCues.filter(positioned)
   const playedPct = duration > 0 ? Math.min(100, (displayCurrent / duration) * 100) : 0
   const bufferedPct =
     duration > 0

@@ -84,6 +84,12 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
+  if (url.pathname === '/manifest.webmanifest') {
+    // Not content-hashed: revalidate so icon/name changes reach installed apps.
+    event.respondWith(networkFirst(request))
+    return
+  }
+
   if (url.pathname.startsWith('/assets/') || STATIC_PATHS.has(url.pathname)) {
     event.respondWith(cacheFirst(request))
   }
@@ -124,4 +130,17 @@ async function cacheFirst(request) {
   const response = await fetch(request)
   if (response.ok) await cache.put(request, response.clone()).catch(() => {})
   return response
+}
+
+// Non-hashed files such as the manifest should update when the server is
+// reachable, with the cache only used as the offline fallback.
+async function networkFirst(request) {
+  const cache = await caches.open(CACHE)
+  try {
+    const response = await fetch(request)
+    if (response.ok) await cache.put(request, response.clone()).catch(() => {})
+    return response
+  } catch {
+    return (await cache.match(request)) || Response.error()
+  }
 }

@@ -63,7 +63,9 @@ func main() {
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		// No WriteTimeout: direct streams and HLS responses are long-lived.
 	}
 
 	stop := make(chan os.Signal, 1)

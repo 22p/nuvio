@@ -673,6 +673,8 @@ func TestSubtitleDelivery(t *testing.T) {
 		{model.Subtitle{Codec: "ass", Embedded: true}, "webvtt", "vtt"},
 		{model.Subtitle{Codec: "srt", Path: "/media/a.srt"}, "subrip", "srt"},
 		{model.Subtitle{Codec: "vtt", Path: "/media/a.vtt"}, "webvtt", "vtt"},
+		{model.Subtitle{Codec: "hdmv_pgs_subtitle", Embedded: true}, "pgssub", ""},
+		{model.Subtitle{Codec: "dvd_subtitle", Embedded: true}, "dvdsub", ""},
 		{model.Subtitle{Codec: ""}, "subrip", "srt"},
 	}
 	for _, c := range cases {
@@ -1011,5 +1013,46 @@ func TestRemoteImageRejectsLookalikeHost(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	if a.serveRemoteImage(rec, req, &model.Item{Type: model.TypeMovie}, "https://eviltmdb.org/t/p/w500/x.jpg") {
 		t.Fatal("lookalike host must be rejected")
+	}
+}
+
+func TestSubtitleStreamFlags(t *testing.T) {
+	a := &API{DataDir: t.TempDir()}
+	it := &model.Item{ID: "test-item", Type: model.TypeMovie, Media: &model.MediaInfo{
+		Subtitles: []model.Subtitle{
+			{Index: 2, Codec: "ass", Embedded: true},
+			{Index: 3, Codec: "hdmv_pgs_subtitle", Embedded: true},
+			{Index: 4, Codec: "srt", Path: "/media/movie.srt"},
+		},
+	}}
+	byIndex := map[int]mediaStreamDTO{}
+	for _, s := range a.buildStreams(it, "") {
+		if s.Type == "Subtitle" {
+			byIndex[s.Index] = s
+		}
+	}
+
+	embedded := byIndex[2]
+	if embedded.IsExternal || !embedded.IsTextSubtitleStream || embedded.Codec != "webvtt" {
+		t.Fatalf("embedded ASS flags = %+v", embedded)
+	}
+	if !strings.Contains(embedded.DeliveryUrl, "Stream.vtt") || !embedded.SupportsExternalStream {
+		t.Fatalf("embedded ASS delivery = %+v", embedded)
+	}
+
+	pgs := byIndex[3]
+	if pgs.IsExternal || pgs.IsTextSubtitleStream || pgs.Codec != "pgssub" {
+		t.Fatalf("PGS flags = %+v", pgs)
+	}
+	if pgs.DeliveryUrl != "" || pgs.SupportsExternalStream {
+		t.Fatalf("PGS should not have a text delivery URL: %+v", pgs)
+	}
+
+	sidecar := byIndex[4]
+	if !sidecar.IsExternal || !sidecar.IsTextSubtitleStream || sidecar.Codec != "subrip" {
+		t.Fatalf("external SRT flags = %+v", sidecar)
+	}
+	if !strings.Contains(sidecar.DeliveryUrl, "Stream.srt") {
+		t.Fatalf("external SRT delivery = %+v", sidecar)
 	}
 }

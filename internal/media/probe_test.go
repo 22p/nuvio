@@ -61,7 +61,7 @@ printf 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nplain text\n'
 	if !strings.Contains(got, "Screen text") {
 		t.Fatalf("screen text missing:\n%s", got)
 	}
-	if !strings.Contains(got, "line:9.3% line-align:start position:50.0% align:center") {
+	if !strings.Contains(got, "line:9.3%,start position:50.0% align:center") {
 		t.Fatalf("ASS position was flattened:\n%s", got)
 	}
 

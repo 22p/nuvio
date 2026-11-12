@@ -218,9 +218,9 @@ Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\p1}m 0 0 l 100 0 100 100 0 1
 `
 	got := string(ASSBytesToVTT([]byte(script)))
 	for _, want := range []string{
-		"line:96.3% line-align:end position:50.0% align:center",  // bottom, MarginV 40 of 1080
-		"line:9.3% line-align:start position:50.0% align:center", // \pos(960,100) on the top-aligned Sign style
-		"line:3.7% line-align:start position:50.0% align:center", // \an8 (top centre)
+		"line:96.3%,end position:50.0% align:center",  // bottom, MarginV 40 of 1080
+		"line:9.3%,start position:50.0% align:center", // \pos(960,100) on the top-aligned Sign style
+		"line:3.7%,start position:50.0% align:center", // \an8 (top centre)
 		"Hello\nworld",
 		"Top sign",
 		"Another top",
@@ -371,7 +371,52 @@ Dialogue: 0,0:00:13.00,0:00:16.00,Default,,0,0,0,,这是一句正常台词
 			t.Fatalf("%q should have been kept as screen text:\n%s", kept, out)
 		}
 	}
-	if !strings.Contains(out, "line:4.2% line-align:start position:2.3% align:start") {
+	if !strings.Contains(out, "line:4.2%,start position:2.3% align:start") {
 		t.Fatalf("screen text lost its position:\n%s", out)
+	}
+}
+
+func TestASSBytesToVTTSortsAndKeepsBlankLines(t *testing.T) {
+	ass := `[Script Info]
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Alignment, MarginL, MarginR, MarginV
+Style: Default,2,10,10,40
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,Later
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,First\N\NSecond
+`
+	out := string(ASSBytesToVTT([]byte(ass)))
+	if strings.Index(out, "00:00:01.000") > strings.Index(out, "00:00:10.000") {
+		t.Fatalf("cues are not sorted by start time:\n%s", out)
+	}
+	if !strings.Contains(out, "First\n\u00a0\nSecond") {
+		t.Fatalf("blank line inside a cue was not preserved safely:\n%s", out)
+	}
+	if strings.Contains(out, "First\n\nSecond") {
+		t.Fatalf("cue contains a WebVTT block separator:\n%s", out)
+	}
+}
+
+func TestSRTBytesToVTTSortsTagsAndTimestamps(t *testing.T) {
+	in := "1\n1:00:01,000 --> 1:00:03,000\n<i>Later</i>\n\n" +
+		"2\n00:02:00,000 --> 00:02:02,000\nEarlier\n\n" +
+		"3\n00:03:00,000 --> 00:03:02,000\n<font color=\"white\">Color</font>\n"
+	out := string(SRTBytesToVTT([]byte(in)))
+	if strings.Index(out, "00:02:00.000") > strings.Index(out, "01:00:01.000") {
+		t.Fatalf("cues are not sorted by start time:\n%s", out)
+	}
+	if !strings.Contains(out, "01:00:01.000 --> 01:00:03.000") {
+		t.Fatalf("one-digit hour was not normalized:\n%s", out)
+	}
+	if !strings.Contains(out, "<i>Later</i>") || strings.Contains(out, "&lt;i&gt;") {
+		t.Fatalf("italic tag was not preserved:\n%s", out)
+	}
+	if strings.Contains(out, "font") || !strings.Contains(out, "Color") {
+		t.Fatalf("font tag was not removed cleanly:\n%s", out)
 	}
 }

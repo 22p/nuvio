@@ -31,7 +31,7 @@
 
 ## 快速开始
 
-要求：Go 1.27+；构建 Web 界面需要 Node.js 20+。播放时可选安装 `ffmpeg` / `ffprobe`。
+要求：Go 1.27+；构建 Web 界面需要 Node.js 24+。播放时可选安装 `ffmpeg` / `ffprobe`。
 
 ```bash
 make build          # 安装前端依赖、构建 Web、编译单文件二进制

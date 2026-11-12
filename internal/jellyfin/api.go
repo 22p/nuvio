@@ -584,24 +584,37 @@ func mediaBrowserParam(header, name string) string {
 	return strings.TrimSpace(strings.Trim(s, `"`))
 }
 
-// ClientAddress returns the caller's IP, honoring the headers set by a reverse
-// proxy in front of the server.
+// ClientAddress returns the caller's IP. Forwarded headers are trusted only
+// when the immediate peer is loopback or private, which covers a local reverse
+// proxy but not a client connecting directly to a public interface.
 func ClientAddress(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			xff = xff[:i]
+	remote := remoteHost(r.RemoteAddr)
+	if isPrivatePeer(remote) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				xff = xff[:i]
+			}
+			if v := strings.TrimSpace(xff); v != "" {
+				return v
+			}
 		}
-		if v := strings.TrimSpace(xff); v != "" {
+		if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
 			return v
 		}
 	}
-	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
-		return v
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+	return remote
+}
+
+func remoteHost(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
 		return host
 	}
-	return r.RemoteAddr
+	return addr
+}
+
+func isPrivatePeer(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
 
 // repairClientText makes a header value safe to store and emit. Browsers send
