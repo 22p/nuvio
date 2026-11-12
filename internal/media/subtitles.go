@@ -11,60 +11,26 @@ import (
 	"unicode/utf8"
 )
 
-var langNames = map[string]string{
-	"zh": "Chinese", "zh-cn": "Chinese (Simplified)", "zh-hans": "Chinese (Simplified)", "zh-sg": "Chinese (Simplified)",
-	"zh-tw": "Chinese (Traditional)", "zh-hk": "Chinese (Traditional)", "zh-hant": "Chinese (Traditional)",
-	"en": "English", "ja": "Japanese", "ko": "Korean", "fr": "French",
-	"de": "German", "es": "Spanish", "it": "Italian", "ru": "Russian",
-	"pt": "Portuguese", "pt-br": "Portuguese (Brazil)", "ar": "Arabic",
-	"hi": "Hindi", "th": "Thai", "vi": "Vietnamese", "und": "Unknown",
-	"pl": "Polish", "nl": "Dutch", "sv": "Swedish", "no": "Norwegian",
-	"da": "Danish", "fi": "Finnish", "tr": "Turkish", "he": "Hebrew",
-	"el": "Greek", "cs": "Czech", "hu": "Hungarian", "ro": "Romanian",
-	"uk": "Ukrainian", "id": "Indonesian", "ms": "Malay", "ta": "Tamil",
-	"te": "Telugu", "bn": "Bengali", "ur": "Urdu", "fa": "Persian",
-	"sr": "Serbian", "hr": "Croatian", "sk": "Slovak", "bg": "Bulgarian",
-	"ca": "Catalan", "eu": "Basque", "gl": "Galician", "is": "Icelandic",
-	"cy": "Welsh", "et": "Estonian", "lv": "Latvian", "lt": "Lithuanian",
-	"sl": "Slovenian", "sq": "Albanian", "mk": "Macedonian", "ka": "Georgian",
-	"hy": "Armenian", "az": "Azerbaijani", "kk": "Kazakh", "uz": "Uzbek",
-	"mn": "Mongolian", "ne": "Nepali", "si": "Sinhala", "km": "Khmer",
-	"lo": "Lao", "my": "Burmese", "tl": "Filipino", "sw": "Swahili",
-	"af": "Afrikaans", "la": "Latin", "eo": "Esperanto", "yue": "Cantonese",
-}
-
-// langAliases maps ISO 639-2/B and 639-2/T codes (used by ffprobe and many
-// release groups) onto the two letter codes used internally. Fansub suffixes
-// such as "chi" and "chs" are included.
-var langAliases = map[string]string{
-	"chi": "zh", "zho": "zh", "chs": "zh-cn", "cht": "zh-tw", "sc": "zh-cn", "tc": "zh-tw",
-	"eng": "en", "jpn": "ja", "kor": "ko",
-	"fre": "fr", "fra": "fr", "ger": "de", "deu": "de",
-	"spa": "es", "ita": "it", "rus": "ru", "por": "pt",
-	"ara": "ar", "hin": "hi", "tha": "th", "vie": "vi",
-	"pol": "pl", "dut": "nl", "nld": "nl", "swe": "sv",
-	"nor": "no", "nob": "no", "nno": "no", "dan": "da",
-	"fin": "fi", "tur": "tr", "heb": "he", "gre": "el", "ell": "el",
-	"cze": "cs", "ces": "cs", "hun": "hu", "rum": "ro", "ron": "ro",
-	"ukr": "uk", "ind": "id", "may": "ms", "msa": "ms",
-	"tam": "ta", "tel": "te", "ben": "bn", "urd": "ur",
-	"per": "fa", "fas": "fa", "srp": "sr", "hrv": "hr",
-	"slo": "sk", "slk": "sk", "bul": "bg", "cat": "ca",
-	"baq": "eu", "eus": "eu", "glg": "gl", "ice": "is", "isl": "is",
-	"wel": "cy", "cym": "cy", "est": "et", "lav": "lv", "lit": "lt",
-	"slv": "sl", "alb": "sq", "sqi": "sq", "mac": "mk", "mkd": "mk",
-	"geo": "ka", "kat": "ka", "arm": "hy", "hye": "hy",
-	"aze": "az", "kaz": "kk", "uzb": "uz", "mon": "mn",
-	"nep": "ne", "sin": "si", "khm": "km", "lao": "lo",
-	"mya": "my", "bur": "my", "tgl": "tl", "fil": "tl",
-	"swa": "sw", "afr": "af", "lat": "la", "epo": "eo",
-}
-
 func normalizeLang(code string) string {
 	c := strings.ToLower(strings.TrimSpace(code))
 	c = strings.ReplaceAll(c, "_", "-")
-	if a, ok := langAliases[c]; ok {
+	if c == "" {
+		return ""
+	}
+	if a, ok := fansubAliases[c]; ok {
 		return a
+	}
+	if a, ok := bcp47Aliases[c]; ok {
+		return a
+	}
+	if a, ok := iso6392ToBCP47[c]; ok {
+		return a
+	}
+	if i := strings.IndexByte(c, '-'); i > 0 {
+		base, rest := c[:i], c[i:]
+		if a, ok := iso6392ToBCP47[base]; ok {
+			return a + rest
+		}
 	}
 	return c
 }
@@ -72,23 +38,39 @@ func normalizeLang(code string) string {
 // LanguageName returns a human readable label for a language code.
 func LanguageName(code string) string {
 	c := normalizeLang(code)
-	if n, ok := langNames[c]; ok {
+	if c == "" || c == "und" {
+		return "Unknown"
+	}
+	if n, ok := bcp47Variants[c]; ok {
+		return n
+	}
+	if n, ok := bcp47ExtendedNames[c]; ok {
+		return n
+	}
+	if n, ok := bcp47Names[c]; ok {
+		return n
+	}
+	if n, ok := iso6392Names[c]; ok {
 		return n
 	}
 	if i := strings.IndexAny(c, "-_"); i > 0 {
-		if n, ok := langNames[c[:i]]; ok {
+		if n, ok := bcp47Variants[c[:i]]; ok {
 			return n
 		}
-	}
-	if c == "" {
-		return "Unknown"
+		if n, ok := bcp47ExtendedNames[c[:i]]; ok {
+			return n
+		}
+		if n, ok := bcp47Names[c[:i]]; ok {
+			return n
+		}
+		if n, ok := iso6392Names[c[:i]]; ok {
+			return n
+		}
 	}
 	return c
 }
 
-var langToken = regexp.MustCompile(`(?i)(^|[ ._\-])(zh[-_]?(?:cn|sg|tw|hk|hans|hant)?|en|ja|jp|ko|kr|fr|de|es|it|ru|pt[-_]?br|pt|ar|hi|th|vi|und|chi|zho|chs|cht|eng|jpn|kor|fre|fra|ger|deu|spa|ita|rus|por)([ ._\-]|$)`)
-
-func knownLangToken(token string) string {
+func exactLangToken(token string) string {
 	c := normalizeLang(token)
 	if c == "" {
 		return ""
@@ -96,8 +78,56 @@ func knownLangToken(token string) string {
 	if c == "und" {
 		return "und"
 	}
-	if _, ok := langNames[c]; ok {
+	if _, ok := bcp47Variants[c]; ok {
 		return c
+	}
+	if _, ok := bcp47ExtendedNames[c]; ok {
+		return c
+	}
+	if _, ok := bcp47Names[c]; ok {
+		return c
+	}
+	if _, ok := iso6392Names[c]; ok {
+		return c
+	}
+	return ""
+}
+
+func knownLangToken(token string) string {
+	c := normalizeLang(token)
+	if c == "" {
+		return ""
+	}
+	// A full filename stem contains separators; let the token pass handle
+	// it instead of accepting "zh-yue.forced" as one language tag.
+	if strings.ContainsAny(c, ". ") {
+		return ""
+	}
+	if c == "und" {
+		return "und"
+	}
+	if _, ok := bcp47Variants[c]; ok {
+		return c
+	}
+	if _, ok := bcp47ExtendedNames[c]; ok {
+		return c
+	}
+	if _, ok := bcp47Names[c]; ok {
+		return c
+	}
+	if _, ok := iso6392Names[c]; ok {
+		return c
+	}
+	if i := strings.IndexAny(c, "-_"); i > 0 {
+		if _, ok := bcp47ExtendedNames[c[:i]]; ok {
+			return c
+		}
+		if _, ok := bcp47Names[c[:i]]; ok {
+			return c
+		}
+		if _, ok := iso6392Names[c[:i]]; ok {
+			return c
+		}
 	}
 	return ""
 }
@@ -119,13 +149,15 @@ func DetectSubtitleLanguage(filename, base string) string {
 	}
 	// Prefer the beginning of the suffix ("en.forced" -> "en").
 	tokens := strings.FieldsFunc(lower, func(r rune) bool { return r == '.' || r == '-' || r == ' ' })
-	for _, token := range tokens {
-		if code := knownLangToken(token); code != "" {
+	// Check base + region/script pairs before single tokens so zh-Hant and
+	// zh-Yue keep their subtag instead of collapsing to zh.
+	for i := 0; i+1 < len(tokens); i++ {
+		if code := exactLangToken(tokens[i] + "-" + tokens[i+1]); code != "" {
 			return code
 		}
 	}
-	if m := langToken.FindStringSubmatch(" " + lower + " "); len(m) > 1 {
-		if code := knownLangToken(m[2]); code != "" {
+	for _, token := range tokens {
+		if code := knownLangToken(token); code != "" {
 			return code
 		}
 	}

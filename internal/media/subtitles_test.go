@@ -248,7 +248,27 @@ func TestSubtitleLanguageCodes(t *testing.T) {
 		{"Konosuba S1E01.eng.ass", "Konosuba S1E01", "en"},
 		{"Konosuba S1E01.jpn.ass", "Konosuba S1E01", "ja"},
 		{"Konosuba S1E01.ja.ass", "Konosuba S1E01", "ja"},
+		{"Konosuba S1E01.jp.ass", "Konosuba S1E01", "ja"},
+		{"Konosuba S1E01.kr.ass", "Konosuba S1E01", "ko"},
 		{"Konosuba S1E01.zh-Hans.ass", "Konosuba S1E01", "zh-hans"},
+		{"Konosuba S1E01.zh-Hant.ass", "Konosuba S1E01", "zh-hant"},
+		{"Konosuba S1E01.pt-BR.ass", "Konosuba S1E01", "pt-br"},
+		{"Konosuba S1E01.ger.ass", "Konosuba S1E01", "de"},
+		{"Konosuba S1E01.ast.ass", "Konosuba S1E01", "ast"},
+		{"Konosuba S1E01.ceb.ass", "Konosuba S1E01", "ceb"},
+		{"Konosuba S1E01.yue.ass", "Konosuba S1E01", "yue"},
+		{"Konosuba S1E01.wuu.ass", "Konosuba S1E01", "wuu"},
+		{"Konosuba S1E01.cjy.ass", "Konosuba S1E01", "cjy"},
+		{"Konosuba S1E01.cmn.ass", "Konosuba S1E01", "cmn"},
+		{"Konosuba S1E01.nan.ass", "Konosuba S1E01", "nan"},
+		{"Konosuba S1E01.cantonese.ass", "Konosuba S1E01", "yue"},
+		{"Konosuba S1E01.zh-yue.ass", "Konosuba S1E01", "yue"},
+		{"Konosuba S1E01.zh-yue.forced.ass", "Konosuba S1E01", "yue"},
+		{"Konosuba S1E01.zh-Hant.1080p.ass", "Konosuba S1E01", "zh-hant"},
+		{"Konosuba S1E01.粤语.ass", "Konosuba S1E01", "yue"},
+		{"Konosuba S1E01.lzh.ass", "Konosuba S1E01", "lzh"},
+		{"Konosuba S1E01.文言.ass", "Konosuba S1E01", "lzh"},
+		{"Konosuba S1E01.文言文.ass", "Konosuba S1E01", "lzh"},
 		{"Konosuba S1E01.en.forced.ass", "Konosuba S1E01", "en"},
 		{"Konosuba S1E01.ass", "Konosuba S1E01", "und"},
 	}
@@ -263,8 +283,30 @@ func TestSubtitleLanguageCodes(t *testing.T) {
 	if got := LanguageName("zho"); got != "Chinese" {
 		t.Fatalf("LanguageName(zho) = %q", got)
 	}
-	if got := LanguageName("ger"); got != "German" {
-		t.Fatalf("LanguageName(ger) = %q", got)
+	for code, want := range map[string]string{
+		"ger":     "German",
+		"ast":     "Asturian",
+		"ceb":     "Cebuano",
+		"bih":     "Bihari",
+		"yue":     "Cantonese",
+		"wuu":     "Wu Chinese",
+		"cjy":     "Jinyu Chinese",
+		"cmn":     "Mandarin Chinese",
+		"zh-yue":  "Cantonese",
+		"粤语":      "Cantonese",
+		"lzh":     "Literary Chinese",
+		"文言文":     "Literary Chinese",
+		"pt-BR":   "Portuguese (Brazil)",
+		"sr-Latn": "Serbian",
+		"mul":     "Multiple languages",
+		"zxx":     "No linguistic content",
+		"und":     "Unknown",
+		"sc":      "Chinese (Simplified)",
+		"cn":      "Chinese",
+	} {
+		if got := LanguageName(code); got != want {
+			t.Fatalf("LanguageName(%s) = %q, want %q", code, got, want)
+		}
 	}
 }
 

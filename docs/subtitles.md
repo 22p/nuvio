@@ -30,9 +30,14 @@ Other Name.zh.srt             ❌ 不会关联
 .en.srt          en
 .en.forced.srt   en，并标记为 Forced
 .ja.srt          ja
+.yue.srt         yue（Cantonese）
+.wuu.srt         wuu（Wu Chinese）
+.cjy.srt         cjy（Jinyu Chinese）
+.cmn.srt         cmn（Mandarin Chinese）
+.nan.srt         nan（Min Nan Chinese）
 ```
 
-也接受 ISO 639-2 代码（`chi`、`eng`、`jpn`、`kor`、`fre`、`ger`……）。没有语言后缀时，不会读取内容猜测语言，直接保持 `und`（显示为 Unknown）；需要自动识别时请用文件名后缀。
+也接受完整的 ISO 639-1 / ISO 639-2 代码（`chi`、`eng`、`jpn`、`kor`、`fre`、`ger`、`ast`……），以及 `zh-Hant`、`pt-BR` 这类 BCP 47 地区/文字子标签。中文方言使用 ISO 639-3 / BCP 47 代码：`yue`（粤语）、`wuu`（吴语）、`cjy`（晋语）、`cmn`（官话）、`nan`（闽南语）、`hak`（客家话）、`gan`（赣语）、`hsn`（湘语）、`cdo`（闽东语）、`czh`（徽语）、`cpx`（莆仙语）、`czo`（闽中语）、`mnp`（闽北语）、`lzh`（文言/文言文）；也接受 `cantonese`、`粤语`、`文言文` 等常见别名。没有语言后缀时，不会读取内容猜测语言，直接保持 `und`（显示为 Unknown）；需要自动识别时请用文件名后缀。
 
 同一个视频有多条字幕时：
 
@@ -40,7 +45,7 @@ Other Name.zh.srt             ❌ 不会关联
 - 排序后的第一条是默认轨道
 - `forced` 会出现在轨道标题里
 
-`.sc` / `.tc` 分别识别为简体/繁体中文；其他未知后缀保持 `und`（Unknown），不会再根据内容猜测。需要区分简繁时请用 `.chs` / `.cht`、`.sc` / `.tc` 或 `.zh-CN` / `.zh-TW`。
+`.sc` / `.tc` / `.chs` / `.cht` 以及 `jp` / `kr` / `cn` 这类非标准发布组后缀放在单独映射表里，不混入 ISO 代码表；其他未知后缀保持 `und`（Unknown），不会再根据内容猜测。需要区分简繁时请用 `.chs` / `.cht`、`.sc` / `.tc` 或 `.zh-CN` / `.zh-TW`。
 
 ## 网页播放与 ASS
 
