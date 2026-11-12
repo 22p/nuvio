@@ -669,8 +669,8 @@ func TestSubtitleDelivery(t *testing.T) {
 	}{
 		{model.Subtitle{Codec: "ass", Path: "/media/a.ass"}, "ass", "ass"},
 		{model.Subtitle{Codec: "ssa", Path: "/media/a.ssa"}, "ass", "ass"},
-		// Embedded ASS goes through the extraction pipeline, which yields VTT.
-		{model.Subtitle{Codec: "ass", Embedded: true}, "subrip", "srt"},
+		// Embedded ASS is extracted as ASS and converted to WebVTT.
+		{model.Subtitle{Codec: "ass", Embedded: true}, "webvtt", "vtt"},
 		{model.Subtitle{Codec: "srt", Path: "/media/a.srt"}, "subrip", "srt"},
 		{model.Subtitle{Codec: "vtt", Path: "/media/a.vtt"}, "webvtt", "vtt"},
 		{model.Subtitle{Codec: ""}, "subrip", "srt"},

@@ -537,15 +537,15 @@ func (a *API) buildStreams(it *model.Item, token string) []mediaStreamDTO {
 
 // subtitleDelivery returns the Jellyfin codec name and the file extension the
 // subtitle endpoint serves for a stream. External ASS/SSA sidecars keep their
-// native format so effects and positioning survive; embedded ASS has to be
-// converted (the extraction pipeline produces WebVTT) and is delivered as
-// SubRip.
+// native format so effects and positioning survive; embedded ASS is extracted
+// as ASS and then converted to WebVTT, so it is delivered as WebVTT.
 func subtitleDelivery(s model.Subtitle) (codec, format string) {
 	switch strings.ToLower(strings.TrimSpace(s.Codec)) {
 	case "ass", "ssa":
 		if s.Path != "" {
 			return "ass", "ass"
 		}
+		return "webvtt", "vtt"
 	case "vtt", "webvtt":
 		return "webvtt", "vtt"
 	}
@@ -995,7 +995,13 @@ func (a *API) extractSubtitle(r *http.Request, it *model.Item, sub model.Subtitl
 	}
 	dir := filepath.Join(a.DataDir, "subtitles")
 	_ = os.MkdirAll(dir, 0o755)
-	cache := filepath.Join(dir, fmt.Sprintf("%s-%d.vtt", it.ID, sub.Index))
+	// ASS/SSA has its own cache name: the previous extraction flattened it to
+	// plain WebVTT, and that stale file must not be reused after the upgrade.
+	name := fmt.Sprintf("%s-%d.vtt", it.ID, sub.Index)
+	if media.IsASSSubtitleCodec(sub.Codec) {
+		name = fmt.Sprintf("%s-%d-ass.vtt", it.ID, sub.Index)
+	}
+	cache := filepath.Join(dir, name)
 	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
 		return b, nil
 	}
@@ -1003,7 +1009,7 @@ func (a *API) extractSubtitle(r *http.Request, it *model.Item, sub model.Subtitl
 	if it.Demo {
 		path = a.DemoFile
 	}
-	data, err := media.ExtractEmbeddedSubtitle(r.Context(), a.FFmpeg(), path, sub.StreamIndex)
+	data, err := media.EmbeddedSubtitleToVTT(r.Context(), a.FFmpeg(), path, sub.StreamIndex, sub.Codec)
 	if err != nil {
 		return nil, err
 	}

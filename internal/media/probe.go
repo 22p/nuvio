@@ -319,15 +319,56 @@ func findBox(r io.ReadSeeker, start, end int64, kind string, depth int) (box, bo
 	return box{}, false
 }
 
+// IsASSSubtitleCodec reports whether an embedded subtitle stream carries
+// ASS/SSA events rather than a simple text format.
+func IsASSSubtitleCodec(codec string) bool {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "ass", "ssa":
+		return true
+	}
+	return false
+}
+
+// EmbeddedSubtitleToVTT converts one embedded subtitle stream to WebVTT.
+// ASS/SSA is extracted as ASS first: ffmpeg's WebVTT encoder flattens styles,
+// positions and screen text before our converter can see them. Other formats
+// keep the direct WebVTT path, and a failed ASS extraction falls back to it.
+func EmbeddedSubtitleToVTT(ctx context.Context, ffmpeg, path string, streamIndex int, codec string) ([]byte, error) {
+	if IsASSSubtitleCodec(codec) {
+		ass, err := ExtractEmbeddedASS(ctx, ffmpeg, path, streamIndex)
+		if err == nil {
+			vtt := ASSBytesToVTT(ass)
+			if bytes.Contains(vtt, []byte("-->")) {
+				return vtt, nil
+			}
+		}
+	}
+	return ExtractEmbeddedSubtitle(ctx, ffmpeg, path, streamIndex)
+}
+
 // ExtractEmbeddedSubtitle asks ffmpeg to convert one subtitle stream to WebVTT.
 func ExtractEmbeddedSubtitle(ctx context.Context, ffmpeg, path string, streamIndex int) ([]byte, error) {
+	return extractEmbedded(ctx, ffmpeg, path, streamIndex, "webvtt")
+}
+
+// ExtractEmbeddedASS asks ffmpeg to extract one ASS/SSA stream without
+// flattening its events to plain text.
+func ExtractEmbeddedASS(ctx context.Context, ffmpeg, path string, streamIndex int) ([]byte, error) {
+	return extractEmbedded(ctx, ffmpeg, path, streamIndex, "ass")
+}
+
+func extractEmbedded(ctx context.Context, ffmpeg, path string, streamIndex int, format string) ([]byte, error) {
 	if ffmpeg == "" {
 		return nil, fmt.Errorf("ffmpeg not available")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ffmpeg, "-v", "error", "-i", path,
-		"-map", "0:"+strconv.Itoa(streamIndex), "-f", "webvtt", "pipe:1")
+	args := []string{"-v", "error", "-i", path, "-map", "0:" + strconv.Itoa(streamIndex)}
+	if format == "ass" {
+		args = append(args, "-c:s", "ass")
+	}
+	args = append(args, "-f", format, "pipe:1")
+	cmd := exec.CommandContext(ctx, ffmpeg, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
