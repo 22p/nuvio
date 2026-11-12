@@ -80,7 +80,13 @@ export function formatDate(value?: string): string {
   if (!value) return ''
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return ''
-  const locales: Record<Lang, string> = { en: 'en-US', zh: 'zh-CN', 'zh-TW': 'zh-TW', ja: 'ja-JP', ko: 'ko-KR' }
+  const locales: Record<Lang, string> = {
+    en: 'en-US',
+    'zh-CN': 'zh-CN',
+    'zh-TW': 'zh-TW',
+    'ja-JP': 'ja-JP',
+    'ko-KR': 'ko-KR',
+  }
   const locale = locales[getLang()]
   return d.toLocaleDateString(locale, { year: 'numeric', month: 'long', day: 'numeric' })
 }

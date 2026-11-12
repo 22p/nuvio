@@ -1,4 +1,4 @@
-export const ja: Record<string, string> = {
+export const jaJP: Record<string, string> = {
   ' · {0} channels': ' · {0}ch',
   ' · playing in {0}s': ' · {0}秒後に再生',
   ' · forced': ' · 強制',

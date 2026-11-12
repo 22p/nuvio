@@ -1,4 +1,4 @@
-export const zh: Record<string, string> = {
+export const zhCN: Record<string, string> = {
   ' · {0} channels': ' · {0} 声道',
   ' · playing in {0}s': ' · {0} 秒后播放',
   ' · forced': ' · 强制',

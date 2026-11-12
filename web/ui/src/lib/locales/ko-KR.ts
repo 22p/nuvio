@@ -1,4 +1,4 @@
-export const ko: Record<string, string> = {
+export const koKR: Record<string, string> = {
   ' · {0} channels': ' · {0}ch',
   ' · playing in {0}s': ' · {0}초 후 재생',
   ' · forced': ' · 강제',
