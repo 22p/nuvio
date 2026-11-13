@@ -1750,6 +1750,13 @@ select option:disabled {
   color: rgba(255, 255, 255, 0.86);
   word-break: break-all;
 }
+.fact strong a {
+  color: inherit;
+  text-decoration: none;
+}
+.fact strong a:hover {
+  text-decoration: underline;
+}
 
 /* ------------------------------------------------------------------ search */
 

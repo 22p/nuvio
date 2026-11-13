@@ -22,7 +22,7 @@ import (
 
 // metadataVersion marks items enriched with the current field set. Bump it
 // when a new TMDb field is added so existing libraries refresh once.
-const metadataVersion = 3
+const metadataVersion = 4
 
 // minMatchScore is the confidence a candidate needs before it is applied.
 // A year match alone (3) is not enough, and a partial name plus a year (5) is.
@@ -73,6 +73,8 @@ type searchResult struct {
 	Popularity    float64 `json:"popularity"`
 	Runtime       int     `json:"runtime"`
 	GenreIDs      []int   `json:"genre_ids"`
+	IMDBID        string
+	Certification string
 }
 
 type searchResponse struct {
@@ -312,6 +314,23 @@ type detailsResponse struct {
 	Genres        []struct {
 		ID int `json:"id"`
 	} `json:"genres"`
+	ExternalIDs struct {
+		IMDBID string `json:"imdb_id"`
+	} `json:"external_ids"`
+	ContentRatings struct {
+		Results []struct {
+			Country string `json:"iso_3166_1"`
+			Rating  string `json:"rating"`
+		} `json:"results"`
+	} `json:"content_ratings"`
+	ReleaseDates struct {
+		Results []struct {
+			Country string `json:"iso_3166_1"`
+			Dates   []struct {
+				Certification string `json:"certification"`
+			} `json:"release_dates"`
+		} `json:"results"`
+	} `json:"release_dates"`
 }
 
 // details re-reads a search hit in the configured language and fills the
@@ -323,6 +342,12 @@ func (e *Enricher) details(ctx context.Context, kind string, id int) *searchResu
 	q := url.Values{}
 	q.Set("api_key", e.APIKey)
 	q.Set("language", e.Language)
+	// Certifications and the IMDb id are not part of the search response.
+	if kind == "tv" {
+		q.Set("append_to_response", "external_ids,content_ratings")
+	} else {
+		q.Set("append_to_response", "external_ids,release_dates")
+	}
 	var out detailsResponse
 	if err := e.getJSON(ctx, fmt.Sprintf("/%s/%d?%s", kind, id, q.Encode()), &out); err != nil {
 		return nil
@@ -340,11 +365,62 @@ func (e *Enricher) details(ctx context.Context, kind string, id int) *searchResu
 		FirstAirDate:  out.FirstAirDate,
 		VoteAverage:   out.VoteAverage,
 		Runtime:       out.Runtime,
+		IMDBID:        out.ExternalIDs.IMDBID,
+		Certification: e.certification(kind, &out),
 	}
 	for _, g := range out.Genres {
 		res.GenreIDs = append(res.GenreIDs, g.ID)
 	}
 	return res
+}
+
+// certification picks the age rating for the metadata language's country,
+// then the US, then the first rated entry.
+func (e *Enricher) certification(kind string, out *detailsResponse) string {
+	type entry struct{ country, rating string }
+	var entries []entry
+	if kind == "tv" {
+		for _, r := range out.ContentRatings.Results {
+			entries = append(entries, entry{r.Country, strings.TrimSpace(r.Rating)})
+		}
+	} else {
+		for _, r := range out.ReleaseDates.Results {
+			for _, d := range r.Dates {
+				if c := strings.TrimSpace(d.Certification); c != "" {
+					entries = append(entries, entry{r.Country, c})
+					break
+				}
+			}
+		}
+	}
+	pick := func(country string) string {
+		for _, en := range entries {
+			if country != "" && strings.EqualFold(en.country, country) && en.rating != "" {
+				return en.rating
+			}
+		}
+		return ""
+	}
+	if c := pick(countryCode(e.Language)); c != "" {
+		return c
+	}
+	if c := pick("US"); c != "" {
+		return c
+	}
+	for _, en := range entries {
+		if en.rating != "" {
+			return en.rating
+		}
+	}
+	return ""
+}
+
+// countryCode returns the region of a language tag such as zh-CN.
+func countryCode(lang string) string {
+	if i := strings.LastIndexAny(lang, "-_"); i > 0 && len(lang[i+1:]) == 2 {
+		return strings.ToUpper(lang[i+1:])
+	}
+	return ""
 }
 
 // search queries one candidate and returns the best hit above the confidence
@@ -548,6 +624,12 @@ func (e *Enricher) apply(ctx context.Context, it *model.Item, r searchResult) {
 		if names := e.genreNames(ctx, kindOfItem(it), r.GenreIDs); len(names) > 0 {
 			it.Genres = names
 		}
+	}
+	if r.IMDBID != "" && (!local || it.IMDBID == "") {
+		it.IMDBID = r.IMDBID
+	}
+	if r.Certification != "" && it.OfficialRating == "" {
+		it.OfficialRating = r.Certification
 	}
 	if r.PosterPath != "" {
 		it.PosterURL = e.ImageBase + "/w780" + r.PosterPath
@@ -923,6 +1005,9 @@ func mergeItem(it, old *model.Item) {
 	}
 	if it.TMDBID == 0 {
 		it.TMDBID = old.TMDBID
+	}
+	if it.IMDBID == "" {
+		it.IMDBID = old.IMDBID
 	}
 	if it.TMDBVersion == 0 {
 		it.TMDBVersion = old.TMDBVersion

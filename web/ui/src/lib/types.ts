@@ -91,6 +91,7 @@ export interface JFItem {
   LocationType?: string
   IsFolder?: boolean
   Size?: number
+  ProviderIds?: Record<string, string>
 }
 
 export interface QueryResult<T> {

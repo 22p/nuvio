@@ -344,3 +344,41 @@ func TestMatchScoreRejectsLookAlikes(t *testing.T) {
 		t.Fatalf("near name rejected with score %d", got)
 	}
 }
+
+func TestDetailsReadsIMDBAndCertification(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/movie/603", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("append_to_response"); got != "external_ids,release_dates" {
+			t.Errorf("append_to_response = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 603, "title": "The Matrix",
+			"external_ids": map[string]any{"imdb_id": "tt0133093"},
+			"release_dates": map[string]any{"results": []map[string]any{
+				{"iso_3166_1": "US", "release_dates": []map[string]any{{"certification": "R"}}},
+			}},
+		})
+	})
+	mux.HandleFunc("/movie/603/images", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"logos": []any{}})
+	})
+	mux.HandleFunc("/movie/603/credits", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"cast": []any{}})
+	})
+	mux.HandleFunc("/genre/movie/list", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"genres": []any{}})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	e := New("key", "zh-CN")
+	e.BaseURL = server.URL
+	e.ImageBase = server.URL + "/img"
+	item := &model.Item{ID: "a", Type: model.TypeMovie, Name: "The Matrix", LibraryID: "lib", TMDBID: 603}
+	if err := e.Enrich(context.Background(), []*model.Item{item}); err != nil {
+		t.Fatal(err)
+	}
+	if item.IMDBID != "tt0133093" || item.OfficialRating != "R" {
+		t.Fatalf("imdb/rating = %q/%q", item.IMDBID, item.OfficialRating)
+	}
+}

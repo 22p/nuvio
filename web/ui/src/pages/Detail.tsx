@@ -154,6 +154,8 @@ export function DetailPage() {
   const isSeason = item.Type === 'Season'
   const isEpisode = item.Type === 'Episode'
   const isShowLike = isSeries || isSeason || isEpisode
+  const tmdbId = item.ProviderIds?.Tmdb
+  const imdbId = item.ProviderIds?.Imdb
   const resume = (item.UserData?.PlaybackPositionTicks || 0) > 0
   const playItem = isShowLike ? nextTarget : item
   const progress = playProgress(item)
@@ -427,6 +429,12 @@ export function DetailPage() {
                 <Fact label={t("Total episodes")} value={String(allEpisodes.length)} />
                 <Fact label={t("Type")} value={t("Series")} />
                 {item.OfficialRating ? <Fact label={t("Rating")} value={item.OfficialRating} /> : null}
+                {tmdbId ? (
+                  <Fact label="TMDb" value={tmdbId} href={`https://www.themoviedb.org/tv/${tmdbId}`} />
+                ) : null}
+                {imdbId ? (
+                  <Fact label="IMDb" value={imdbId} href={`https://www.imdb.com/title/${imdbId}/`} />
+                ) : null}
               </>
             ) : isSeason ? (
               <>
@@ -457,6 +465,13 @@ export function DetailPage() {
                 )}
                 <Fact label={t("Subtitles")} value={subtitles.length ? t("{0} items", { 0: subtitles.length }) : t("None")} />
                 {item.Size ? <Fact label={t("File size")} value={formatSize(item.Size)} /> : null}
+                {item.OfficialRating ? <Fact label={t("Rating")} value={item.OfficialRating} /> : null}
+                {tmdbId ? (
+                  <Fact label="TMDb" value={tmdbId} href={`https://www.themoviedb.org/movie/${tmdbId}`} />
+                ) : null}
+                {imdbId ? (
+                  <Fact label="IMDb" value={imdbId} href={`https://www.imdb.com/title/${imdbId}/`} />
+                ) : null}
                 {item.Path && !item.Path.startsWith('demo://') ? (
                   <Fact label={t("File")} value={item.Path} wide />
                 ) : null}
@@ -526,11 +541,29 @@ function EpisodeRow({
   )
 }
 
-function Fact({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
+function Fact({
+  label,
+  value,
+  href,
+  wide,
+}: {
+  label: string
+  value: string
+  href?: string
+  wide?: boolean
+}) {
   return (
     <div className={`fact ${wide ? 'wide' : ''}`}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>
+        {href ? (
+          <a href={href} target="_blank" rel="noreferrer">
+            {value}
+          </a>
+        ) : (
+          value
+        )}
+      </strong>
     </div>
   )
 }
