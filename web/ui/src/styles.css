@@ -1804,6 +1804,29 @@ select option:disabled {
   font-size: 16px;
   letter-spacing: -0.01em;
 }
+.ai-search-toggle {
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+.ai-search-toggle:hover {
+  color: var(--text);
+  border-color: rgba(155, 123, 255, 0.55);
+}
+.ai-search-toggle.active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+}
 .search-field input::placeholder {
   color: var(--dim);
 }

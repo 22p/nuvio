@@ -4,6 +4,7 @@ import type {
   AppConfig,
   AuthResult,
   DeviceSession,
+  EmbeddingStatus,
   JFItem,
   PlaybackInfo,
   QueryResult,
@@ -178,6 +179,22 @@ export function searchItems(userId: string, term: string): Promise<QueryResult<J
   q.set('userId', userId)
   return api<QueryResult<JFItem>>(`/Items?${q.toString()}`)
 }
+
+export interface AISearchResult {
+  Items: JFItem[]
+  TotalRecordCount: number
+  StartIndex: number
+  Mode: string
+}
+
+export const searchAI = (userId: string, query: string, limit = 24) =>
+  api<AISearchResult>(`/Items/AI/Search?userId=${encodeURIComponent(userId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ query, limit }),
+  })
+
+export const reindexAISearch = () =>
+  api<EmbeddingStatus>('/api/admin/ai/search/reindex', { method: 'POST' })
 
 export const setPlayed = (userId: string, itemId: string, played: boolean) =>
   api<UserData>(`/UserPlayedItems/${itemId}?userId=${encodeURIComponent(userId)}`, {

@@ -1,7 +1,7 @@
 import { t } from '../lib/i18n'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { searchItems } from '../lib/api'
+import { searchAI, searchItems } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import type { JFItem } from '../lib/types'
 import { EmptyState, PosterCard } from '../components/Media'
@@ -18,7 +18,7 @@ function loadRecent(): string[] {
 }
 
 export function SearchPage() {
-  const { session } = useAuth()
+  const { session, config } = useAuth()
   const [params, setParams] = useSearchParams()
   const initial = params.get('q') || ''
   const [query, setQuery] = useState(initial)
@@ -26,7 +26,11 @@ export function SearchPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [recent, setRecent] = useState<string[]>(loadRecent)
+  const [aiMode, setAIMode] = useState(() => localStorage.getItem('nuvio.aiSearch') !== '0')
+  const [resultMode, setResultMode] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const aiAvailable = Boolean(config?.aiSearch)
+  const useAI = aiAvailable && aiMode
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -43,10 +47,31 @@ export function SearchPage() {
     setLoading(true)
     const timer = window.setTimeout(async () => {
       try {
-        const res = await searchItems(session!.user.Id, term)
+        let items: JFItem[] = []
+        let count = 0
+        if (useAI) {
+          try {
+            const res = await searchAI(session!.user.Id, term)
+            items = res.Items || []
+            count = res.TotalRecordCount || 0
+            setResultMode(res.Mode)
+          } catch {
+            // Never leave the user with an empty page when the embedding
+            // server is down: fall back to the regular title search.
+            const res = await searchItems(session!.user.Id, term)
+            items = res.Items || []
+            count = res.TotalRecordCount || 0
+            setResultMode('')
+          }
+        } else {
+          const res = await searchItems(session!.user.Id, term)
+          items = res.Items || []
+          count = res.TotalRecordCount || 0
+          setResultMode('')
+        }
         if (!alive) return
-        setResults(res.Items || [])
-        setTotal(res.TotalRecordCount || 0)
+        setResults(items)
+        setTotal(count)
       } catch {
         if (alive) {
           setResults([])
@@ -60,7 +85,7 @@ export function SearchPage() {
       alive = false
       window.clearTimeout(timer)
     }
-  }, [query, session])
+  }, [query, session, useAI])
 
   useEffect(() => {
     const term = query.trim()
@@ -97,10 +122,23 @@ export function SearchPage() {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("Search movies, series, episodes…")}
+            placeholder={useAI ? t("Describe what you want to watch…") : t("Search movies, series, episodes…")}
             spellCheck={false}
             aria-label={t("Search")}
           />
+          {aiAvailable && (
+            <button
+              className={`ai-search-toggle ${useAI ? 'active' : ''}`}
+              onClick={() => {
+                const next = !useAI
+                setAIMode(next)
+                localStorage.setItem('nuvio.aiSearch', next ? '1' : '0')
+              }}
+              title={useAI ? t("Switch to title search") : t("Switch to AI search")}
+            >
+              AI
+            </button>
+          )}
           {query && (
             <button className="search-clear" onClick={() => setQuery('')} aria-label={t("Clear all")}>
               <IconClose size={16} />
@@ -108,7 +146,9 @@ export function SearchPage() {
           )}
         </div>
         {hasQuery && !loading && (
-          <div className="search-count">{total}{' '}{t("results")}</div>
+          <div className="search-count">
+            {total}{' '}{t("results")}{resultMode === 'hybrid' ? ' · AI' : ''}
+          </div>
         )}
       </div>
 

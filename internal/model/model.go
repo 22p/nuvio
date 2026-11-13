@@ -198,6 +198,13 @@ type ServerSettings struct {
 	AIModel          string   `json:"aiModel,omitempty"`
 	AITargetLanguage string   `json:"aiTargetLanguage,omitempty"`
 	AILists          []AIList `json:"aiLists,omitempty"`
+
+	// Semantic search uses a separate embedding model. It can point at a
+	// different OpenAI-compatible server than the chat model.
+	AISearchEnabled  bool   `json:"aiSearchEnabled,omitempty"`
+	AIEmbeddingURL   string `json:"aiEmbeddingUrl,omitempty"`
+	AIEmbeddingKey   string `json:"aiEmbeddingKey,omitempty"`
+	AIEmbeddingModel string `json:"aiEmbeddingModel,omitempty"`
 }
 
 // AIList is a themed set of items produced by the assistant for the home page.

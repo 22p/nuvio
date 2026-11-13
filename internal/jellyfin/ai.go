@@ -46,6 +46,7 @@ func ValidLanguageCode(code string) bool {
 
 func (a *API) registerAI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /Items/AI/Lists", a.handleAILists)
+	mux.HandleFunc("POST /Items/AI/Search", a.handleAISearch)
 	mux.HandleFunc("POST /Items/{itemId}/Subtitles/{index}/Translate", a.handleTranslateSubtitle)
 	for _, prefix := range []string{"/Videos", "/videos"} {
 		mux.HandleFunc("GET "+prefix+"/{itemId}/TranslatedSubtitles/{lang}/Stream.vtt", a.handleTranslatedSubtitle)

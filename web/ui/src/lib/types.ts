@@ -128,6 +128,7 @@ export interface AppConfig {
   demo: boolean
   tmdb?: boolean
   ai?: boolean
+  aiSearch?: boolean
   aiTargetLang?: string
   scanning: boolean
   itemCount: number
@@ -213,5 +214,18 @@ export interface AdminOverview {
     aiApiKey?: string
     aiModel?: string
     aiTargetLanguage?: string
+    aiSearchEnabled?: boolean
+    aiEmbeddingUrl?: string
+    aiEmbeddingKey?: string
+    aiEmbeddingModel?: string
   }
+  embedding?: EmbeddingStatus
+}
+
+export interface EmbeddingStatus {
+  indexed: number
+  total: number
+  running: boolean
+  model?: string
+  error?: string
 }

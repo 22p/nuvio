@@ -56,6 +56,7 @@ func main() {
 	log.Printf("Nuvio started: http://localhost:%d", port)
 	if srv.Store.SetupComplete() {
 		srv.ScanIfNeeded()
+		srv.StartEmbeddingIndex(false)
 	} else {
 		log.Printf("Waiting for first-time setup…")
 	}

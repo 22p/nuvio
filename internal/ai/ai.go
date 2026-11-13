@@ -32,6 +32,14 @@ func New(baseURL, apiKey, model string) *Client {
 	}
 }
 
+// NewEmbedding builds a client for /v1/embeddings. Batch embedding on CPU can
+// take longer than a chat turn, so it gets a larger timeout.
+func NewEmbedding(baseURL, apiKey, model string) *Client {
+	c := New(baseURL, apiKey, model)
+	c.HTTP.Timeout = 5 * time.Minute
+	return c
+}
+
 // Available reports whether the client can be used.
 func (c *Client) Available() bool {
 	return c != nil && c.BaseURL != "" && c.APIKey != ""
@@ -192,4 +200,88 @@ func snippet(b []byte) string {
 		s = s[:200]
 	}
 	return s
+}
+
+type embedRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+type embedResponse struct {
+	Data []struct {
+		Index     int       `json:"index"`
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// Embed returns one vector per input text. The API key is optional because
+// local OpenAI-compatible servers usually run without authentication.
+func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if c == nil || c.BaseURL == "" {
+		return nil, fmt.Errorf("embedding server is not configured")
+	}
+	if c.Model == "" {
+		return nil, fmt.Errorf("embedding model is not selected")
+	}
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	body, err := json.Marshal(embedRequest{Model: c.Model, Input: texts})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		return nil, err
+	}
+	var out embedResponse
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("embedding reply: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if out.Error != nil && out.Error.Message != "" {
+			return nil, fmt.Errorf("embeddings HTTP %d: %s", resp.StatusCode, out.Error.Message)
+		}
+		return nil, fmt.Errorf("embeddings HTTP %d", resp.StatusCode)
+	}
+	vecs := make([][]float32, len(texts))
+	allZero := true
+	for _, d := range out.Data {
+		if d.Index != 0 {
+			allZero = false
+			break
+		}
+	}
+	for i, d := range out.Data {
+		idx := d.Index
+		// Some local servers omit index; fall back to the response order.
+		if allZero && len(out.Data) == len(texts) {
+			idx = i
+		}
+		if idx >= 0 && idx < len(vecs) {
+			vecs[idx] = d.Embedding
+		}
+	}
+	for i, v := range vecs {
+		if len(v) == 0 {
+			return nil, fmt.Errorf("embedding %d missing from reply", i)
+		}
+	}
+	return vecs, nil
 }

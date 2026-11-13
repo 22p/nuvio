@@ -11,6 +11,7 @@ import {
   getAIModels,
   getUnmatchedMetadata,
   matchMetadata,
+  reindexAISearch,
   searchMetadata,
   removeLibrary,
   revokeSession,
@@ -484,12 +485,13 @@ const CODEC_LABELS: Record<string, string> = {
   vp9: 'VP9',
 }
 
-type AdminSaveSection = 'server' | 'metadata' | 'ai'
+type AdminSaveSection = 'server' | 'metadata' | 'ai' | 'search'
 
 const EMPTY_NOTICES: Record<AdminSaveSection, string> = {
   server: '',
   metadata: '',
   ai: '',
+  search: '',
 }
 
 function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknown> }) {
@@ -524,9 +526,14 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   const [aiApiKey, setAIApiKey] = useState('')
   const [aiModel, setAIModel] = useState('')
   const [aiTargetLanguage, setAITargetLanguage] = useState('zh-CN')
+  const [aiSearchEnabled, setAISearchEnabled] = useState(false)
+  const [aiEmbeddingUrl, setAIEmbeddingUrl] = useState('')
+  const [aiEmbeddingKey, setAIEmbeddingKey] = useState('')
+  const [aiEmbeddingModel, setAIEmbeddingModel] = useState('')
   const [modelOptions, setModelOptions] = useState<string[]>([])
   const [aiBusy, setAIBusy] = useState(false)
   const [aiNotice, setAINotice] = useState('')
+  const [searchNotice, setSearchNotice] = useState('')
 
   const [libName, setLibName] = useState('')
   const [libType, setLibType] = useState('movies')
@@ -554,6 +561,10 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       setAIApiKey(data.settings.aiApiKey || '')
       setAIModel(data.settings.aiModel || '')
       setAITargetLanguage(data.settings.aiTargetLanguage || 'zh-CN')
+      setAISearchEnabled(Boolean(data.settings.aiSearchEnabled))
+      setAIEmbeddingUrl(data.settings.aiEmbeddingUrl || '')
+      setAIEmbeddingKey(data.settings.aiEmbeddingKey || '')
+      setAIEmbeddingModel(data.settings.aiEmbeddingModel || '')
       setScanning(data.scan.scanning)
       getUnmatchedMetadata()
         .then((res) => setUnmatched(res.items))
@@ -594,6 +605,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
     setSaving(section)
     setError('')
     setNotices((prev) => ({ ...prev, [section]: '' }))
+    if (section === 'search') setSearchNotice('')
     const payload =
       section === 'server'
         ? {
@@ -609,13 +621,17 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
           }
         : section === 'metadata'
           ? { tmdbApiKey, metadataLanguage }
-          : { aiEnabled, aiBaseUrl, aiApiKey, aiModel, aiTargetLanguage }
+          : section === 'ai'
+            ? { aiEnabled, aiBaseUrl, aiApiKey, aiModel, aiTargetLanguage }
+            : { aiSearchEnabled, aiEmbeddingUrl, aiEmbeddingKey, aiEmbeddingModel }
     const message =
       section === 'server'
         ? t("Server settings saved")
         : section === 'metadata'
           ? t("Metadata settings saved")
-          : t("AI settings saved")
+          : section === 'ai'
+            ? t("AI settings saved")
+            : t("Search settings saved")
     try {
       await saveServerSettings(payload)
       setNotices((prev) => ({ ...prev, [section]: message }))
@@ -1144,6 +1160,98 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               {t("Generate lists")}
             </button>
           </div>
+        </div>
+
+        <div className="admin-block">
+          <div className="admin-block-head">
+            <h3>{t("AI search")}</h3>
+            <span className={`status-dot ${aiSearchEnabled && aiEmbeddingUrl && aiEmbeddingModel ? 'ok' : 'warn'}`}>
+              {aiSearchEnabled && aiEmbeddingUrl && aiEmbeddingModel ? t("Configured") : t("Off")}
+            </span>
+          </div>
+          <p className="setting-hint" style={{ marginBottom: 12 }}>
+            {t("Semantic search uses its own embedding service and database, separate from the chat model.")}
+          </p>
+          <div className="setting-row">
+            <div>
+              <div className="setting-label">{t("Enable AI search")}</div>
+              <div className="setting-hint">{t("Embedding requests are sent only to the service below.")}</div>
+            </div>
+            <Switch checked={aiSearchEnabled} onChange={setAISearchEnabled} />
+          </div>
+          <div className="form-grid-3">
+            <label className="field">
+              <span>{t("Embedding base URL")}</span>
+              <input
+                value={aiEmbeddingUrl}
+                onChange={(e) => setAIEmbeddingUrl(e.target.value)}
+                placeholder="http://127.0.0.1:8080/v1"
+              />
+            </label>
+            <label className="field">
+              <span>{t("Embedding API key")}</span>
+              <input
+                type="password"
+                value={aiEmbeddingKey}
+                onChange={(e) => setAIEmbeddingKey(e.target.value)}
+                placeholder={t("Optional")}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>{t("Embedding model")}</span>
+              <input
+                value={aiEmbeddingModel}
+                onChange={(e) => setAIEmbeddingModel(e.target.value)}
+                placeholder="qwen3-embedding"
+              />
+            </label>
+            <div className="field field-align">
+              <button className="btn btn-primary btn-sm" onClick={() => save('search')} disabled={saving !== ''}>
+                {saving === 'search' ? t("Saving…") : t("Save search settings")}
+              </button>
+            </div>
+          </div>
+          {notices.search && <div className="inline-ok" style={{ marginTop: 10 }}>{notices.search}</div>}
+          {searchNotice && <div className="path-line">{searchNotice}</div>}
+          {overview?.embedding && (
+            <div className="setting-row" style={{ marginTop: 12 }}>
+              <div>
+                <div className="setting-label">{t("Search index")}</div>
+                <div className="setting-hint">
+                  {overview.embedding.running
+                    ? t("Indexing {0} / {1}", {
+                        0: overview.embedding.indexed,
+                        1: overview.embedding.total,
+                      })
+                    : t("{0} / {1} indexed", {
+                        0: overview.embedding.indexed,
+                        1: overview.embedding.total,
+                      })}
+                  {overview.embedding.model ? ` · ${overview.embedding.model}` : ''}
+                  {overview.embedding.error ? ` · ${overview.embedding.error}` : ''}
+                </div>
+              </div>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={async () => {
+                  setAIBusy(true)
+                  setSearchNotice('')
+                  try {
+                    await reindexAISearch()
+                    await load()
+                  } catch (err) {
+                    setSearchNotice(err instanceof Error ? err.message : t("Could not start indexing"))
+                  } finally {
+                    setAIBusy(false)
+                  }
+                }}
+                disabled={aiBusy || !aiSearchEnabled || overview.embedding.running}
+              >
+                {t("Rebuild index")}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="admin-block">

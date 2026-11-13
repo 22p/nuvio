@@ -24,6 +24,7 @@ import (
 	"nuvio/internal/hls"
 	"nuvio/internal/model"
 	"nuvio/internal/store"
+	"nuvio/internal/vectors"
 )
 
 // Version is Nuvio's own version. It is injected at build time with
@@ -39,6 +40,7 @@ type API struct {
 	Store    *store.Store
 	Catalog  *catalog.Catalog
 	HLS      *hls.Manager
+	Vectors  *vectors.Store
 	DataDir  string
 	ImageDir string
 	DemoFile string

@@ -30,6 +30,7 @@ data/
   nuvio.db                 用户、令牌、媒体库、片库索引、设置、观看进度
   nuvio.db-wal              WAL 日志（运行中）
   nuvio.db-shm              WAL 共享内存（运行中）
+  embeddings.db            AI 语义搜索向量索引，可安全删除后重建
   demo/sample.mp4          内置演示片段（仅在演示库启用时）
   metadata/
     movies/                TMDb 电影图片缓存

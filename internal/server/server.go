@@ -29,6 +29,7 @@ import (
 	"nuvio/internal/metadata"
 	"nuvio/internal/model"
 	"nuvio/internal/store"
+	"nuvio/internal/vectors"
 )
 
 // Config controls the HTTP server and data locations.
@@ -48,6 +49,7 @@ type Server struct {
 	Catalog *catalog.Catalog
 	API     *jellyfin.API
 	HLS     *hls.Manager
+	Vectors *vectors.Store
 
 	setupMu     sync.Mutex
 	scanMu      sync.Mutex
@@ -55,6 +57,12 @@ type Server struct {
 	pendingScan bool
 	pendingFull bool
 	lastScanErr string
+
+	embedMu      sync.Mutex
+	embedding    bool
+	embedPending bool
+	embedForce   bool
+	embedStatus  embeddingStatus
 }
 
 // New initialises the store, catalog and API. It does not start scanning.
@@ -67,6 +75,11 @@ func New(cfg Config) (*Server, error) {
 	if err := s.reloadCatalog(); err != nil {
 		st.Close()
 		return nil, err
+	}
+	if vec, err := vectors.Open(filepath.Join(cfg.DataDir, "embeddings.db")); err != nil {
+		log.Printf("Semantic search disabled: %v", err)
+	} else {
+		s.Vectors = vec
 	}
 
 	ffmpeg := resolveTool(cfg.FFmpeg, st.Settings().FFmpegPath, "NUVIO_FFMPEG", "ffmpeg")
@@ -96,6 +109,7 @@ func New(cfg Config) (*Server, error) {
 	s.API = &jellyfin.API{
 		Store:    st,
 		Catalog:  s.Catalog,
+		Vectors:  s.Vectors,
 		DataDir:  cfg.DataDir,
 		ImageDir: filepath.Join(cfg.DataDir, "metadata"),
 		DemoFile: demoFile,
@@ -148,6 +162,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/scan", s.handleTriggerScan)
 	mux.HandleFunc("PUT /api/admin/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/admin/ai/models", s.handleAIModels)
+	mux.HandleFunc("POST /api/admin/ai/search/reindex", s.handleReindexEmbeddings)
 	mux.HandleFunc("POST /api/admin/ai/lists", s.handleAIGenerateLists)
 	mux.HandleFunc("POST /api/admin/metadata/ai", s.handleMetadataAI)
 	mux.HandleFunc("GET /api/admin/metadata/unmatched", s.handleMetadataUnmatched)
@@ -181,7 +196,7 @@ var canonicalSegments = func() map[string]string {
 		"UserFavoriteItems", "PlayedItems", "FavoriteItems", "PlayingItems",
 		"Genres", "Persons", "DisplayPreferences", "Sessions", "Playing",
 		"Progress", "Stopped", "Ping", "Capabilities", "Full", "Videos",
-		"Audio", "stream", "master.m3u8", "hls", "Subtitles",
+		"Audio", "stream", "master.m3u8", "hls", "Subtitles", "AI",
 	}
 	m := make(map[string]string, len(names))
 	for _, n := range names {
@@ -428,12 +443,17 @@ func (s *Server) runScan(full bool) {
 	log.Printf("Scan finished: %d items in %s", len(kept), time.Since(start).Round(time.Millisecond))
 	if pending {
 		s.startScan(pendingFull)
+	} else {
+		s.StartEmbeddingIndex(false)
 	}
 }
 
 // Close stops transcoding sessions and closes SQLite.
 func (s *Server) Close() {
 	s.HLS.StopAll()
+	if s.Vectors != nil {
+		_ = s.Vectors.Close()
+	}
 	_ = s.Store.Close()
 }
 
@@ -452,6 +472,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"demo":          s.cfg.Demo,
 		"tmdb":          st.TMDBAPIKey != "" || os.Getenv("NUVIO_TMDB_API_KEY") != "",
 		"ai":            st.AIEnabled && st.AIAPIKey != "",
+		"aiSearch":      st.AISearchEnabled && st.AIEmbeddingURL != "" && st.AIEmbeddingModel != "" && s.Vectors != nil,
 		"aiTargetLang":  st.AITargetLanguage,
 		"scanning":      status.Scanning || s.isScanning(),
 		"itemCount":     status.ItemCount,
@@ -649,6 +670,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		"hardware":     s.API.HardwareMode(),
 		"capabilities": s.API.Capabilities(),
 		"scan":         status,
+		"embedding":    s.EmbeddingStatus(),
 		"counts":       s.Catalog.Counts(),
 		"libraries":    libs,
 		"users":        userOut,
@@ -1334,6 +1356,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		AIAPIKey         *string `json:"aiApiKey"`
 		AIModel          *string `json:"aiModel"`
 		AITargetLanguage *string `json:"aiTargetLanguage"`
+		AISearchEnabled  *bool   `json:"aiSearchEnabled"`
+		AIEmbeddingURL   *string `json:"aiEmbeddingUrl"`
+		AIEmbeddingKey   *string `json:"aiEmbeddingKey"`
+		AIEmbeddingModel *string `json:"aiEmbeddingModel"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]any{"error": "Invalid request format"})
@@ -1383,6 +1409,20 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	oldProbe := s.API.FFprobe()
 	oldFFmpeg := s.API.FFmpeg()
 	oldSettings := s.Store.Settings()
+	if body.AISearchEnabled != nil && *body.AISearchEnabled {
+		url := oldSettings.AIEmbeddingURL
+		if body.AIEmbeddingURL != nil {
+			url = strings.TrimSpace(*body.AIEmbeddingURL)
+		}
+		model := oldSettings.AIEmbeddingModel
+		if body.AIEmbeddingModel != nil {
+			model = strings.TrimSpace(*body.AIEmbeddingModel)
+		}
+		if url == "" || model == "" {
+			writeJSON(w, 400, map[string]any{"error": "Embedding URL and model are required for AI search"})
+			return
+		}
+	}
 	settings := s.Store.UpdateSettings(func(st *model.ServerSettings) {
 		if body.ServerName != nil && strings.TrimSpace(*body.ServerName) != "" {
 			st.ServerName = strings.TrimSpace(*body.ServerName)
@@ -1432,6 +1472,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if body.AITargetLanguage != nil && strings.TrimSpace(*body.AITargetLanguage) != "" {
 			st.AITargetLanguage = strings.TrimSpace(*body.AITargetLanguage)
 		}
+		if body.AISearchEnabled != nil {
+			st.AISearchEnabled = *body.AISearchEnabled
+		}
+		if body.AIEmbeddingURL != nil {
+			st.AIEmbeddingURL = strings.TrimRight(strings.TrimSpace(*body.AIEmbeddingURL), "/")
+		}
+		if body.AIEmbeddingKey != nil {
+			st.AIEmbeddingKey = strings.TrimSpace(*body.AIEmbeddingKey)
+		}
+		if body.AIEmbeddingModel != nil {
+			st.AIEmbeddingModel = strings.TrimSpace(*body.AIEmbeddingModel)
+		}
 	})
 	ffmpeg := resolveTool("", settings.FFmpegPath, "NUVIO_FFMPEG", "ffmpeg")
 	ffprobe := resolveTool("", settings.FFprobePath, "NUVIO_FFPROBE", "ffprobe")
@@ -1440,6 +1492,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// actually changed. A restart re-detects after driver updates.
 	if ffmpeg != oldFFmpeg {
 		applyHardware(s.API, ffmpeg)
+	}
+	embeddingChanged := oldSettings.AIEmbeddingURL != settings.AIEmbeddingURL ||
+		oldSettings.AIEmbeddingKey != settings.AIEmbeddingKey ||
+		oldSettings.AIEmbeddingModel != settings.AIEmbeddingModel
+	if embeddingChanged {
+		go s.StartEmbeddingIndex(true)
+	} else if !oldSettings.AISearchEnabled && settings.AISearchEnabled {
+		go s.StartEmbeddingIndex(false)
 	}
 	metadataChanged := oldSettings.TMDBAPIKey != settings.TMDBAPIKey || oldSettings.MetadataLanguage != settings.MetadataLanguage
 	if ffprobe != oldProbe {
