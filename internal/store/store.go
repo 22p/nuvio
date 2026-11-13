@@ -899,6 +899,25 @@ func (s *Store) SetPlayed(userID, itemID string, played bool) {
 		userID, itemID, playedInt, playCount, now)
 }
 
+// SetPlayCount sets the stored play count without changing the watched flag.
+func (s *Store) SetPlayCount(userID, itemID string, count int) {
+	if count < 0 {
+		count = 0
+	}
+	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+		VALUES(?, ?, 0, 0, ?, NULL, 0)
+		ON CONFLICT(user_id, item_id) DO UPDATE SET play_count = excluded.play_count`,
+		userID, itemID, count)
+}
+
+// SetLastPlayed sets the last played timestamp without changing other state.
+func (s *Store) SetLastPlayed(userID, itemID string, t time.Time) {
+	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+		VALUES(?, ?, 0, 0, 0, ?, 0)
+		ON CONFLICT(user_id, item_id) DO UPDATE SET last_played = excluded.last_played`,
+		userID, itemID, t.UTC().Format(time.RFC3339Nano))
+}
+
 // SetProgress records playback position. played is set when the client reports
 // the item as finished.
 func (s *Store) SetProgress(userID, itemID string, positionTicks int64, played bool) {

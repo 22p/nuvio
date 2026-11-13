@@ -1453,6 +1453,52 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // SPA --------------------------------------------------------------------
 
+// jellyfinAPIRoots are first path segments that only exist in the Jellyfin
+// API. A GET that reaches the SPA handler with one of these roots is an
+// unimplemented endpoint, not a client-side route.
+var jellyfinAPIRoots = map[string]bool{
+	"activity": true, "apikeys": true, "audio": true, "branding": true,
+	"channels": true, "collections": true, "devices": true,
+	"displaypreferences": true, "environment": true, "fallbackfont": true,
+	"filters": true, "genres": true, "getutctime": true, "imagebyname": true,
+	"images": true, "items": true, "libraries": true, "library": true,
+	"livetv": true, "localization": true, "mediasegments": true, "movies": true,
+	"musicgenres": true, "notifications": true, "packages": true, "persons": true,
+	"playlists": true, "plugins": true, "quickconnect": true, "remoteimages": true,
+	"scheduledtasks": true, "search": true, "sessions": true, "shows": true,
+	"startup": true, "studios": true, "subtitle": true, "syncplay": true,
+	"system": true, "tasks": true, "trailer": true, "userfavoriteitems": true,
+	"useritems": true, "userplayeditems": true, "userviews": true, "users": true,
+	"videos": true,
+}
+
+// looksLikeAPIPath distinguishes Jellyfin API roots from the web client's
+// own routes, which are lower-case and handled by React.
+func looksLikeAPIPath(p string) bool {
+	clean := path.Clean("/" + p)
+	if clean == "/" {
+		return false
+	}
+	segments := strings.Split(strings.TrimPrefix(clean, "/"), "/")
+	first := strings.ToLower(segments[0])
+	switch first {
+	case "browse", "favorites", "search", "settings", "users":
+		if len(segments) == 1 && segments[0] == first {
+			return false
+		}
+	case "item", "watch":
+		if segments[0] == first {
+			return false
+		}
+	case "library":
+		// /library/<id> is a web route; /Library/MediaFolders is an API path.
+		if segments[0] == first && len(segments) == 2 && len(segments[1]) == 32 {
+			return false
+		}
+	}
+	return jellyfinAPIRoots[first]
+}
+
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.NotFound(w, r)
@@ -1468,6 +1514,12 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 			s.serveFile(w, r, rel)
 			return
 		}
+	}
+	// Unknown Jellyfin API paths must not fall back to the SPA: API clients
+	// would receive index.html with a 200 and try to parse it as JSON.
+	if looksLikeAPIPath(r.URL.Path) {
+		writeJSON(w, 404, map[string]string{"error": "endpoint not implemented"})
+		return
 	}
 	// SPA fallback for client side routes.
 	s.serveFile(w, r, "index.html")

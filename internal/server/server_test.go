@@ -113,3 +113,25 @@ func TestCodecListed(t *testing.T) {
 		}
 	}
 }
+
+func TestLooksLikeAPIPath(t *testing.T) {
+	cases := map[string]bool{
+		"/Sessions":             true,
+		"/Devices":              true,
+		"/QuickConnect/Enabled": true,
+		"/Plugins":              true,
+		"/Library/MediaFolders": true,
+		"/library/0123456789abcdef0123456789abcdef": false,
+		"/search":    false,
+		"/users":     false,
+		"/settings":  false,
+		"/item/abc":  false,
+		"/watch/abc": false,
+		"/":          false,
+	}
+	for path, want := range cases {
+		if got := looksLikeAPIPath(path); got != want {
+			t.Errorf("looksLikeAPIPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

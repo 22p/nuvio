@@ -62,6 +62,9 @@ type API struct {
 	loginAttempt map[string]*loginAttempt
 	loginOnce    sync.Once
 	loginSem     chan struct{}
+
+	capsMu         sync.Mutex
+	deviceProfiles map[string]*deviceProfile
 }
 
 // HardwareCapability is one backend's probed encoder and decoder support.
@@ -338,9 +341,14 @@ func (a *API) userFromRequest(r *http.Request) (*model.User, bool) {
 }
 
 func (a *API) requireUser(w http.ResponseWriter, r *http.Request) (*model.User, bool) {
-	u, ok := a.userFromRequest(r)
-	if !ok {
+	tok := a.tokenFromRequest(r)
+	if tok == "" {
 		writeError(w, 401, "Not signed in")
+		return nil, false
+	}
+	u, ok := a.Store.UserByToken(tok)
+	if !ok || u == nil {
+		writeError(w, 403, "Invalid token.")
 		return nil, false
 	}
 	return u, true
@@ -1702,6 +1710,12 @@ func (a *API) handleUserData(w http.ResponseWriter, r *http.Request) {
 			played := body.Played != nil && *body.Played
 			a.Store.SetProgress(u.ID, it.ID, *body.PlaybackPositionTicks, played)
 		}
+		if body.PlayCount != nil {
+			a.Store.SetPlayCount(u.ID, it.ID, *body.PlayCount)
+		}
+		if body.LastPlayedDate != nil {
+			a.Store.SetLastPlayed(u.ID, it.ID, *body.LastPlayedDate)
+		}
 	}
 	writeJSON(w, 200, a.buildUserData(it, u.ID))
 }
@@ -1781,6 +1795,18 @@ func (a *API) applyProgress(userID string, rep playbackReport) {
 }
 
 func (a *API) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		DeviceProfile *deviceProfile `json:"DeviceProfile"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		writeError(w, 400, "Invalid request format")
+		return
+	}
+	a.saveDeviceProfile(deviceKey(r, u), body.DeviceProfile)
 	w.WriteHeader(204)
 }
 

@@ -551,8 +551,8 @@ func TestDirectStreamRequiresToken(t *testing.T) {
 	setToken(req, "definitely-not-a-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 401 {
-		t.Fatalf("invalid token stream = %d, want 401", rec.Code)
+	if rec.Code != 403 {
+		t.Fatalf("invalid token stream = %d, want 403", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()
@@ -1101,5 +1101,29 @@ func TestOnlyModernAuthMethodsAccepted(t *testing.T) {
 		if code := status(req); code != 401 {
 			t.Fatalf("%s status = %d, want 401", tc.name, code)
 		}
+	}
+}
+
+func TestPlaybackStreamCopyFlags(t *testing.T) {
+	it := &model.Item{ID: "movie", Type: model.TypeMovie, Container: "mkv", Media: &model.MediaInfo{
+		Container: "mkv", VideoCodec: "h264", AudioCodec: "aac",
+	}}
+	no := false
+
+	if _, ok := planRemux(it, &playbackRequest{AllowVideoStreamCopy: &no}); ok {
+		t.Fatal("video stream copy disabled but remux was planned")
+	}
+	plan, ok := planRemux(it, &playbackRequest{AllowAudioStreamCopy: &no})
+	if !ok || plan.AudioCopy {
+		t.Fatalf("audio stream copy disabled: %+v ok=%v", plan, ok)
+	}
+}
+
+func TestDeviceProfileIsStored(t *testing.T) {
+	a, _ := newTestAPI(t)
+	a.saveDeviceProfile("device", &deviceProfile{MaxStreamingBitrate: 123})
+	got := a.storedDeviceProfile("device")
+	if got == nil || got.MaxStreamingBitrate != 123 {
+		t.Fatalf("stored profile = %+v", got)
 	}
 }

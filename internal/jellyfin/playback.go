@@ -132,6 +132,9 @@ func (a *API) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	if req.UserId == "" {
 		req.UserId = u.ID
 	}
+	if req.DeviceProfile == nil {
+		req.DeviceProfile = a.storedDeviceProfile(deviceKey(r, u))
+	}
 	if req.PlaySessionId != "" && !hls.ValidSessionID(req.PlaySessionId) {
 		writeError(w, 400, "Invalid PlaySessionId")
 		return
@@ -211,6 +214,40 @@ func directAllowed(it *model.Item, req *playbackRequest) bool {
 	return false
 }
 
+// deviceKey scopes stored capabilities to the client device that sent them.
+// The DeviceId comes from the MediaBrowser authorization header; clients
+// without one fall back to the account.
+func deviceKey(r *http.Request, u *model.User) string {
+	if meta := SessionMetaFromRequest(r); meta.DeviceID != "" {
+		return meta.DeviceID
+	}
+	if u != nil {
+		return u.ID
+	}
+	return ""
+}
+
+func (a *API) saveDeviceProfile(key string, p *deviceProfile) {
+	if key == "" || p == nil {
+		return
+	}
+	a.capsMu.Lock()
+	if a.deviceProfiles == nil {
+		a.deviceProfiles = map[string]*deviceProfile{}
+	}
+	a.deviceProfiles[key] = p
+	a.capsMu.Unlock()
+}
+
+func (a *API) storedDeviceProfile(key string) *deviceProfile {
+	if key == "" {
+		return nil
+	}
+	a.capsMu.Lock()
+	defer a.capsMu.Unlock()
+	return a.deviceProfiles[key]
+}
+
 func (a *API) buildMediaSource(it *model.Item, token string, req *playbackRequest, psid string, u *model.User) mediaSourceDTO {
 	if req == nil {
 		req = &playbackRequest{}
@@ -253,13 +290,22 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 					break
 				}
 			}
+			if req.SubtitleStreamIndex != nil {
+				for _, s := range src.MediaStreams {
+					if s.Type == "Subtitle" && s.Index == *req.SubtitleStreamIndex {
+						src.DefaultSubtitleStreamIndex = s.Index
+						break
+					}
+				}
+			}
 		}
 	}
 	direct := directAllowed(it, req)
 	ffmpeg := a.FFmpeg()
 	allowTranscode := u == nil || u.AllowTranscode
 	allowRemux := u == nil || u.AllowRemux
-	canTranscode := ffmpeg != "" && settings.TranscodeEnabled && allowTranscode
+	canTranscode := ffmpeg != "" && settings.TranscodeEnabled && allowTranscode &&
+		(req.EnableTranscoding == nil || *req.EnableTranscoding)
 	canRemux := ffmpeg != "" && settings.RemuxEnabled && allowRemux
 	remux := false
 	var plan remuxPlan
@@ -272,12 +318,11 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 		}
 		if !remux && !canTranscode {
 			// Without ffmpeg or permission there is no alternative; let the
-			// client try direct play.
-			direct = true
+			// client try direct play unless it explicitly ruled that out.
+			if req.EnableDirectPlay == nil || *req.EnableDirectPlay {
+				direct = true
+			}
 		}
-	}
-	if req.EnableDirectPlay != nil && !*req.EnableDirectPlay && !canTranscode && !canRemux {
-		direct = true
 	}
 	src.SupportsDirectPlay = direct
 	src.SupportsDirectStream = direct
@@ -407,6 +452,9 @@ func planRemux(it *model.Item, req *playbackRequest) (remuxPlan, bool) {
 	if req != nil && req.EnableDirectStream != nil && !*req.EnableDirectStream {
 		return plan, false
 	}
+	if req != nil && req.AllowVideoStreamCopy != nil && !*req.AllowVideoStreamCopy {
+		return plan, false
+	}
 	video, ok := fmp4VideoCodec(it.Media.VideoCodec)
 	if !ok {
 		return plan, false
@@ -439,6 +487,9 @@ func planRemux(it *model.Item, req *playbackRequest) (remuxPlan, bool) {
 	plan.AudioCodec = audio
 	// AAC is universally decodable, so it is always worth copying.
 	plan.AudioCopy = fmp4Audio[audio] && (audio == "aac" || profileHasAudio(profile, audio))
+	if req != nil && req.AllowAudioStreamCopy != nil && !*req.AllowAudioStreamCopy {
+		plan.AudioCopy = false
+	}
 	if !plan.AudioCopy {
 		plan.AudioCodec = "aac"
 	}
