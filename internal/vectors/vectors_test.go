@@ -2,6 +2,7 @@ package vectors
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nuvio/internal/model"
@@ -51,12 +52,19 @@ func TestStorePutSearchAndPrune(t *testing.T) {
 	}
 }
 
-func TestDocumentSkipsOtherTypes(t *testing.T) {
-	if got := Document(&model.Item{Type: model.TypeEpisode, Name: "ep"}); got != "" {
-		t.Fatalf("episode document = %q", got)
+func TestDocumentIncludesEpisodes(t *testing.T) {
+	if got := Document(&model.Item{Type: model.TypeSeason, Name: "Season 1"}); got != "" {
+		t.Fatalf("season document = %q", got)
 	}
-	doc := Document(&model.Item{Type: model.TypeMovie, Name: "The Matrix", Year: 1999, Genres: []string{"Action"}})
-	if doc == "" || Hash(doc) == "" {
+	doc := Document(&model.Item{
+		Type: model.TypeEpisode, Name: "The Beginning", SeriesName: "Severance",
+		SeasonNumber: 1, EpisodeNumber: 2, Overview: "Mark returns to work.",
+	})
+	if doc == "" || Hash(doc) == "" || !strings.Contains(doc, "Severance") || !strings.Contains(doc, "S01E02") {
+		t.Fatalf("episode document = %q", doc)
+	}
+	movie := Document(&model.Item{Type: model.TypeMovie, Name: "The Matrix", Year: 1999, Genres: []string{"Action"}})
+	if movie == "" || Hash(movie) == "" {
 		t.Fatal("movie document is empty")
 	}
 }

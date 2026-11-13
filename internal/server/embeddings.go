@@ -190,7 +190,7 @@ func (s *Server) searchableItems() []*model.Item {
 	all := s.Catalog.All()
 	out := make([]*model.Item, 0, len(all))
 	for _, it := range all {
-		if it.Type == model.TypeMovie || it.Type == model.TypeSeries {
+		if it.Type == model.TypeMovie || it.Type == model.TypeSeries || it.Type == model.TypeEpisode {
 			out = append(out, it)
 		}
 	}

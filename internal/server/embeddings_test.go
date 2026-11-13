@@ -60,7 +60,7 @@ func TestEmbeddingIndexBuildsSeparateDatabase(t *testing.T) {
 	s.StartEmbeddingIndex(false)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if status := s.EmbeddingStatus(); !status.Running && status.Indexed == 2 {
+		if status := s.EmbeddingStatus(); !status.Running && status.Indexed == 3 {
 			if calls == 0 {
 				t.Fatal("embedding endpoint was not called")
 			}

@@ -21,11 +21,21 @@ func Document(it *model.Item) string {
 		kind = "电影"
 	case model.TypeSeries:
 		kind = "剧集"
+	case model.TypeEpisode:
+		kind = "单集"
 	default:
 		return ""
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "标题: %s\n", it.Name)
+	if it.Type == model.TypeEpisode {
+		if it.SeriesName != "" {
+			fmt.Fprintf(&b, "剧集: %s\n", it.SeriesName)
+		}
+		if it.SeasonNumber > 0 || it.EpisodeNumber > 0 {
+			fmt.Fprintf(&b, "集数: S%02dE%02d\n", it.SeasonNumber, it.EpisodeNumber)
+		}
+	}
 	if it.Year > 0 {
 		fmt.Fprintf(&b, "年份: %d\n", it.Year)
 	}
