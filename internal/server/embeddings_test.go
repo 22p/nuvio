@@ -54,6 +54,7 @@ func TestEmbeddingIndexBuildsSeparateDatabase(t *testing.T) {
 		settings.AISearchEnabled = true
 		settings.AIEmbeddingURL = embed.URL
 		settings.AIEmbeddingModel = "test"
+		settings.AIEmbeddingFormat = "int8"
 	})
 
 	s.StartEmbeddingIndex(false)
@@ -65,6 +66,9 @@ func TestEmbeddingIndexBuildsSeparateDatabase(t *testing.T) {
 			}
 			if vec.Path() == st.Path() {
 				t.Fatal("embeddings should use a separate database")
+			}
+			if vec.Format() != "int8" || status.Format != "int8" {
+				t.Fatalf("format = %q status = %q", vec.Format(), status.Format)
 			}
 			return
 		}

@@ -498,4 +498,7 @@ export const zhCN: Record<string, string> = {
   'Embedding requests are sent only to the service below.': '向量请求只会发送到下面配置的服务。',
   'Save search settings': '保存搜索设置',
   'Search settings saved': '搜索设置已保存',
+  'Vector format': '向量格式',
+  'float32 (best quality)': 'float32（质量最好）',
+  'int8 (4× smaller)': 'int8（体积约 1/4）',
 }

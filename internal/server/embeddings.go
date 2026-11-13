@@ -18,6 +18,7 @@ type embeddingStatus struct {
 	Total   int    `json:"total"`
 	Running bool   `json:"running"`
 	Model   string `json:"model,omitempty"`
+	Format  string `json:"format,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
@@ -38,6 +39,9 @@ func (s *Server) EmbeddingStatus() embeddingStatus {
 		out.Indexed = s.Vectors.Count()
 		if out.Model == "" {
 			out.Model = s.Vectors.Model()
+		}
+		if out.Format == "" {
+			out.Format = s.Vectors.Format()
 		}
 	}
 	return out
@@ -74,6 +78,10 @@ func (s *Server) runEmbeddingIndex(force bool) {
 	client := s.embeddingClient()
 	st := s.Store.Settings()
 	modelName := strings.TrimSpace(st.AIEmbeddingModel)
+	format := strings.ToLower(strings.TrimSpace(st.AIEmbeddingFormat))
+	if format != "int8" {
+		format = "float32"
+	}
 	lang := strings.TrimSpace(st.MetadataLanguage)
 	if lang == "" {
 		lang = "en-US"
@@ -83,6 +91,7 @@ func (s *Server) runEmbeddingIndex(force bool) {
 	s.embedMu.Lock()
 	s.embedStatus.Total = len(items)
 	s.embedStatus.Model = modelName
+	s.embedStatus.Format = format
 	s.embedStatus.Running = true
 	s.embedMu.Unlock()
 
@@ -105,7 +114,7 @@ func (s *Server) runEmbeddingIndex(force bool) {
 	if client == nil || s.Vectors == nil {
 		return
 	}
-	if s.Vectors.Count() > 0 && s.Vectors.Model() != modelName {
+	if s.Vectors.Count() > 0 && (s.Vectors.Model() != modelName || s.Vectors.Format() != format) {
 		if err := s.Vectors.Reset(); err != nil {
 			s.setEmbeddingError(err)
 			return
@@ -156,7 +165,7 @@ func (s *Server) runEmbeddingIndex(force bool) {
 			return
 		}
 		for i, vec := range vecs {
-			if err := s.Vectors.Put(batch[i].it.ID, modelName, lang, batch[i].hash, vec); err != nil {
+			if err := s.Vectors.Put(batch[i].it.ID, modelName, format, lang, batch[i].hash, vec); err != nil {
 				s.setEmbeddingError(err)
 				log.Printf("Embedding index failed: %v", err)
 				return

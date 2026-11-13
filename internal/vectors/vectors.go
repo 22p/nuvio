@@ -20,6 +20,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS embedding_meta (
 	item_id    TEXT PRIMARY KEY,
 	model      TEXT NOT NULL,
+	format     TEXT NOT NULL DEFAULT 'float32',
 	lang       TEXT NOT NULL,
 	dims       INTEGER NOT NULL,
 	text_hash  TEXT NOT NULL,
@@ -41,6 +42,7 @@ type Store struct {
 
 	mu     sync.RWMutex
 	model  string
+	format string
 	dims   int
 	dbPath string
 }
@@ -66,6 +68,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("drop legacy embeddings: %w", err)
 	}
+	if err := migrateFormatColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create embeddings schema: %w", err)
@@ -76,28 +82,29 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if s.dims > 0 {
-		if err := s.ensureVecTableLocked(s.dims); err != nil {
+		if err := s.ensureVecTableLocked(s.format, s.dims); err != nil {
 			db.Close()
 			return nil, err
 		}
 		var metaCount, vecCount int
 		_ = db.QueryRow(`SELECT count(*) FROM embedding_meta`).Scan(&metaCount)
-		_ = db.QueryRow("SELECT count(*) FROM " + vecTable(s.dims)).Scan(&vecCount)
+		_ = db.QueryRow("SELECT count(*) FROM " + vecTable(s.format, s.dims)).Scan(&vecCount)
 		if metaCount != vecCount {
 			// A missing or partial vector table must be rebuilt, not treated
 			// as an up-to-date index.
 			_, _ = db.Exec(`DELETE FROM embedding_meta`)
 			s.dims = 0
 			s.model = ""
+			s.format = ""
 		}
 	}
 	return s, nil
 }
 
 func (s *Store) loadMeta() error {
-	var model string
+	var model, format string
 	var dims int
-	err := s.db.QueryRow(`SELECT model, dims FROM embedding_meta LIMIT 1`).Scan(&model, &dims)
+	err := s.db.QueryRow(`SELECT model, format, dims FROM embedding_meta LIMIT 1`).Scan(&model, &format, &dims)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -105,6 +112,7 @@ func (s *Store) loadMeta() error {
 		return fmt.Errorf("load embeddings: %w", err)
 	}
 	s.model = model
+	s.format = normalizeFormat(format)
 	s.dims = dims
 	return nil
 }
@@ -145,6 +153,16 @@ func (s *Store) Model() string {
 	return s.model
 }
 
+// Format returns the stored vector element type: float32 or int8.
+func (s *Store) Format() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.format == "" {
+		return "float32"
+	}
+	return s.format
+}
+
 // Get returns metadata for one stored embedding.
 func (s *Store) Get(id string) (Entry, bool) {
 	s.mu.RLock()
@@ -159,10 +177,11 @@ func (s *Store) Get(id string) (Entry, bool) {
 }
 
 // Put stores a normalized vector, replacing any previous value.
-func (s *Store) Put(id, model, lang, hash string, vec []float32) error {
+func (s *Store) Put(id, model, format, lang, hash string, vec []float32) error {
 	if id == "" || len(vec) == 0 {
 		return fmt.Errorf("empty embedding")
 	}
+	format = normalizeFormat(format)
 	copyVec := append([]float32(nil), vec...)
 	normalize(copyVec)
 
@@ -171,35 +190,45 @@ func (s *Store) Put(id, model, lang, hash string, vec []float32) error {
 	if s.dims == 0 {
 		s.dims = len(copyVec)
 		s.model = model
+		s.format = format
 	}
 	if len(copyVec) != s.dims {
 		return fmt.Errorf("embedding dimension %d does not match %d", len(copyVec), s.dims)
 	}
-	if err := s.ensureVecTableLocked(s.dims); err != nil {
+	if s.format != "" && s.format != format {
+		return fmt.Errorf("embedding format %s does not match %s", format, s.format)
+	}
+	if err := s.ensureVecTableLocked(format, s.dims); err != nil {
 		return err
 	}
+	table := vecTable(format, s.dims)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin embedding update: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO embedding_meta(item_id, model, lang, dims, text_hash, updated_at)
-		VALUES(?, ?, ?, ?, ?, datetime('now'))
+	if _, err := tx.Exec(`INSERT INTO embedding_meta(item_id, model, format, lang, dims, text_hash, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(item_id) DO UPDATE SET
 			model = excluded.model,
+			format = excluded.format,
 			lang = excluded.lang,
 			dims = excluded.dims,
 			text_hash = excluded.text_hash,
 			updated_at = excluded.updated_at`,
-		id, model, lang, len(copyVec), hash); err != nil {
+		id, model, format, lang, len(copyVec), hash); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("save embedding metadata: %w", err)
 	}
 	// vec0 does not support INSERT OR REPLACE; delete first for idempotency.
-	if _, err := tx.Exec("DELETE FROM "+vecTable(s.dims)+" WHERE item_id = ?", id); err != nil {
+	if _, err := tx.Exec("DELETE FROM "+table+" WHERE item_id = ?", id); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("replace embedding: %w", err)
 	}
-	if _, err := tx.Exec("INSERT INTO "+vecTable(s.dims)+"(item_id, embedding) VALUES(?, ?)", id, encodeVector(copyVec)); err != nil {
+	insert := "INSERT INTO " + table + "(item_id, embedding) VALUES(?, ?)"
+	if format == "int8" {
+		insert = "INSERT INTO " + table + "(item_id, embedding) VALUES(?, vec_quantize_int8(?, 'unit'))"
+	}
+	if _, err := tx.Exec(insert, id, encodeVector(copyVec)); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("save embedding vector: %w", err)
 	}
@@ -207,6 +236,7 @@ func (s *Store) Put(id, model, lang, hash string, vec []float32) error {
 		return fmt.Errorf("commit embedding: %w", err)
 	}
 	s.model = model
+	s.format = format
 	return nil
 }
 
@@ -222,6 +252,7 @@ func (s *Store) Reset() error {
 	}
 	s.dims = 0
 	s.model = ""
+	s.format = ""
 	return nil
 }
 
@@ -250,7 +281,7 @@ func (s *Store) Prune(keep map[string]bool) error {
 			return fmt.Errorf("prune embedding: %w", err)
 		}
 		if s.dims > 0 {
-			if _, err := s.db.Exec("DELETE FROM "+vecTable(s.dims)+" WHERE item_id = ?", id); err != nil {
+			if _, err := s.db.Exec("DELETE FROM "+vecTable(s.format, s.dims)+" WHERE item_id = ?", id); err != nil {
 				return fmt.Errorf("prune embedding vector: %w", err)
 			}
 		}
@@ -259,6 +290,7 @@ func (s *Store) Prune(keep map[string]bool) error {
 	if err := s.db.QueryRow(`SELECT count(*) FROM embedding_meta`).Scan(&n); err == nil && n == 0 {
 		s.dims = 0
 		s.model = ""
+		s.format = ""
 	}
 	return nil
 }
@@ -279,13 +311,19 @@ func (s *Store) Search(query []float32, limit int, allow func(string) bool) []Re
 	if s.dims == 0 || len(query) != s.dims {
 		return nil
 	}
+	q := append([]float32(nil), query...)
+	normalize(q)
 	k := limit * 20
 	if k < 100 {
 		k = 100
 	}
+	match := "?"
+	if s.format == "int8" {
+		match = "vec_quantize_int8(?, 'unit')"
+	}
 	rows, err := s.db.Query(
-		fmt.Sprintf("SELECT item_id, distance FROM %s WHERE embedding MATCH ? AND k = %d", vecTable(s.dims), k),
-		encodeVector(query))
+		fmt.Sprintf("SELECT item_id, distance FROM %s WHERE embedding MATCH %s AND k = %d", vecTable(s.format, s.dims), match, k),
+		encodeVector(q))
 	if err != nil {
 		return nil
 	}
@@ -308,13 +346,18 @@ func (s *Store) Search(query []float32, limit int, allow func(string) bool) []Re
 	return out
 }
 
-func (s *Store) ensureVecTableLocked(dims int) error {
+func (s *Store) ensureVecTableLocked(format string, dims int) error {
 	if dims <= 0 {
 		return fmt.Errorf("invalid embedding dimension")
 	}
+	format = normalizeFormat(format)
+	typ := "FLOAT"
+	if format == "int8" {
+		typ = "INT8"
+	}
 	_, err := s.db.Exec(fmt.Sprintf(
-		"CREATE VIRTUAL TABLE IF NOT EXISTS %s USING vec0(item_id TEXT PRIMARY KEY, embedding FLOAT[%d] distance_metric=cosine)",
-		vecTable(dims), dims))
+		"CREATE VIRTUAL TABLE IF NOT EXISTS %s USING vec0(item_id TEXT PRIMARY KEY, embedding %s[%d] distance_metric=cosine)",
+		vecTable(format, dims), typ, dims))
 	if err != nil {
 		return fmt.Errorf("create vector table: %w", err)
 	}
@@ -322,7 +365,11 @@ func (s *Store) ensureVecTableLocked(dims int) error {
 }
 
 func (s *Store) dropVecTablesLocked() error {
-	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'vec_items_%'`)
+	return dropVecTables(s.db)
+}
+
+func dropVecTables(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'vec_items_%'`)
 	if err != nil {
 		return fmt.Errorf("list vector tables: %w", err)
 	}
@@ -339,15 +386,60 @@ func (s *Store) dropVecTablesLocked() error {
 	}
 	rows.Close()
 	for _, name := range names {
-		if _, err := s.db.Exec("DROP TABLE " + name); err != nil {
+		if _, err := db.Exec("DROP TABLE " + name); err != nil {
 			return fmt.Errorf("drop vector table: %w", err)
 		}
 	}
 	return nil
 }
 
-func vecTable(dims int) string {
-	return fmt.Sprintf("vec_items_%d", dims)
+// migrateFormatColumn rebuilds the index when the metadata table predates the
+// format column, because vectors and metadata must agree on the element type.
+func migrateFormatColumn(db *sql.DB) error {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_meta'`).Scan(&name)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect embeddings schema: %w", err)
+	}
+	rows, err := db.Query(`PRAGMA table_info(embedding_meta)`)
+	if err != nil {
+		return fmt.Errorf("inspect embedding columns: %w", err)
+	}
+	hasFormat := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var column, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &column, &typ, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if column == "format" {
+			hasFormat = true
+		}
+	}
+	rows.Close()
+	if hasFormat {
+		return nil
+	}
+	if _, err := db.Exec(`DROP TABLE embedding_meta`); err != nil {
+		return fmt.Errorf("drop old embeddings: %w", err)
+	}
+	return dropVecTables(db)
+}
+
+func vecTable(format string, dims int) string {
+	return fmt.Sprintf("vec_items_%s_%d", normalizeFormat(format), dims)
+}
+
+func normalizeFormat(format string) string {
+	if strings.EqualFold(strings.TrimSpace(format), "int8") {
+		return "int8"
+	}
+	return "float32"
 }
 
 // Normalize scales v to unit length in place.

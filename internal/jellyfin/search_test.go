@@ -45,7 +45,7 @@ func TestAISearchUsesVectors(t *testing.T) {
 	if movie == nil {
 		t.Fatal("demo has no movie")
 	}
-	if err := vec.Put(movie.ID, "test", "zh-CN", "h", []float32{1, 0, 0}); err != nil {
+	if err := vec.Put(movie.ID, "test", "float32", "zh-CN", "h", []float32{1, 0, 0}); err != nil {
 		t.Fatal(err)
 	}
 

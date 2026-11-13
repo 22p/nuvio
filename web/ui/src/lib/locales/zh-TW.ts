@@ -498,4 +498,7 @@ export const zhTW: Record<string, string> = {
   'Embedding requests are sent only to the service below.': '向量請求只會傳送到下方設定的服務。',
   'Save search settings': '儲存搜尋設定',
   'Search settings saved': '搜尋設定已儲存',
+  'Vector format': '向量格式',
+  'float32 (best quality)': 'float32（品質最佳）',
+  'int8 (4× smaller)': 'int8（體積約 1/4）',
 }

@@ -530,6 +530,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
   const [aiEmbeddingUrl, setAIEmbeddingUrl] = useState('')
   const [aiEmbeddingKey, setAIEmbeddingKey] = useState('')
   const [aiEmbeddingModel, setAIEmbeddingModel] = useState('')
+  const [aiEmbeddingFormat, setAIEmbeddingFormat] = useState('float32')
   const [modelOptions, setModelOptions] = useState<string[]>([])
   const [aiBusy, setAIBusy] = useState(false)
   const [aiNotice, setAINotice] = useState('')
@@ -565,6 +566,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
       setAIEmbeddingUrl(data.settings.aiEmbeddingUrl || '')
       setAIEmbeddingKey(data.settings.aiEmbeddingKey || '')
       setAIEmbeddingModel(data.settings.aiEmbeddingModel || '')
+      setAIEmbeddingFormat(data.settings.aiEmbeddingFormat || 'float32')
       setScanning(data.scan.scanning)
       getUnmatchedMetadata()
         .then((res) => setUnmatched(res.items))
@@ -623,7 +625,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
           ? { tmdbApiKey, metadataLanguage }
           : section === 'ai'
             ? { aiEnabled, aiBaseUrl, aiApiKey, aiModel, aiTargetLanguage }
-            : { aiSearchEnabled, aiEmbeddingUrl, aiEmbeddingKey, aiEmbeddingModel }
+            : { aiSearchEnabled, aiEmbeddingUrl, aiEmbeddingKey, aiEmbeddingModel, aiEmbeddingFormat }
     const message =
       section === 'server'
         ? t("Server settings saved")
@@ -1206,6 +1208,13 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
                 placeholder="qwen3-embedding"
               />
             </label>
+            <label className="field">
+              <span>{t("Vector format")}</span>
+              <select value={aiEmbeddingFormat} onChange={(e) => setAIEmbeddingFormat(e.target.value)}>
+                <option value="float32">{t("float32 (best quality)")}</option>
+                <option value="int8">{t("int8 (4× smaller)")}</option>
+              </select>
+            </label>
             <div className="field field-align">
               <button className="btn btn-primary btn-sm" onClick={() => save('search')} disabled={saving !== ''}>
                 {saving === 'search' ? t("Saving…") : t("Save search settings")}
@@ -1229,6 +1238,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
                         1: overview.embedding.total,
                       })}
                   {overview.embedding.model ? ` · ${overview.embedding.model}` : ''}
+                  {overview.embedding.format ? ` · ${overview.embedding.format}` : ''}
                   {overview.embedding.error ? ` · ${overview.embedding.error}` : ''}
                 </div>
               </div>

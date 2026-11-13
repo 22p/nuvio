@@ -218,6 +218,7 @@ export interface AdminOverview {
     aiEmbeddingUrl?: string
     aiEmbeddingKey?: string
     aiEmbeddingModel?: string
+    aiEmbeddingFormat?: string
   }
   embedding?: EmbeddingStatus
 }
@@ -227,5 +228,6 @@ export interface EmbeddingStatus {
   total: number
   running: boolean
   model?: string
+  format?: string
   error?: string
 }

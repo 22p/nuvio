@@ -1340,26 +1340,27 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ServerName       *string `json:"serverName"`
-		TranscodeEnabled *bool   `json:"transcodeEnabled"`
-		RemuxEnabled     *bool   `json:"remuxEnabled"`
-		MaxBitrateMbps   *int    `json:"maxBitrateMbps"`
-		TranscodePreset  *string `json:"transcodePreset"`
-		TranscodeCodec   *string `json:"transcodeCodec"`
-		HardwareAccel    *string `json:"hardwareAccel"`
-		FFmpegPath       *string `json:"ffmpegPath"`
-		FFprobePath      *string `json:"ffprobePath"`
-		TMDBAPIKey       *string `json:"tmdbApiKey"`
-		MetadataLanguage *string `json:"metadataLanguage"`
-		AIEnabled        *bool   `json:"aiEnabled"`
-		AIBaseURL        *string `json:"aiBaseUrl"`
-		AIAPIKey         *string `json:"aiApiKey"`
-		AIModel          *string `json:"aiModel"`
-		AITargetLanguage *string `json:"aiTargetLanguage"`
-		AISearchEnabled  *bool   `json:"aiSearchEnabled"`
-		AIEmbeddingURL   *string `json:"aiEmbeddingUrl"`
-		AIEmbeddingKey   *string `json:"aiEmbeddingKey"`
-		AIEmbeddingModel *string `json:"aiEmbeddingModel"`
+		ServerName        *string `json:"serverName"`
+		TranscodeEnabled  *bool   `json:"transcodeEnabled"`
+		RemuxEnabled      *bool   `json:"remuxEnabled"`
+		MaxBitrateMbps    *int    `json:"maxBitrateMbps"`
+		TranscodePreset   *string `json:"transcodePreset"`
+		TranscodeCodec    *string `json:"transcodeCodec"`
+		HardwareAccel     *string `json:"hardwareAccel"`
+		FFmpegPath        *string `json:"ffmpegPath"`
+		FFprobePath       *string `json:"ffprobePath"`
+		TMDBAPIKey        *string `json:"tmdbApiKey"`
+		MetadataLanguage  *string `json:"metadataLanguage"`
+		AIEnabled         *bool   `json:"aiEnabled"`
+		AIBaseURL         *string `json:"aiBaseUrl"`
+		AIAPIKey          *string `json:"aiApiKey"`
+		AIModel           *string `json:"aiModel"`
+		AITargetLanguage  *string `json:"aiTargetLanguage"`
+		AISearchEnabled   *bool   `json:"aiSearchEnabled"`
+		AIEmbeddingURL    *string `json:"aiEmbeddingUrl"`
+		AIEmbeddingKey    *string `json:"aiEmbeddingKey"`
+		AIEmbeddingModel  *string `json:"aiEmbeddingModel"`
+		AIEmbeddingFormat *string `json:"aiEmbeddingFormat"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]any{"error": "Invalid request format"})
@@ -1386,6 +1387,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		case "auto", "vaapi", "qsv", "vulkan", "none":
 		default:
 			writeJSON(w, 400, map[string]any{"error": "Invalid hardware acceleration mode"})
+			return
+		}
+	}
+	if body.AIEmbeddingFormat != nil {
+		switch strings.ToLower(strings.TrimSpace(*body.AIEmbeddingFormat)) {
+		case "", "float32", "int8":
+		default:
+			writeJSON(w, 400, map[string]any{"error": "Invalid embedding format"})
 			return
 		}
 	}
@@ -1484,6 +1493,13 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if body.AIEmbeddingModel != nil {
 			st.AIEmbeddingModel = strings.TrimSpace(*body.AIEmbeddingModel)
 		}
+		if body.AIEmbeddingFormat != nil {
+			format := strings.ToLower(strings.TrimSpace(*body.AIEmbeddingFormat))
+			if format == "" {
+				format = "float32"
+			}
+			st.AIEmbeddingFormat = format
+		}
 	})
 	ffmpeg := resolveTool("", settings.FFmpegPath, "NUVIO_FFMPEG", "ffmpeg")
 	ffprobe := resolveTool("", settings.FFprobePath, "NUVIO_FFPROBE", "ffprobe")
@@ -1495,7 +1511,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	embeddingChanged := oldSettings.AIEmbeddingURL != settings.AIEmbeddingURL ||
 		oldSettings.AIEmbeddingKey != settings.AIEmbeddingKey ||
-		oldSettings.AIEmbeddingModel != settings.AIEmbeddingModel
+		oldSettings.AIEmbeddingModel != settings.AIEmbeddingModel ||
+		oldSettings.AIEmbeddingFormat != settings.AIEmbeddingFormat
 	if embeddingChanged {
 		go s.StartEmbeddingIndex(true)
 	} else if !oldSettings.AISearchEnabled && settings.AISearchEnabled {
