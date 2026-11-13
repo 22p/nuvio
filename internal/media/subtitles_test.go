@@ -218,7 +218,6 @@ Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\p1}m 0 0 l 100 0 100 100 0 1
 `
 	got := string(ASSBytesToVTT([]byte(script)))
 	for _, want := range []string{
-		"line:96.3%,end position:50.0% align:center",  // bottom, MarginV 40 of 1080
 		"line:9.3%,start position:50.0% align:center", // \pos(960,100) on the top-aligned Sign style
 		"line:3.7%,start position:50.0% align:center", // \an8 (top centre)
 		"Hello\nworld",
@@ -228,6 +227,9 @@ Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\p1}m 0 0 l 100 0 100 100 0 1
 		if !strings.Contains(got, want) {
 			t.Fatalf("converted VTT missing %q:\n%s", want, got)
 		}
+	}
+	if !strings.Contains(got, "00:00:01.000 --> 00:00:03.000\nHello\nworld") {
+		t.Fatalf("ordinary dialogue should keep the default bottom-centre position:\n%s", got)
 	}
 	if strings.Contains(got, "\\pos") || strings.Contains(got, "\\an8") {
 		t.Fatalf("override tags leaked into VTT:\n%s", got)

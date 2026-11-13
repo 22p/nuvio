@@ -454,8 +454,10 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 		st = assStyle{alignment: 2, marginL: 10, marginR: 10, marginV: 10}
 	}
 	align := st.alignment
+	explicitAlign := false
 	if m := assAlignRe.FindStringSubmatch(body); m != nil {
 		align = int(m[1][0] - '0')
+		explicitAlign = true
 	}
 	ml, mr, mv := st.marginL, st.marginR, st.marginV
 	if v := parseFloatDefault(field("MarginL"), 0); v > 0 {
@@ -525,6 +527,13 @@ func assCueVTT(raw string, format []string, styles map[string]assStyle, playW, p
 		lineAlign = "end"
 	case 2:
 		lineAlign = "start"
+	}
+	// Ordinary dialogue sits bottom-centre, which is exactly the WebVTT
+	// default. Leaving the settings out lets the player use its own subtitle
+	// layout and stack multiple cues instead of pinning every line to an
+	// approximate absolute position.
+	if !positioned && !explicitAlign && align == 2 {
+		return fmt.Sprintf("%s --> %s\n%s\n\n", vttTime(start), vttTime(end), body), start, true
 	}
 	return fmt.Sprintf("%s --> %s line:%.1f%%,%s position:%.1f%% align:%s\n%s\n\n",
 		vttTime(start), vttTime(end), clampPercent(y/playH*100), lineAlign, clampPercent(x/playW*100), alignName, body), start, true
