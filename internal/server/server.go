@@ -512,7 +512,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if u, ok := s.API.UserFromRequest(r); ok && u != nil {
-		if tok := tokenOf(r); tok != "" {
+		if tok := jellyfin.TokenFromRequest(r); tok != "" {
 			s.Store.RevokeToken(tok)
 		}
 	}
@@ -566,7 +566,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]any{"error": "Not signed in"})
 		return
 	}
-	token := tokenOf(r)
+	token := jellyfin.TokenFromRequest(r)
 	if meta := jellyfin.SessionMetaFromRequest(r); meta.DeviceName != "" || meta.Client != "" || meta.Version != "" {
 		s.Store.RefreshSession(token, meta)
 	}
@@ -1516,14 +1516,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func tokenOf(r *http.Request) string {
-	if v := r.Header.Get("X-Emby-Token"); v != "" {
-		return v
-	}
-	if v := r.URL.Query().Get("api_key"); v != "" {
-		return v
-	}
-	return ""
 }

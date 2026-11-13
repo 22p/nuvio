@@ -311,33 +311,22 @@ func normalizeIDs(ids []string) []string {
 	return out
 }
 
-func (a *API) tokenFromRequest(r *http.Request) string {
-	for _, name := range []string{"X-Emby-Token", "X-MediaBrowser-Token"} {
-		if v := r.Header.Get(name); v != "" {
-			return v
-		}
-	}
-	q := queryValues(r)
-	for _, name := range []string{"api_key", "apikey", "x-emby-token", "accesstoken"} {
-		if v := q.Get(name); v != "" {
-			return v
-		}
-	}
-	// Native clients authenticate with an Authorization-style header that
-	// carries "Token=..." (MediaBrowser scheme), not only a bearer token.
-	for _, name := range []string{"X-Emby-Authorization", "Authorization"} {
-		h := r.Header.Get(name)
-		if h == "" {
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(h), "bearer ") {
-			return strings.TrimSpace(h[7:])
-		}
+// TokenFromRequest extracts the access token the way Jellyfin 12 does: a
+// MediaBrowser Authorization header or the ApiKey query parameter. The
+// deprecated X-Emby-Token, X-MediaBrowser-Token, X-Emby-Authorization and
+// api_key forms are not accepted.
+func TokenFromRequest(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if len(h) > 12 && strings.EqualFold(h[:12], "MediaBrowser") && h[12] == ' ' {
 		if v := mediaBrowserParam(h, "Token"); v != "" {
 			return v
 		}
 	}
-	return ""
+	return queryValues(r).Get("ApiKey")
+}
+
+func (a *API) tokenFromRequest(r *http.Request) string {
+	return TokenFromRequest(r)
 }
 
 func (a *API) userFromRequest(r *http.Request) (*model.User, bool) {

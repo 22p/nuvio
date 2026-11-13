@@ -14,7 +14,7 @@ http://<服务器地址>:8096
 
 如果前面有反向代理：
 
-- 保留 `Authorization`、`X-Emby-Token`、`X-Emby-Authorization` 请求头
+- 保留 `Authorization` 请求头
 - 保留 `Range` 并正确返回 `206`，否则拖动进度会失效
 - 不要把 HLS 分片缓冲到内存；边下载边发即可
 
@@ -31,9 +31,10 @@ http://<服务器地址>:8096
 
 ```
 Authorization: MediaBrowser Token="<token>"
-X-Emby-Token: <token>
-?api_key=<token>
+?ApiKey=<token>
 ```
+
+`X-Emby-Token`、`X-MediaBrowser-Token`、`X-Emby-Authorization` 和 `?api_key=` 属于旧版认证，Jellyfin 12 默认不再接受，Nuvio 同样不再支持。
 
 令牌是持久化的，重启服务不会失效；在「设置 → 登录设备」撤销后需要重新登录。
 
@@ -73,7 +74,7 @@ X-Emby-Token: <token>
 
 服务端按客户端提交的 `DeviceProfile` 决定直连、转封装或转码，见 [播放与转码](playback.md)。
 
-`/Videos/{id}/stream` 现在要求 token：`DirectStreamUrl` 已经带上 `api_key`，客户端也可以使用 `X-Emby-Token`。把裸 URL 交给系统播放器、又不保留 query token 的客户端会收到 401；这是为了提高权限模型而接受的兼容性代价。
+`/Videos/{id}/stream` 现在要求 token：`DirectStreamUrl` 已经带上 `ApiKey`，客户端也可以使用 `Authorization`。把裸 URL 交给系统播放器、又不保留 query token 的客户端会收到 401；这是为了提高权限模型而接受的兼容性代价。
 
 `/Videos/{id}/master.m3u8` 和字幕仍然需要鉴权。
 

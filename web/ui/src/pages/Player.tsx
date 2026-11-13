@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Hls from 'hls.js'
 import {
+  authorizationHeader,
   getConfig,
   getEpisodes,
   getItem,
@@ -842,7 +843,7 @@ export function PlayerPage() {
       keepalive: true,
       headers: {
         'Content-Type': 'application/json',
-        'X-Emby-Token': getToken(),
+        Authorization: authorizationHeader(getToken()),
       },
       body: JSON.stringify({
         ItemId: s.item.Id,

@@ -64,17 +64,17 @@ export function deviceLabel(): string {
   return [os, browser].filter(Boolean).join(' · ') || 'Browser'
 }
 
-function authHeader(): string {
-  return `MediaBrowser Client="Nuvio Web", Device="${deviceLabel()}", DeviceId="${deviceId()}", Version="1.0.0"`
+export function authorizationHeader(token = ''): string {
+  const identity = `MediaBrowser Client="Nuvio Web", Device="${deviceLabel()}", DeviceId="${deviceId()}", Version="1.0.0"`
+  return token ? `${identity}, Token="${token}"` : identity
 }
 
 export async function api<T>(path: string, init: RequestInit = {}, token = getToken()): Promise<T> {
   const headers = new Headers(init.headers)
   if (token) {
-    headers.set('X-Emby-Token', token)
     // Jellyfin clients identify themselves on every call; the server uses it
     // to keep the device list up to date.
-    if (!headers.has('Authorization')) headers.set('Authorization', authHeader())
+    if (!headers.has('Authorization')) headers.set('Authorization', authorizationHeader(token))
   }
   if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   const res = await fetch(path, { ...init, headers })
@@ -100,7 +100,7 @@ export async function login(username: string, password: string): Promise<AuthRes
     '/Users/AuthenticateByName',
     {
       method: 'POST',
-      headers: { 'X-Emby-Authorization': authHeader() },
+      headers: { Authorization: authorizationHeader() },
       body: JSON.stringify({ Username: username, Pw: password }),
     },
     '',

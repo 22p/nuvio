@@ -116,10 +116,10 @@ data/
 
 Nuvio 只提供 HTTP。公网访问建议放在 Caddy / Nginx 后启用 HTTPS：
 
-- 需要转发 `Authorization`、`X-Emby-Token`、`X-Emby-Authorization` 头
+- 需要转发 `Authorization` 头
 - HLS 分片是普通 GET 请求，不要缓存或缓冲
 - `/Videos/{id}/stream` 支持 Range，代理必须保留 `Range` 请求头并返回 `206`
-- `/Videos/...` 需要 token；代理不要剥离 `api_key`，也不要用自己的鉴权替换 `Authorization` / `X-Emby-Token`（见 [第三方客户端](jellyfin-clients.md)）
+- `/Videos/...` 需要 token；代理不要剥离 `ApiKey` 查询参数，也不要用自己的鉴权替换 `Authorization`（见 [第三方客户端](jellyfin-clients.md)）
 
 ## 日志
 

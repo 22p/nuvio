@@ -27,7 +27,7 @@
 /Videos/{id}/stream?static=true&mediaSourceId=...
 ```
 
-这个地址支持 HTTP Range，但必须携带有效的 `api_key` 或 `X-Emby-Token`；`DirectStreamUrl` 已经带好 token。第三方客户端如果把裸 URL 交给不支持附加请求头的播放器，直连会返回 401。
+这个地址支持 HTTP Range，但必须携带有效的 `ApiKey` 查询参数或 `Authorization` 头；`DirectStreamUrl` 已经带好 token。第三方客户端如果把裸 URL 交给不支持附加请求头的播放器，直连会返回 401。
 
 ## 转封装
 

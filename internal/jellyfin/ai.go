@@ -133,7 +133,7 @@ func (a *API) translatedStreams(it *model.Item, token string) []mediaStreamDTO {
 		title := media.LanguageName(f.Lang) + " (AI)"
 		url := fmt.Sprintf("/Videos/%s/TranslatedSubtitles/%s/Stream.vtt", it.ID, f.Lang)
 		if token != "" {
-			url += "?api_key=" + token
+			url += "?ApiKey=" + token
 		}
 		out = append(out, mediaStreamDTO{
 			Type: "Subtitle", Index: f.Index, Codec: "webvtt", Language: f.Lang,
@@ -255,7 +255,7 @@ func (a *API) handleTranslateSubtitle(w http.ResponseWriter, r *http.Request) {
 	title := media.LanguageName(lang) + " (AI)"
 	url := fmt.Sprintf("/Videos/%s/TranslatedSubtitles/%s/Stream.vtt", it.ID, lang)
 	if token := a.tokenFromRequest(r); token != "" {
-		url += "?api_key=" + urlQueryEscape(token)
+		url += "?ApiKey=" + urlQueryEscape(token)
 	}
 	writeJSON(w, 200, map[string]any{
 		"index": indexOut, "language": lang, "title": title, "deliveryUrl": url,

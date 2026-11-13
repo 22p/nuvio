@@ -859,7 +859,7 @@ func (s *Session) WaitForPlaylist(timeout time.Duration) (string, bool) {
 func (s *Session) Master(token string) string {
 	query := ""
 	if token != "" {
-		query = "?api_key=" + token
+		query = "?ApiKey=" + token
 	}
 	width := s.Width
 	if width <= 0 {

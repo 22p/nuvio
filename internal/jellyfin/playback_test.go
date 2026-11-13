@@ -136,7 +136,7 @@ func TestPlaybackInfoRejectsTraversalSessionID(t *testing.T) {
 		t.Fatal("demo movie missing")
 	}
 
-	req := httptest.NewRequest("POST", "/Items/"+movieID+"/PlaybackInfo?api_key="+tok,
+	req := httptest.NewRequest("POST", "/Items/"+movieID+"/PlaybackInfo?ApiKey="+tok,
 		strings.NewReader(`{"PlaySessionId":"../../escape"}`))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

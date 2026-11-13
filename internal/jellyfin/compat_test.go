@@ -47,6 +47,10 @@ func testUser(t *testing.T, a *API) (*model.User, string) {
 	return u, tok
 }
 
+func setToken(r *http.Request, token string) {
+	r.Header.Set("Authorization", `MediaBrowser Token="`+token+`"`)
+}
+
 // Libraries are addressed as items by Jellyfin clients when a user opens a
 // media folder. They must not answer 404.
 func TestLibraryItemDetails(t *testing.T) {
@@ -54,7 +58,7 @@ func TestLibraryItemDetails(t *testing.T) {
 	u, tok := testUser(t, a)
 
 	req := httptest.NewRequest("GET", "/Items/"+demo.MovieLibraryID+"?userId="+u.ID, nil)
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -77,7 +81,7 @@ func TestRootItemDetails(t *testing.T) {
 	_, tok := testUser(t, a)
 
 	req := httptest.NewRequest("GET", "/Items/"+rootItemID, nil)
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -120,7 +124,7 @@ func TestImagesRespectTokenPermissions(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/Items/"+demo.ShowLibraryID+"/Images/Primary", nil)
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 404 {
@@ -138,7 +142,7 @@ func doJSON(t *testing.T, h http.Handler, method, path, token, body string) (*ht
 		r = httptest.NewRequest(method, path, nil)
 	}
 	if token != "" {
-		r.Header.Set("X-Emby-Token", token)
+		setToken(r, token)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -235,7 +239,7 @@ func TestLatestGrouping(t *testing.T) {
 	u, tok := testUser(t, a)
 
 	req := httptest.NewRequest("GET", "/Items/Latest?userId="+u.ID+"&parentId="+demo.ShowLibraryID, nil)
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	var list []itemDTO
@@ -252,7 +256,7 @@ func TestLatestGrouping(t *testing.T) {
 	}
 
 	req = httptest.NewRequest("GET", "/Items/Latest?userId="+u.ID+"&parentId="+demo.ShowLibraryID+"&groupItems=false&limit=5", nil)
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
@@ -278,7 +282,7 @@ func TestSearchHintsShapeAndValidation(t *testing.T) {
 		t.Fatalf("missing searchTerm = %d, want 400", rec.Code)
 	}
 	req := httptest.NewRequest("GET", "/Search/Hints?searchTerm=%E4%BF%A1%E5%8F%B7&limit=1&userId="+u.ID, nil)
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	var body struct {
@@ -418,7 +422,7 @@ func TestQueryParameterCasing(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/Users/"+u.ID+"/Items/Latest?ParentId="+demo.MovieLibraryID+"&Limit=50", nil)
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	var latest []itemDTO
@@ -544,7 +548,7 @@ func TestDirectStreamRequiresToken(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true", nil)
-	req.Header.Set("X-Emby-Token", "definitely-not-a-token")
+	setToken(req, "definitely-not-a-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 401 {
@@ -552,7 +556,7 @@ func TestDirectStreamRequiresToken(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true&api_key="+tok, nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true&ApiKey="+tok, nil))
 	if rec.Code != 200 {
 		t.Fatalf("authorized stream = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -576,7 +580,7 @@ func TestSubtitleDeliveryMatchesCodec(t *testing.T) {
 	movie := demo.Items()[0]
 
 	req := httptest.NewRequest("POST", "/Items/"+movie.ID+"/PlaybackInfo?userId="+u.ID, strings.NewReader(`{}`))
-	req.Header.Set("X-Emby-Token", tok)
+	setToken(req, tok)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -636,7 +640,7 @@ func TestSubtitleDeliveryMatchesCodec(t *testing.T) {
 	if !strings.Contains(sub.DeliveryUrl, want) {
 		t.Fatalf("delivery url = %q, want suffix %q", sub.DeliveryUrl, want)
 	}
-	if !strings.Contains(sub.DeliveryUrl, "api_key=") {
+	if !strings.Contains(sub.DeliveryUrl, "ApiKey=") {
 		t.Fatalf("delivery url has no api key: %q", sub.DeliveryUrl)
 	}
 
@@ -949,7 +953,7 @@ func TestRemoteLogoAndEpisodeStill(t *testing.T) {
 
 	get := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", path, nil)
-		req.Header.Set("X-Emby-Token", tok)
+		setToken(req, tok)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec
@@ -1054,5 +1058,48 @@ func TestSubtitleStreamFlags(t *testing.T) {
 	}
 	if !strings.Contains(sidecar.DeliveryUrl, "Stream.srt") {
 		t.Fatalf("external SRT delivery = %+v", sidecar)
+	}
+}
+
+func TestOnlyModernAuthMethodsAccepted(t *testing.T) {
+	a, h := newTestAPI(t)
+	_, tok := testUser(t, a)
+
+	status := func(r *http.Request) int {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+
+	okReq := httptest.NewRequest("GET", "/Users/Me?ApiKey="+tok, nil)
+	if code := status(okReq); code != 200 {
+		t.Fatalf("ApiKey status = %d", code)
+	}
+
+	// Client metadata in the header without a Token must not hide the query.
+	identity := httptest.NewRequest("GET", "/Users/Me?ApiKey="+tok, nil)
+	identity.Header.Set("Authorization", `MediaBrowser Client="test", Device="test", DeviceId="test"`)
+	if code := status(identity); code != 200 {
+		t.Fatalf("ApiKey with identity header status = %d", code)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		header string
+		value  string
+		path   string
+	}{
+		{"X-Emby-Token", "X-Emby-Token", tok, "/Users/Me"},
+		{"X-MediaBrowser-Token", "X-MediaBrowser-Token", tok, "/Users/Me"},
+		{"X-Emby-Authorization", "X-Emby-Authorization", `MediaBrowser Token="` + tok + `"`, "/Users/Me"},
+		{"api_key", "", "", "/Users/Me?api_key=" + tok},
+	} {
+		req := httptest.NewRequest("GET", tc.path, nil)
+		if tc.header != "" {
+			req.Header.Set(tc.header, tc.value)
+		}
+		if code := status(req); code != 401 {
+			t.Fatalf("%s status = %d, want 401", tc.name, code)
+		}
 	}
 }

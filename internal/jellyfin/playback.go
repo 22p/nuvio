@@ -288,7 +288,7 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 	if direct {
 		src.DirectStreamUrl = fmt.Sprintf("/Videos/%s/stream?static=true&mediaSourceId=%s", it.ID, msid)
 		if token != "" {
-			src.DirectStreamUrl += "&api_key=" + url.QueryEscape(token)
+			src.DirectStreamUrl += "&ApiKey=" + url.QueryEscape(token)
 		}
 	}
 	if canTranscode || remux {
@@ -342,7 +342,7 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 			}
 		}
 		if token != "" {
-			q.Set("api_key", token)
+			q.Set("ApiKey", token)
 		}
 		src.TranscodingUrl = "/Videos/" + it.ID + "/master.m3u8?" + q.Encode()
 		src.TranscodingSubProtocol = "hls"
@@ -791,7 +791,7 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.WriteString(w, sess.Master(q.Get("api_key")))
+	_, _ = io.WriteString(w, sess.Master(TokenFromRequest(r)))
 }
 
 func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {

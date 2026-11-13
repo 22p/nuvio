@@ -611,7 +611,7 @@ func (a *API) mediaSourceID(it *model.Item) string {
 func (a *API) subtitleURL(it *model.Item, index int, format, token string) string {
 	u := fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/Stream.%s", it.ID, a.mediaSourceID(it), index, format)
 	if token != "" {
-		u += "?api_key=" + url.QueryEscape(token)
+		u += "?ApiKey=" + url.QueryEscape(token)
 	}
 	return u
 }
