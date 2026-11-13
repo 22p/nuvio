@@ -82,8 +82,6 @@ func (a *API) registerMedia(mux *http.ServeMux) {
 		mux.HandleFunc("GET "+prefix+"/{itemId}/hls/{sessionId}/{file}", a.handleHLSFile)
 		mux.HandleFunc("GET "+prefix+"/{itemId}/{mediaSourceId}/Subtitles/{index}/{file}", a.handleSubtitle)
 		mux.HandleFunc("GET "+prefix+"/{itemId}/{mediaSourceId}/Subtitles/{index}/{start}/{file}", a.handleSubtitle)
-		// Legacy 10.x apps request subtitles without a media source id.
-		mux.HandleFunc("GET "+prefix+"/{itemId}/Subtitles/{index}/{file}", a.handleSubtitle)
 	}
 	a.registerAI(mux)
 	mux.HandleFunc("GET /Items/{itemId}/SpecialFeatures", a.handleSpecialFeatures)

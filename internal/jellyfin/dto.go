@@ -138,13 +138,15 @@ func buildUserDTO(u *model.User, serverID, serverName string) userDTO {
 		SyncPlayAccess:                   "None",
 		LoginAttemptsBeforeLockout:       -1,
 	}
+	// Jellyfin 12 keeps the obsolete password fields but no longer exposes
+	// password state; these values match the official defaults.
 	return userDTO{
 		Name:                      u.Name,
 		ServerId:                  serverID,
 		ServerName:                serverName,
 		Id:                        u.ID,
-		HasPassword:               u.HasPassword,
-		HasConfiguredPassword:     u.HasPassword,
+		HasPassword:               true,
+		HasConfiguredPassword:     true,
 		HasConfiguredEasyPassword: false,
 		Configuration: userConfiguration{
 			PlayDefaultAudioTrack:      true,
