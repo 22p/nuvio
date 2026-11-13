@@ -408,6 +408,8 @@ export function PlayerPage() {
   const activeSubtitle: number | null =
     subChoice === 'auto' ? autoSubtitle : subChoice === 'off' ? null : subChoice
   const activeSubtitleStream = subtitleStreams.find((s) => s.Index === activeSubtitle)
+  // AI translations are generated at index 9000+ and need no retranslation.
+  const activeSubtitleIsAI = (activeSubtitleStream?.Index ?? -1) >= 9000
   const videoDetails = [
     videoStream?.Codec ? videoStream.Codec.toUpperCase() : '',
     videoStream?.Profile || '',
@@ -1520,7 +1522,7 @@ export function PlayerPage() {
             </button>
           ))}
           {!subtitleStreams.length && <div className="menu-empty">{t("This video has no subtitle track")}</div>}
-          {aiReady && isAdmin && activeSubtitleStream && (
+          {aiReady && isAdmin && activeSubtitleStream && !activeSubtitleIsAI && (
             <div className="sub-delay">
               <button
                 className="btn btn-ghost btn-sm"
