@@ -539,6 +539,7 @@ img {
   gap: 8px;
 }
 .hero-dots button {
+  position: relative;
   width: 22px;
   height: 3px;
   border: 0;
@@ -546,6 +547,15 @@ img {
   background: rgba(255, 255, 255, 0.22);
   padding: 0;
   transition: width 0.3s ease, background 0.3s ease;
+}
+/* Keep the 3px bar but give it a comfortable hit area. */
+.hero-dots button::before {
+  content: '';
+  position: absolute;
+  inset: -10px -3px;
+}
+.hero-dots button:hover {
+  background: rgba(255, 255, 255, 0.45);
 }
 .hero-dots button.active {
   width: 40px;
@@ -559,6 +569,29 @@ img {
   z-index: 2;
   margin-top: -46px;
   padding-bottom: 40px;
+  /* The container overlaps the bottom of the hero so rows tuck under it.
+     Let clicks in that strip reach the hero dots instead of the empty
+     container area. */
+  pointer-events: none;
+}
+.home-rows > * {
+  pointer-events: auto;
+}
+/* The row box also covers the strip above its content; only the cards
+   and links inside it should take clicks. */
+.home-rows .media-row {
+  pointer-events: none;
+}
+.home-rows .row-wrap {
+  pointer-events: auto;
+}
+/* The first row's heading strip also covers the dots; keep its links
+   clickable but let everything else pass through. */
+.home-rows .row-head {
+  pointer-events: none;
+}
+.home-rows .row-head a {
+  pointer-events: auto;
 }
 .media-row {
   margin-bottom: 38px;
