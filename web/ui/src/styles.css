@@ -1431,6 +1431,13 @@ select option:disabled {
   position: relative;
   z-index: 2;
 }
+/* The detail page already pads the body, so the similar row must not add
+   the page gutter a second time. */
+.detail-body .media-row .row-head,
+.detail-body .media-row .row-scroll {
+  padding-left: 0;
+  padding-right: 0;
+}
 .detail-loading {
   min-height: 100dvh;
   display: grid;

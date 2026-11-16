@@ -21,6 +21,7 @@ export const zhTW: Record<string, string> = {
   '{h}h': '{h} 小時',
   '{h}h {m}m': '{h} 小時 {m} 分',
   '{m} min': '{m} 分鐘',
+  '{m}m': '{m} 分',
   '· Data directory': '· 資料目錄',
   'Next episode': '下一集',
   'Incompatible formats are encoded to H.264 + AAC.': '不相容的格式編碼為 H.264 + AAC。',

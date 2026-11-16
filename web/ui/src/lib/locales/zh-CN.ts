@@ -21,6 +21,7 @@ export const zhCN: Record<string, string> = {
   '{h}h': '{h} 小时',
   '{h}h {m}m': '{h} 小时 {m} 分',
   '{m} min': '{m} 分钟',
+  '{m}m': '{m} 分',
   '· Data directory': '· 数据目录',
   'Next episode': '下一集',
   'Incompatible formats are encoded to H.264 + AAC.': '不兼容的格式编码为 H.264 + AAC。',

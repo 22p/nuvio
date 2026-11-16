@@ -21,6 +21,7 @@ export const koKR: Record<string, string> = {
   '{h}h': '{h}시간',
   '{h}h {m}m': '{h}시간 {m}분',
   '{m} min': '{m}분',
+  '{m}m': '{m}분',
   '· Data directory': '· 데이터 디렉터리',
   'Next episode': '다음 에피소드',
   'Incompatible formats are encoded to H.264 + AAC.': '호환되지 않는 형식을 H.264 + AAC로 인코딩합니다.',

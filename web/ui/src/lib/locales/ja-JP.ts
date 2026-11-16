@@ -21,6 +21,7 @@ export const jaJP: Record<string, string> = {
   '{h}h': '{h}時間',
   '{h}h {m}m': '{h}時間{m}分',
   '{m} min': '{m}分',
+  '{m}m': '{m}分',
   '· Data directory': '· データディレクトリ',
   'Next episode': '次のエピソード',
   'Incompatible formats are encoded to H.264 + AAC.': '非対応形式をH.264 + AACにエンコードします。',

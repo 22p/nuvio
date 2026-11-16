@@ -16,8 +16,8 @@ export function formatRuntime(ticks?: number | null, compact = false): string {
   const h = Math.floor(total / 60)
   const m = total % 60
   if (compact) {
-    if (h === 0) return `${m}m`
-    return m ? `${h}h ${m}m` : `${h}h`
+    if (h === 0) return t("{m}m", { m })
+    return m ? t("{h}h {m}m", { h, m }) : t("{h}h", { h })
   }
   if (h === 0) return t("{m} min", { m })
   return m ? t("{h}h {m}m", { h, m }) : t("{h}h", { h })
