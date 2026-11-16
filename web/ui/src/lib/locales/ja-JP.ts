@@ -154,7 +154,6 @@ export const jaJP: Record<string, string> = {
   'Always': '常に',
   'Total episodes': '総エピソード数',
   'Reset to defaults': '既定に戻す',
-  'Profile': 'マイページ',
   'Part of series': 'シリーズ',
   'Open server settings': 'サーバー設定を開く',
   'Open library': 'ライブラリを開く',

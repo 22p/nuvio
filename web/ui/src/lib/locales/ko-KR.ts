@@ -154,7 +154,6 @@ export const koKR: Record<string, string> = {
   'Always': '항상',
   'Total episodes': '총 에피소드 수',
   'Reset to defaults': '기본값 복원',
-  'Profile': '내 정보',
   'Part of series': '시리즈',
   'Open server settings': '서버 설정 열기',
   'Open library': '라이브러리 열기',

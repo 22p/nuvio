@@ -154,7 +154,6 @@ export const zhCN: Record<string, string> = {
   'Always': '总是',
   'Total episodes': '总集数',
   'Reset to defaults': '恢复默认',
-  'Profile': '我的',
   'Part of series': '所属剧集',
   'Open server settings': '打开服务器设置',
   'Open library': '打开片库',

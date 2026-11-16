@@ -89,7 +89,7 @@ export function AppShell() {
   return (
     <ViewsContext.Provider value={{ views, loading: viewsLoading }}>
       <div className="app-shell">
-        <Header views={views} />
+        <Header />
         <main className="page">
           <Outlet />
         </main>
@@ -99,7 +99,7 @@ export function AppShell() {
   )
 }
 
-function Header({ views }: { views: JFItem[] }) {
+function Header() {
   const { session, signOut, isAdmin } = useAuth()
   const navigate = useNavigate()
   const [scrolled, setScrolled] = useState(false)
@@ -122,8 +122,6 @@ function Header({ views }: { views: JFItem[] }) {
     return () => document.removeEventListener('mousedown', onDown)
   }, [menuOpen])
 
-  const movies = views.find((v) => v.CollectionType === 'movies')
-  const shows = views.find((v) => v.CollectionType === 'tvshows')
   const name = session?.user.Name || 'N'
 
   return (
@@ -138,15 +136,10 @@ function Header({ views }: { views: JFItem[] }) {
           <NavLink to="/" end>{t("Home")}</NavLink>
           <NavLink to="/browse">{t("Library")}</NavLink>
           <NavLink to="/favorites">{t("Favorites")}</NavLink>
-          {movies && <NavLink to={`/library/${movies.Id}`}>{t("Movies")}</NavLink>}
-          {shows && <NavLink to={`/library/${shows.Id}`}>{t("Series")}</NavLink>}
           <NavLink to="/search">{t("Search")}</NavLink>
         </nav>
 
         <div className="header-actions">
-          <button className="icon-button" onClick={() => navigate('/search')} aria-label={t("Search")}>
-            <IconSearch size={19} />
-          </button>
           <div className="avatar-wrap" ref={menuRef}>
             <button
               className="avatar"
@@ -191,7 +184,7 @@ function MobileNav() {
     { to: '/browse', label: t("Library"), icon: <IconGrid size={21} /> },
     { to: '/favorites', label: t("Favorites"), icon: <IconHeart size={21} /> },
     { to: '/search', label: t("Search"), icon: <IconSearch size={21} /> },
-    { to: '/settings', label: t("Profile"), icon: <IconSettings size={21} /> },
+    { to: '/settings', label: t("Settings"), icon: <IconSettings size={21} /> },
   ]
   return (
     <nav className="mobile-nav">

@@ -154,7 +154,6 @@ export const zhTW: Record<string, string> = {
   'Always': '總是',
   'Total episodes': '總集數',
   'Reset to defaults': '恢復預設',
-  'Profile': '我的',
   'Part of series': '所屬影集',
   'Open server settings': '打開伺服器設定',
   'Open library': '打開媒體庫',
