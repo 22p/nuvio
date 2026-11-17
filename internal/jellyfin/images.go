@@ -1,6 +1,7 @@
 package jellyfin
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"nuvio/internal/art"
@@ -174,38 +177,118 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// serveRemoteImage downloads and caches a TMDb CDN image. Returning false lets
-// the caller fall back to generated artwork when the CDN is unreachable.
-func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model.Item, rawURL string) bool {
+// remoteImagePath accepts only https URLs served by TMDb's CDN. The media
+// library may contain arbitrary URLs from NFO files; proxying those would let
+// a crafted file make the server fetch internal addresses.
+func remoteImagePath(rawURL string) (string, bool) {
 	u, err := url.Parse(rawURL)
-	host := ""
-	if err == nil {
-		host = strings.ToLower(u.Hostname())
+	if err != nil || u.Scheme != "https" {
+		return "", false
 	}
-	if err != nil || u.Scheme != "https" || (host != "tmdb.org" && !strings.HasSuffix(host, ".tmdb.org")) {
-		a.imageFailed(rawURL, fmt.Errorf("unsupported image URL"))
-		return false
+	host := strings.ToLower(u.Hostname())
+	if host != "tmdb.org" && !strings.HasSuffix(host, ".tmdb.org") {
+		return "", false
 	}
-	if a.ImageDir == "" {
-		return false
+	return u.Path, true
+}
+
+// imageCachePath returns where a remote image is stored, grouped by media type.
+func (a *API) imageCachePath(it *model.Item, rawURL string) string {
+	urlPath, ok := remoteImagePath(rawURL)
+	if !ok || a.ImageDir == "" {
+		return ""
 	}
 	sum := md5.Sum([]byte(rawURL))
-	name := hex.EncodeToString(sum[:]) + imageExt(u.Path)
-	cachePath := filepath.Join(a.ImageDir, imageCategory(it), name)
-	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
-		writeImageBytes(w, data)
-		return true
-	}
+	return filepath.Join(a.ImageDir, imageCategory(it), hex.EncodeToString(sum[:])+imageExt(urlPath))
+}
 
+// remoteImageClient returns the shared HTTP client and concurrency gate. The
+// gate is shared by request handling and scan-time prefetching so together
+// they never exceed six concurrent downloads.
+func (a *API) remoteImageClient() (*http.Client, chan struct{}) {
 	a.imageMu.Lock()
+	defer a.imageMu.Unlock()
 	if a.imageHTTP == nil {
 		a.imageHTTP = &http.Client{Timeout: 20 * time.Second}
 	}
 	if a.imageSem == nil {
 		a.imageSem = make(chan struct{}, 6)
 	}
-	client, sem := a.imageHTTP, a.imageSem
-	a.imageMu.Unlock()
+	return a.imageHTTP, a.imageSem
+}
+
+// fetchRemoteImage downloads one image. The caller holds a slot in the shared
+// semaphore.
+func fetchRemoteImage(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "image/") {
+		return nil, fmt.Errorf("unexpected content type %q", ct)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 25<<20))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty response")
+	}
+	return data, nil
+}
+
+// storeCachedImage writes through a temporary file so a crash or a concurrent
+// reader never sees a partial image.
+func (a *API) storeCachedImage(cachePath string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(cachePath), ".img-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, cachePath); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// serveRemoteImage downloads and caches a TMDb CDN image. Returning false lets
+// the caller fall back to generated artwork when the CDN is unreachable.
+func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model.Item, rawURL string) bool {
+	if a.ImageDir == "" {
+		return false
+	}
+	cachePath := a.imageCachePath(it, rawURL)
+	if cachePath == "" {
+		a.imageFailed(rawURL, fmt.Errorf("unsupported image URL"))
+		return false
+	}
+	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
+		writeImageBytes(w, data)
+		return true
+	}
+
+	client, sem := a.remoteImageClient()
 
 	// Library pages request dozens of posters at once; a global lock made them
 	// download one by one and many timed out. Cache hits above stay lock-free.
@@ -219,12 +302,7 @@ func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model
 		writeImageBytes(w, data)
 		return true
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
-	if err != nil {
-		a.imageFailed(rawURL, err)
-		return false
-	}
-	resp, err := client.Do(req)
+	data, err := fetchRemoteImage(r.Context(), client, rawURL)
 	if err != nil {
 		// A browser that navigates away cancels the request; that is not a
 		// download failure worth logging.
@@ -233,34 +311,89 @@ func (a *API) serveRemoteImage(w http.ResponseWriter, r *http.Request, it *model
 		}
 		return false
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		a.imageFailed(rawURL, fmt.Errorf("HTTP %d", resp.StatusCode))
-		return false
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "image/") {
-		a.imageFailed(rawURL, fmt.Errorf("unexpected content type %q", ct))
-		return false
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 25<<20))
-	if err != nil {
-		if r.Context().Err() == nil {
-			a.imageFailed(rawURL, err)
-		}
-		return false
-	}
-	if len(data) == 0 {
-		a.imageFailed(rawURL, fmt.Errorf("empty response"))
-		return false
-	}
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err == nil {
-		tmp := cachePath + ".tmp"
-		if err := os.WriteFile(tmp, data, 0o644); err == nil {
-			_ = os.Rename(tmp, cachePath)
-		}
+	if err := a.storeCachedImage(cachePath, data); err != nil {
+		log.Printf("Image cache write failed: %s: %v", cachePath, err)
 	}
 	writeImageBytes(w, data)
 	return true
+}
+
+// PrefetchPersonImages fills the portrait cache for every cast member in the
+// catalog. runScan calls it after enrichment so the web client can read every
+// avatar from /Items/{id}/Images/Primary without touching TMDb.
+func (a *API) PrefetchPersonImages(items []*model.Item) {
+	if a.ImageDir == "" {
+		return
+	}
+	type portrait struct {
+		url  string
+		path string
+	}
+	seen := make(map[string]bool)
+	pending := make([]portrait, 0, 64)
+	for _, it := range items {
+		for _, p := range it.People {
+			rawURL := strings.TrimSpace(p.ImageURL)
+			if rawURL == "" || seen[rawURL] {
+				continue
+			}
+			seen[rawURL] = true
+			cachePath := a.imageCachePath(personItem(p.Name, rawURL), rawURL)
+			if cachePath == "" {
+				continue
+			}
+			if st, err := os.Stat(cachePath); err == nil && st.Size() > 0 {
+				continue
+			}
+			pending = append(pending, portrait{url: rawURL, path: cachePath})
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+
+	start := time.Now()
+	client, sem := a.remoteImageClient()
+	workers := len(pending)
+	if workers > 6 {
+		workers = 6
+	}
+	var downloaded, failed int64
+	var wg sync.WaitGroup
+	jobs := make(chan portrait)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range jobs {
+				sem <- struct{}{}
+				// A request may have filled the cache while this worker waited.
+				if data, err := os.ReadFile(p.path); err == nil && len(data) > 0 {
+					<-sem
+					continue
+				}
+				data, err := fetchRemoteImage(context.Background(), client, p.url)
+				<-sem
+				if err != nil {
+					a.imageFailed(p.url, err)
+					atomic.AddInt64(&failed, 1)
+					continue
+				}
+				if err := a.storeCachedImage(p.path, data); err != nil {
+					log.Printf("Image cache write failed: %s: %v", p.path, err)
+					atomic.AddInt64(&failed, 1)
+					continue
+				}
+				atomic.AddInt64(&downloaded, 1)
+			}
+		}()
+	}
+	for _, p := range pending {
+		jobs <- p
+	}
+	close(jobs)
+	wg.Wait()
+	log.Printf("Person image cache: %d downloaded, %d failed in %s", downloaded, failed, time.Since(start).Round(time.Millisecond))
 }
 
 // imageFailed logs a download error once per URL. A library page can request

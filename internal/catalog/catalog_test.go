@@ -68,3 +68,31 @@ func TestQueryReleasesLock(t *testing.T) {
 		t.Fatal("catalog lock was not released after Query")
 	}
 }
+func TestPersonIndexPrefersPortraitAndDropsRemovedPeople(t *testing.T) {
+	c := New()
+	items := []*model.Item{
+		{ID: "m1", Name: "One", SortName: "One", People: []model.Person{{Name: "Ada", Type: "Actor"}}},
+		{ID: "m2", Name: "Two", SortName: "Two", People: []model.Person{{Name: "ada", ImageURL: "https://image.tmdb.org/t/p/w185/ada.jpg"}}},
+	}
+	c.Replace(nil, items)
+	p, ok := c.Person(PersonKey(" ADA "))
+	if !ok {
+		t.Fatal("person was not indexed")
+	}
+	if p.ImageURL == "" {
+		t.Fatal("index kept the entry without a portrait")
+	}
+	if _, ok := c.Person(PersonKey("Nobody")); ok {
+		t.Fatal("unknown person resolved")
+	}
+
+	c.Replace(nil, []*model.Item{
+		{ID: "m3", Name: "Three", SortName: "Three", People: []model.Person{{Name: "Grace", Type: "Actor"}}},
+	})
+	if _, ok := c.Person(PersonKey("Ada")); ok {
+		t.Fatal("a person from the previous scan survived the swap")
+	}
+	if _, ok := c.Person(PersonKey("Grace")); !ok {
+		t.Fatal("person from the new scan is missing")
+	}
+}

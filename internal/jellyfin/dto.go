@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"nuvio/internal/catalog"
 	"nuvio/internal/model"
 	"nuvio/internal/store"
 )
@@ -267,15 +268,14 @@ type itemDTO struct {
 	Studios                  []any             `json:"Studios,omitempty"`
 }
 
-// personDTO mirrors Jellyfin's BaseItemPerson. ImageUrl is an extra field used
-// by the bundled web client because Nuvio has no person library items.
+// personDTO mirrors Jellyfin's BaseItemPerson. Clients load the portrait from
+// /Items/{Id}/Images/Primary using PrimaryImageTag; no external URL is exposed.
 type personDTO struct {
 	Name            string `json:"Name"`
 	Id              string `json:"Id"`
 	Role            string `json:"Role,omitempty"`
 	Type            string `json:"Type"`
 	PrimaryImageTag string `json:"PrimaryImageTag,omitempty"`
-	ImageUrl        string `json:"ImageUrl,omitempty"`
 }
 
 type mediaSourceDTO struct {
@@ -399,8 +399,7 @@ func imageTag(it *model.Item, kind string) string {
 }
 
 func personID(name string) string {
-	sum := md5.Sum([]byte("person:" + strings.ToLower(strings.TrimSpace(name))))
-	return hex.EncodeToString(sum[:])
+	return catalog.PersonKey(name)
 }
 
 func (a *API) buildItem(it *model.Item, us *userState, includeMedia bool, token string) itemDTO {
@@ -491,13 +490,19 @@ func (a *API) buildItem(it *model.Item, us *userState, includeMedia bool, token 
 			if typ == "" {
 				typ = "Actor"
 			}
-			dto.People = append(dto.People, personDTO{
-				Name:     p.Name,
-				Id:       personID(p.Name),
-				Role:     p.Role,
-				Type:     typ,
-				ImageUrl: p.ImageURL,
-			})
+			pi := personItem(p.Name, p.ImageURL)
+			person := personDTO{
+				Name: p.Name,
+				Id:   pi.ID,
+				Role: p.Role,
+				Type: typ,
+			}
+			// Only advertise an image the proxy can actually serve; without a
+			// TMDb portrait the web UI keeps its initials placeholder.
+			if _, ok := remoteImagePath(p.ImageURL); ok {
+				person.PrimaryImageTag = imageTag(pi, "Primary")
+			}
+			dto.People = append(dto.People, person)
 		}
 	}
 	if it.Type == model.TypeMovie || it.Type == model.TypeEpisode {

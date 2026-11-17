@@ -430,6 +430,9 @@ func (s *Server) runScan(full bool) {
 	}
 	s.Catalog.Replace(current, kept)
 	s.Catalog.SetLastScan(s.Store.LastScan())
+	// Warm the portrait cache while the scan is still running so the bundled
+	// web client never has to reach TMDb directly.
+	s.API.PrefetchPersonImages(kept)
 	s.scanMu.Lock()
 	s.scanning = false
 	s.lastScanErr = strings.Join(errs, "; ")

@@ -48,12 +48,10 @@ func (a *API) virtualItem(id string) (*model.Item, bool) {
 			return viewItem(v.Library.ID, v.Library.Name), true
 		}
 	}
+	if p, ok := a.Catalog.Person(id); ok {
+		return personItem(p.Name, p.ImageURL), true
+	}
 	for _, it := range a.Catalog.All() {
-		for _, p := range it.People {
-			if personID(p.Name) == id {
-				return personItem(p.Name, p.ImageURL), true
-			}
-		}
 		for _, g := range it.Genres {
 			if genreID(g) == id {
 				return genreItem(g), true

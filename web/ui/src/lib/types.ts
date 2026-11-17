@@ -51,7 +51,6 @@ export interface Person {
   Id?: string
   Role?: string
   Type?: string
-  ImageUrl?: string
   PrimaryImageTag?: string
 }
 

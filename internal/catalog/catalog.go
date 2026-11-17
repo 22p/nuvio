@@ -2,6 +2,8 @@
 package catalog
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +25,7 @@ type Catalog struct {
 	items      map[string]*model.Item
 	children   map[string][]string
 	lowerNames map[string]string
+	persons    map[string]model.Person
 	views      []*model.Library
 	scanning   bool
 	lastScan   time.Time
@@ -36,6 +39,7 @@ func New() *Catalog {
 		items:      map[string]*model.Item{},
 		children:   map[string][]string{},
 		lowerNames: map[string]string{},
+		persons:    map[string]model.Person{},
 	}
 }
 
@@ -46,10 +50,23 @@ func (c *Catalog) Replace(views []*model.Library, items []*model.Item) {
 	// Precompute the case-folded sort name once per scan; Query then sorts
 	// without allocating on every comparison.
 	lowerNames := make(map[string]string, len(items))
+	// People are not library items, but image requests address them by id.
+	// Index them here so a detail page with two dozen cast members does not
+	// rescan the whole catalog for every avatar request.
+	persons := make(map[string]model.Person)
 	for _, it := range items {
 		byID[it.ID] = it
 		children[it.ParentID] = append(children[it.ParentID], it.ID)
 		lowerNames[it.ID] = strings.ToLower(it.SortName)
+		for _, p := range it.People {
+			if strings.TrimSpace(p.Name) == "" {
+				continue
+			}
+			key := PersonKey(p.Name)
+			if old, ok := persons[key]; !ok || (old.ImageURL == "" && p.ImageURL != "") {
+				persons[key] = p
+			}
+		}
 	}
 	for parent := range children {
 		ids := children[parent]
@@ -70,12 +87,28 @@ func (c *Catalog) Replace(views []*model.Library, items []*model.Item) {
 	c.items = byID
 	c.children = children
 	c.lowerNames = lowerNames
+	c.persons = persons
 	c.views = views
 	c.scanned = len(items)
 	c.lastScan = time.Now()
 	c.scanning = false
 	c.lastError = ""
 	c.mu.Unlock()
+}
+
+// PersonKey is the stable id exposed for a cast member. People have no
+// library item of their own, so the id is derived from the name.
+func PersonKey(name string) string {
+	sum := md5.Sum([]byte("person:" + strings.ToLower(strings.TrimSpace(name))))
+	return hex.EncodeToString(sum[:])
+}
+
+// Person returns a cast member by the id used in Jellyfin DTOs.
+func (c *Catalog) Person(id string) (model.Person, bool) {
+	c.mu.RLock()
+	p, ok := c.persons[id]
+	c.mu.RUnlock()
+	return p, ok
 }
 
 // SetLastScan restores the persisted scan timestamp after loading the catalog.
