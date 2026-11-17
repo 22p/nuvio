@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1308,6 +1309,10 @@ func (s *Server) handleRemoveLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	if err := s.Store.RemoveLibrary(id); err != nil {
+		if errors.Is(err, store.ErrLibraryNotFound) {
+			writeJSON(w, 404, map[string]any{"error": "Library not found"})
+			return
+		}
 		writeJSON(w, 500, map[string]any{"error": "Delete failed"})
 		return
 	}

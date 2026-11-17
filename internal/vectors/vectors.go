@@ -275,19 +275,41 @@ func (s *Store) Prune(keep map[string]bool) error {
 			remove = append(remove, id)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("list embeddings: %w", err)
+	}
 	rows.Close()
+	if len(remove) == 0 {
+		return nil
+	}
+	// Delete the metadata and the vectors together: a crash halfway through a
+	// long prune used to leave the two out of sync until the next pass.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("prune embeddings: %w", err)
+	}
 	for _, id := range remove {
-		if _, err := s.db.Exec(`DELETE FROM embedding_meta WHERE item_id = ?`, id); err != nil {
+		if _, err := tx.Exec(`DELETE FROM embedding_meta WHERE item_id = ?`, id); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("prune embedding: %w", err)
 		}
 		if s.dims > 0 {
-			if _, err := s.db.Exec("DELETE FROM "+vecTable(s.format, s.dims)+" WHERE item_id = ?", id); err != nil {
+			if _, err := tx.Exec("DELETE FROM "+vecTable(s.format, s.dims)+" WHERE item_id = ?", id); err != nil {
+				tx.Rollback()
 				return fmt.Errorf("prune embedding vector: %w", err)
 			}
 		}
 	}
 	var n int
-	if err := s.db.QueryRow(`SELECT count(*) FROM embedding_meta`).Scan(&n); err == nil && n == 0 {
+	if err := tx.QueryRow(`SELECT count(*) FROM embedding_meta`).Scan(&n); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("count embeddings: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("prune embeddings: %w", err)
+	}
+	if n == 0 {
 		s.dims = 0
 		s.model = ""
 		s.format = ""

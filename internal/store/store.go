@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -21,16 +22,49 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 
 	"nuvio/internal/model"
 )
 
 // Errors returned by the store.
 var (
-	ErrUserExists   = errors.New("user already exists")
-	ErrUserNotFound = errors.New("user not found")
+	ErrUserExists      = errors.New("user already exists")
+	ErrUserNotFound    = errors.New("user not found")
+	ErrLibraryNotFound = errors.New("library not found")
 )
+
+// tsLayout is a fixed-width UTC timestamp. SQLite compares TEXT values
+// lexicographically and time.RFC3339Nano trims trailing zeros, which makes
+// "...00Z" sort after "...00.5Z". Writing a fixed number of fractional digits
+// keeps SQL ordering chronological. Readers still parse with RFC3339Nano so
+// rows written by older versions remain valid.
+const tsLayout = "2006-01-02T15:04:05.000000000Z"
+
+func tsText(t time.Time) string { return t.UTC().Format(tsLayout) }
+
+var pragmaOnce sync.Once
+
+// installConnectionPragmas configures every connection the driver opens.
+// PRAGMAs are connection-scoped, so running them once through db.Exec is not
+// enough: database/sql replaces a connection after a driver error and the new
+// one would silently fall back to foreign_keys=OFF, disabling ON DELETE
+// CASCADE and the busy timeout.
+func installConnectionPragmas() {
+	pragmaOnce.Do(func() {
+		sqlite.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, _ string) error {
+			for _, stmt := range []string{
+				"PRAGMA busy_timeout=5000",
+				"PRAGMA foreign_keys=ON",
+			} {
+				if _, err := conn.ExecContext(context.Background(), stmt, nil); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+}
 
 // Store is a concurrency-safe SQLite backed data store.
 type Store struct {
@@ -93,6 +127,7 @@ CREATE TABLE IF NOT EXISTS user_items (
 	PRIMARY KEY (user_id, item_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_items_resume ON user_items(user_id, played, position_ticks);
+CREATE INDEX IF NOT EXISTS idx_user_items_item ON user_items(item_id);
 CREATE TABLE IF NOT EXISTS display_preferences (
 	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	client TEXT NOT NULL,
@@ -101,6 +136,7 @@ CREATE TABLE IF NOT EXISTS display_preferences (
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (user_id, client, key)
 );
+CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
 `
 
 // Open opens (or creates) nuvio.db below dir.
@@ -109,24 +145,17 @@ func Open(dir, defaultServerName string) (*Store, error) {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "nuvio.db")
+	installConnectionPragmas()
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		db.Close()
-		return nil, err
-	}
 	var journal string
 	if err := db.QueryRow("PRAGMA journal_mode=WAL").Scan(&journal); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
-		return nil, err
 	}
 	for _, stmt := range strings.Split(schema, ";") {
 		stmt = strings.TrimSpace(stmt)
@@ -150,7 +179,7 @@ func Open(dir, defaultServerName string) (*Store, error) {
 	created, _ := s.metaGet("created_at")
 	if created == "" {
 		s.created = time.Now().UTC()
-		if err := s.metaSet("created_at", s.created.Format(time.RFC3339Nano)); err != nil {
+		if err := s.metaSet("created_at", tsText(s.created)); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -186,6 +215,15 @@ func Open(dir, defaultServerName string) (*Store, error) {
 		s.settings.MaxBitrateMbps = 20
 	}
 	return s, nil
+}
+
+// write runs a statement and logs failures. These writes used to ignore the
+// error entirely, so a full disk or a busy database lost user state with no
+// trace anywhere.
+func (s *Store) write(op, query string, args ...any) {
+	if _, err := s.db.Exec(query, args...); err != nil {
+		log.Printf("Store: %s failed: %v", op, err)
+	}
 }
 
 // Close closes the database.
@@ -274,6 +312,9 @@ func (s *Store) Users() []model.User {
 		u.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 		out = append(out, u)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Store: list users: %v", err)
+	}
 	return out
 }
 
@@ -335,7 +376,7 @@ func (s *Store) CreateUser(name, password string, admin bool) (*model.User, erro
 	}
 	res, err := s.db.Exec(`INSERT OR IGNORE INTO users(id, name, password_hash, salt, is_admin, created_at, allowed_libraries, allow_transcode, allow_remux)
 		VALUES(?, ?, ?, ?, ?, ?, '', 1, 1)`,
-		u.ID, u.Name, u.PasswordHash, u.Salt, adminInt, u.CreatedAt.Format(time.RFC3339Nano))
+		u.ID, u.Name, u.PasswordHash, u.Salt, adminInt, tsText(u.CreatedAt))
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +455,7 @@ const tokenTouchInterval = 45 * time.Second
 
 // IssueToken mints a persistent access token for a user.
 func (s *Store) IssueToken(userID string, meta SessionMeta) (string, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := tsText(time.Now())
 	for i := 0; i < 3; i++ {
 		tok := randomHex(24)
 		_, err := s.db.Exec(`INSERT INTO tokens(token, user_id, created_at, device_id, device_name, client, client_version, remote_address, last_seen)
@@ -423,6 +464,11 @@ func (s *Store) IssueToken(userID string, meta SessionMeta) (string, error) {
 		if err == nil {
 			return tok, nil
 		}
+	}
+	// A missing user makes every insert fail with a foreign key error; report
+	// that instead of a generic token failure.
+	if _, ok := s.FindUser(userID); !ok {
+		return "", ErrUserNotFound
 	}
 	return "", errors.New("Could not create an access token")
 }
@@ -442,8 +488,8 @@ func (s *Store) UserByToken(token string) (*model.User, bool) {
 		return nil, false
 	}
 	if lastSeen, err := time.Parse(time.RFC3339Nano, seen); err != nil || time.Since(lastSeen) > tokenTouchInterval {
-		_, _ = s.db.Exec("UPDATE tokens SET last_seen = ? WHERE token = ?",
-			time.Now().UTC().Format(time.RFC3339Nano), token)
+		s.write("touch session", "UPDATE tokens SET last_seen = ? WHERE token = ?",
+			tsText(time.Now()), token)
 	}
 	u.AllowedLibraries = decodeLibraries(libs)
 	u.IsAdmin = admin == 1
@@ -453,7 +499,7 @@ func (s *Store) UserByToken(token string) (*model.User, bool) {
 
 // RevokeToken invalidates a token.
 func (s *Store) RevokeToken(token string) {
-	_, _ = s.db.Exec("DELETE FROM tokens WHERE token = ?", token)
+	s.write("revoke token", "DELETE FROM tokens WHERE token = ?", token)
 }
 
 // Sessions lists the devices signed in to an account. The token supplied with
@@ -481,6 +527,9 @@ func (s *Store) Sessions(userID, currentToken string) []Session {
 		}
 		out = append(out, sess)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Store: list sessions: %v", err)
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Current != out[j].Current {
 			return out[i].Current
@@ -497,7 +546,7 @@ func (s *Store) RefreshSession(token string, meta SessionMeta) {
 	if token == "" {
 		return
 	}
-	_, _ = s.db.Exec(`UPDATE tokens SET
+	s.write("refresh session", `UPDATE tokens SET
 		device_id = COALESCE(NULLIF(?, ''), device_id),
 		device_name = COALESCE(NULLIF(?, ''), device_name),
 		client = COALESCE(NULLIF(?, ''), client),
@@ -561,15 +610,17 @@ func (s *Store) SaveDisplayPreferences(userID, client, key string, data map[stri
 	if err != nil {
 		return
 	}
-	_, _ = s.db.Exec(`INSERT INTO display_preferences(user_id, client, key, data, updated_at)
+	s.write("save display preferences", `INSERT INTO display_preferences(user_id, client, key, data, updated_at)
 		VALUES(?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, client, key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
-		userID, client, key, string(raw), time.Now().UTC().Format(time.RFC3339Nano))
+		userID, client, key, string(raw), tsText(time.Now()))
 }
 
 // Libraries returns the configured libraries.
 func (s *Store) Libraries() []*model.Library {
-	rows, err := s.db.Query("SELECT data FROM libraries ORDER BY added_at")
+	// Ordering happens in Go: added_at is TEXT and the SQL collation is not
+	// chronological for RFC3339Nano values written by older versions.
+	rows, err := s.db.Query("SELECT data FROM libraries")
 	if err != nil {
 		return nil
 	}
@@ -588,6 +639,9 @@ func (s *Store) Libraries() []*model.Library {
 			lib.Paths = []string{}
 		}
 		out = append(out, &lib)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Store: list libraries: %v", err)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AddedAt.Before(out[j].AddedAt) })
 	return out
@@ -627,7 +681,7 @@ func (s *Store) insertLibrary(l *model.Library) error {
 		return err
 	}
 	_, err = s.db.Exec("INSERT OR IGNORE INTO libraries(id, data, added_at) VALUES(?, ?, ?)",
-		l.ID, string(raw), l.AddedAt.Format(time.RFC3339Nano))
+		l.ID, string(raw), tsText(l.AddedAt))
 	return err
 }
 
@@ -641,7 +695,7 @@ func (s *Store) EnsureLibrary(l *model.Library) bool {
 		return false
 	}
 	res, err := s.db.Exec("INSERT OR IGNORE INTO libraries(id, data, added_at) VALUES(?, ?, ?)",
-		l.ID, string(raw), l.AddedAt.Format(time.RFC3339Nano))
+		l.ID, string(raw), tsText(l.AddedAt))
 	if err != nil {
 		return false
 	}
@@ -743,19 +797,31 @@ func boolInt(v bool) int {
 	return 0
 }
 
-// RemoveLibrary deletes a library and its items.
+// RemoveLibrary deletes a library, its items and the playback state attached
+// to those items.
 func (s *Store) RemoveLibrary(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
+		return err
+	}
+	// user_items has no foreign key to items on purpose (rescans must keep
+	// progress), so clean the rows belonging to this library explicitly.
+	if _, err := tx.Exec("DELETE FROM user_items WHERE item_id IN (SELECT id FROM items WHERE library_id = ?)", id); err != nil {
+		tx.Rollback()
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM items WHERE library_id = ?", id); err != nil {
 		tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM libraries WHERE id = ?", id); err != nil {
+	res, err := tx.Exec("DELETE FROM libraries WHERE id = ?", id)
+	if err != nil {
 		tx.Rollback()
 		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		tx.Rollback()
+		return ErrLibraryNotFound
 	}
 	return tx.Commit()
 }
@@ -775,7 +841,9 @@ func (s *Store) UpdateSettings(fn func(*model.ServerSettings)) model.ServerSetti
 	if s.settings.MetadataLanguage == "" {
 		s.settings.MetadataLanguage = "zh-CN"
 	}
-	_ = s.saveSettings()
+	if err := s.saveSettings(); err != nil {
+		log.Printf("Store: save settings failed: %v", err)
+	}
 	return s.settings
 }
 
@@ -815,30 +883,51 @@ func (s *Store) ReplaceItems(items []*model.Item) error {
 		tx.Rollback()
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT OR REPLACE INTO items(id, library_id, data, updated_at) VALUES(?, ?, ?, ?)")
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	defer stmt.Close()
 	now := time.Now().UTC()
-	nowText := now.Format(time.RFC3339Nano)
+	nowText := tsText(now)
+	// Insert in batches: one multi-row statement per 200 items keeps the write
+	// transaction short (all writes share the single SQLite connection) while
+	// staying well below the classic 999 parameter limit.
+	const batchSize = 200
+	clean := make([]*model.Item, 0, len(items))
 	for _, it := range items {
-		if it == nil || it.ID == "" {
-			continue
+		if it != nil && it.ID != "" {
+			clean = append(clean, it)
 		}
-		raw, err := json.Marshal(it)
-		if err != nil {
-			tx.Rollback()
-			return err
+	}
+	for start := 0; start < len(clean); start += batchSize {
+		end := start + batchSize
+		if end > len(clean) {
+			end = len(clean)
 		}
-		if _, err := stmt.Exec(it.ID, it.LibraryID, string(raw), nowText); err != nil {
+		var query strings.Builder
+		query.WriteString("INSERT OR REPLACE INTO items(id, library_id, data, updated_at) VALUES ")
+		args := make([]any, 0, (end-start)*4)
+		for i, it := range clean[start:end] {
+			raw, err := json.Marshal(it)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			if i > 0 {
+				query.WriteString(", ")
+			}
+			query.WriteString("(?, ?, ?, ?)")
+			args = append(args, it.ID, it.LibraryID, string(raw), nowText)
+		}
+		if _, err := tx.Exec(query.String(), args...); err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
 	if _, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('last_scan', ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, nowText); err != nil {
+		tx.Rollback()
+		return err
+	}
+	// Drop progress for media that is no longer in the catalog. Rows are kept
+	// across a normal rescan because the items are re-inserted above.
+	if _, err := tx.Exec("DELETE FROM user_items WHERE item_id NOT IN (SELECT id FROM items)"); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -917,6 +1006,9 @@ func (s *Store) UserItemData(userID string) map[string]UserData {
 		}
 		out[id] = ud
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Store: list user item data: %v", err)
+	}
 	return out
 }
 
@@ -928,8 +1020,8 @@ func (s *Store) SetPlayed(userID, itemID string, played bool) {
 		playedInt = 1
 		playCount = 1
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+	now := tsText(time.Now())
+	s.write("save played state", `INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
 		VALUES(?, ?, 0, ?, ?, ?, 0)
 		ON CONFLICT(user_id, item_id) DO UPDATE SET
 			position_ticks = 0,
@@ -944,7 +1036,7 @@ func (s *Store) SetPlayCount(userID, itemID string, count int) {
 	if count < 0 {
 		count = 0
 	}
-	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+	s.write("save play count", `INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
 		VALUES(?, ?, 0, 0, ?, NULL, 0)
 		ON CONFLICT(user_id, item_id) DO UPDATE SET play_count = excluded.play_count`,
 		userID, itemID, count)
@@ -952,10 +1044,10 @@ func (s *Store) SetPlayCount(userID, itemID string, count int) {
 
 // SetLastPlayed sets the last played timestamp without changing other state.
 func (s *Store) SetLastPlayed(userID, itemID string, t time.Time) {
-	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+	s.write("save last played", `INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
 		VALUES(?, ?, 0, 0, 0, ?, 0)
 		ON CONFLICT(user_id, item_id) DO UPDATE SET last_played = excluded.last_played`,
-		userID, itemID, t.UTC().Format(time.RFC3339Nano))
+		userID, itemID, tsText(t))
 }
 
 // SetProgress records playback position. played is set when the client reports
@@ -973,11 +1065,11 @@ func (s *Store) SetProgress(userID, itemID string, positionTicks int64, played b
 		playedInt = 1
 		initialCount = 1
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := tsText(time.Now())
 	// A progress report can mark an item watched once it passes the threshold,
 	// but it must never clear an explicit watched flag. Un-watching is a user
 	// decision and only SetPlayed(false) clears it.
-	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+	s.write("save progress", `INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
 		VALUES(?, ?, ?, ?, ?, ?, 0)
 		ON CONFLICT(user_id, item_id) DO UPDATE SET
 			position_ticks = excluded.position_ticks,
@@ -987,11 +1079,14 @@ func (s *Store) SetProgress(userID, itemID string, positionTicks int64, played b
 		userID, itemID, positionTicks, playedInt, initialCount, now)
 }
 
-// ToggleFavorite flips the favourite flag and returns the new value.
+// ToggleFavorite flips the favourite flag and returns the new value. The flip
+// happens inside the statement so concurrent toggles cannot lose an update.
 func (s *Store) ToggleFavorite(userID, itemID string) bool {
-	v := !s.GetUserData(userID, itemID).Favorite
-	s.SetFavorite(userID, itemID, v)
-	return v
+	s.write("toggle favorite", `INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+		VALUES(?, ?, 0, 0, 0, NULL, 1)
+		ON CONFLICT(user_id, item_id) DO UPDATE SET favorite = 1 - user_items.favorite`,
+		userID, itemID)
+	return s.GetUserData(userID, itemID).Favorite
 }
 
 // SetFavorite sets the favourite flag.
@@ -1000,7 +1095,7 @@ func (s *Store) SetFavorite(userID, itemID string, fav bool) {
 	if fav {
 		f = 1
 	}
-	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
+	s.write("save favorite", `INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
 		VALUES(?, ?, 0, 0, 0, NULL, ?)
 		ON CONFLICT(user_id, item_id) DO UPDATE SET favorite = excluded.favorite`,
 		userID, itemID, f)
@@ -1029,6 +1124,9 @@ func (s *Store) Resumable(userID string) map[string]model.Progress {
 		}
 		out[id] = p
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Store: list resumable items: %v", err)
+	}
 	return out
 }
 
@@ -1046,6 +1144,9 @@ func (s *Store) PlayedIDs(userID string) map[string]bool {
 			out[id] = true
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Store: list user item ids: %v", err)
+	}
 	return out
 }
 
@@ -1062,6 +1163,9 @@ func (s *Store) FavoriteIDs(userID string) map[string]bool {
 		if rows.Scan(&id) == nil {
 			out[id] = true
 		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Store: list user item ids: %v", err)
 	}
 	return out
 }
