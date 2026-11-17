@@ -350,9 +350,13 @@ func (m *Manager) start(id, itemID, itemPath string, opts Options) (*Session, er
 	cmd := exec.Command(ff, args...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		// Do not leave an empty session directory behind when the process
+		// could not be started at all.
+		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("Could not start ffmpeg: %w", err)
 	}
 	s.cmd = cmd

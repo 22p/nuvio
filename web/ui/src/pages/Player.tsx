@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Hls from 'hls.js'
 import {
   authorizationHeader,
+  directStreamUrl,
   getConfig,
   getEpisodes,
   getItem,
@@ -536,7 +537,7 @@ export function PlayerPage() {
         startedRef.current = false
         setSource(src)
         setSessionId(info.PlaySessionId)
-        const directPlay = !!(prefs.directPlay && src.SupportsDirectPlay && src.DirectStreamUrl)
+        const directPlay = !!(prefs.directPlay && src.SupportsDirectPlay)
         const useHls = !!src.TranscodingUrl && !directPlay
         setOffset((useHls ? streamStartTicks(src.TranscodingUrl) : req.start) / 10_000_000)
         setDuration(
@@ -578,8 +579,7 @@ export function PlayerPage() {
     video.load()
 
     const useHls =
-      !!source.TranscodingUrl &&
-      !(prefs.directPlay && source.SupportsDirectPlay && source.DirectStreamUrl)
+      !!source.TranscodingUrl && !(prefs.directPlay && source.SupportsDirectPlay)
     setMode(useHls ? 'hls' : 'direct')
 
     const onReady = () => {
@@ -637,8 +637,8 @@ export function PlayerPage() {
     } else if (useHls && source.TranscodingUrl) {
       video.src = source.TranscodingUrl
       video.addEventListener('loadedmetadata', onReady, { once: true })
-    } else if (source.DirectStreamUrl) {
-      video.src = source.DirectStreamUrl
+    } else if (item && source.SupportsDirectPlay) {
+      video.src = directStreamUrl(item.Id, source.Id)
       const start = requestRef.current.start / 10_000_000
       const onMeta = () => {
         window.clearTimeout(stallWatchdog)

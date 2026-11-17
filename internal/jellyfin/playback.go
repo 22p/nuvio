@@ -328,12 +328,6 @@ func (a *API) buildMediaSource(it *model.Item, token string, req *playbackReques
 	src.SupportsDirectStream = direct
 	src.SupportsTranscoding = canTranscode || canRemux
 
-	if direct {
-		src.DirectStreamUrl = fmt.Sprintf("/Videos/%s/stream?static=true&mediaSourceId=%s", it.ID, msid)
-		if token != "" {
-			src.DirectStreamUrl += "&ApiKey=" + url.QueryEscape(token)
-		}
-	}
 	if canTranscode || remux {
 		bitrate := req.MaxStreamingBitrate
 		if bitrate <= 0 {

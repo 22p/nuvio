@@ -303,7 +303,9 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // normalizeID accepts both Jellyfin's hyphenated GUIDs and Nuvio's compact
 // hex ids. Clients serialize UUIDs with dashes, while storage uses md5 hex.
 func normalizeID(id string) string {
-	return strings.ReplaceAll(strings.TrimSpace(id), "-", "")
+	// Trim after removing dashes: an id such as "abc -" would otherwise keep
+	// the whitespace that the dash removal exposes.
+	return strings.TrimSpace(strings.ReplaceAll(id, "-", ""))
 }
 
 func normalizeIDs(ids []string) []string {
@@ -1043,9 +1045,24 @@ func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
 	if len(q.Types) == 0 {
 		q.ExcludeTypes = append(q.ExcludeTypes, model.TypeVideo)
 	}
-	playedIDs := a.Store.PlayedIDs(u.ID)
-	favIDs := a.Store.FavoriteIDs(u.ID)
-	resume := a.Store.Resumable(u.ID)
+	// One query supplies the played, favourite and resume sets. The same
+	// snapshot is reused by the DTO builder below, so a page costs one user
+	// query instead of one per item.
+	uv := a.userState(u, true)
+	userData := uv.loadAll()
+	playedIDs := make(map[string]bool, len(userData))
+	favIDs := make(map[string]bool, len(userData))
+	resume := make(map[string]bool, len(userData))
+	for id, ud := range userData {
+		if ud.Played {
+			playedIDs[id] = true
+		} else if ud.PositionTicks > 0 {
+			resume[id] = true
+		}
+		if ud.Favorite {
+			favIDs[id] = true
+		}
+	}
 	keep := func(it *model.Item) bool {
 		if !canSeeItem(u, it) {
 			return false
@@ -1096,7 +1113,7 @@ func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
 	items, total := a.Catalog.Query(q, keep)
 	out := make([]itemDTO, 0, len(items))
 	for _, it := range items {
-		dto := a.buildItem(it, u.ID, false, "")
+		dto := a.buildItem(it, uv, false, "")
 		if !opts.userData {
 			dto.UserData = nil
 		}
@@ -1148,9 +1165,10 @@ func (a *API) handleSuggestions(w http.ResponseWriter, r *http.Request) {
 	items, total := a.Catalog.Query(q, func(it *model.Item) bool {
 		return canSeeItem(u, it)
 	})
+	uv := a.userState(u, true)
 	out := make([]itemDTO, 0, len(items))
 	for _, it := range items {
-		out = append(out, a.buildItem(it, u.ID, false, ""))
+		out = append(out, a.buildItem(it, uv, false, ""))
 	}
 	if b, ok := boolParam(r, "enableTotalRecordCount"); !ok || !b {
 		total = 0
@@ -1211,16 +1229,11 @@ func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 	start := hls.ParseInt(v.Get("startIndex"), 0)
 	limit := hls.ParseInt(v.Get("limit"), 20)
 	total := len(list)
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total || limit <= 0 {
-		end = total
-	}
+	start, end := catalog.PageBounds(start, limit, total)
+	uv := a.userState(u, true)
 	out := make([]itemDTO, 0, end-start)
 	for _, it := range list[start:end] {
-		out = append(out, a.buildItem(it, u.ID, false, ""))
+		out = append(out, a.buildItem(it, uv, false, ""))
 	}
 	if b, ok := boolParam(r, "enableTotalRecordCount"); ok && !b {
 		total = 0
@@ -1296,9 +1309,10 @@ func (a *API) handleLatest(w http.ResponseWriter, r *http.Request) {
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}
+	uv := a.userState(u, true)
 	out := make([]itemDTO, 0, len(items))
 	for _, it := range items {
-		out = append(out, a.buildItem(it, u.ID, false, ""))
+		out = append(out, a.buildItem(it, uv, false, ""))
 	}
 	writeJSON(w, 200, out)
 }
@@ -1314,7 +1328,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "Item does not exist")
 			return
 		}
-		writeJSON(w, 200, a.buildItem(it, u.ID, true, a.tokenFromRequest(r)))
+		writeJSON(w, 200, a.buildItem(it, a.userState(u, false), true, a.tokenFromRequest(r)))
 		return
 	}
 	// Native clients address library views and the virtual root as items, both
@@ -1335,7 +1349,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if it, ok := a.virtualItem(id); ok {
-		writeJSON(w, 200, a.buildItem(it, u.ID, false, a.tokenFromRequest(r)))
+		writeJSON(w, 200, a.buildItem(it, a.userState(u, false), false, a.tokenFromRequest(r)))
 		return
 	}
 	writeError(w, 404, "Item does not exist")
@@ -1353,12 +1367,13 @@ func (a *API) handleSpecialFeatures(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Item does not exist")
 		return
 	}
+	uv := a.userState(u, true)
 	out := []itemDTO{}
 	for _, child := range a.Catalog.Children(it.ID) {
 		if child.Type != model.TypeVideo {
 			continue
 		}
-		out = append(out, a.buildItem(child, u.ID, false, a.tokenFromRequest(r)))
+		out = append(out, a.buildItem(child, uv, false, a.tokenFromRequest(r)))
 	}
 	writeJSON(w, 200, out)
 }
@@ -1405,9 +1420,10 @@ func (a *API) handleSimilar(w http.ResponseWriter, r *http.Request) {
 	if len(list) > limit {
 		list = list[:limit]
 	}
+	uv := a.userState(u, true)
 	out := make([]itemDTO, 0, len(list))
 	for _, s := range list {
-		out = append(out, a.buildItem(s.it, u.ID, false, ""))
+		out = append(out, a.buildItem(s.it, uv, false, ""))
 	}
 	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: len(out), StartIndex: 0})
 }
@@ -1426,10 +1442,11 @@ func (a *API) handleSeasons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	children := a.Catalog.Children(seriesID)
+	uv := a.userState(u, true)
 	out := make([]itemDTO, 0, len(children))
 	for _, it := range children {
 		if it.Type == model.TypeSeason {
-			out = append(out, a.buildItem(it, u.ID, false, ""))
+			out = append(out, a.buildItem(it, uv, false, ""))
 		}
 	}
 	writeJSON(w, 200, queryResult{Items: out, TotalRecordCount: len(out), StartIndex: 0})
@@ -1451,6 +1468,15 @@ func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 	seasonNumber := hls.ParseInt(v.Get("season"), -1)
 	var eps []*model.Item
 	if seasonID != "" {
+		season, ok := a.Catalog.Get(seasonID)
+		// A season id from another series or library must not expose its
+		// episodes just because the requested series is visible.
+		if !ok || season.Type != model.TypeSeason ||
+			(season.SeriesID != series.ID && season.ParentID != series.ID) ||
+			!canSeeItem(u, season) {
+			writeError(w, 404, "Season not found")
+			return
+		}
 		eps = a.Catalog.Children(seasonID)
 	} else {
 		eps, _ = a.Catalog.Query(catalog.Query{ParentID: seriesID, Recursive: true, Types: []string{model.TypeEpisode}}, nil)
@@ -1476,26 +1502,21 @@ func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 		}
 		return before
 	})
+	uv := a.userState(u, true)
 	filtered := make([]itemDTO, 0, len(eps))
 	for _, it := range eps {
-		if it.Type != model.TypeEpisode {
+		if it.Type != model.TypeEpisode || !canSeeItem(u, it) {
 			continue
 		}
 		if seasonNumber >= 0 && it.SeasonNumber != seasonNumber {
 			continue
 		}
-		filtered = append(filtered, a.buildItem(it, u.ID, false, ""))
+		filtered = append(filtered, a.buildItem(it, uv, false, ""))
 	}
 	start := hls.ParseInt(v.Get("startIndex"), 0)
 	limit := hls.ParseInt(v.Get("limit"), 0)
 	total := len(filtered)
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
+	start, end := catalog.PageBounds(start, limit, total)
 	writeJSON(w, 200, queryResult{Items: filtered[start:end], TotalRecordCount: total, StartIndex: start})
 }
 
@@ -1555,16 +1576,11 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AddedAt.After(out[j].AddedAt) })
 	total := len(out)
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
+	start, end := catalog.PageBounds(start, limit, total)
+	uv := a.userState(u, true)
 	items := make([]itemDTO, 0, end-start)
 	for _, it := range out[start:end] {
-		items = append(items, a.buildItem(it, u.ID, false, ""))
+		items = append(items, a.buildItem(it, uv, false, ""))
 	}
 	writeJSON(w, 200, queryResult{Items: items, TotalRecordCount: total, StartIndex: start})
 }
@@ -1642,7 +1658,7 @@ func (a *API) handlePlayed(played bool) http.HandlerFunc {
 		for _, id := range a.itemAndEpisodes(it) {
 			a.Store.SetPlayed(u.ID, id, played)
 		}
-		writeJSON(w, 200, a.buildUserData(it, u.ID))
+		writeJSON(w, 200, a.buildUserData(it, a.userState(u, false)))
 	}
 }
 
@@ -1676,7 +1692,7 @@ func (a *API) handleFavorite(fav bool) http.HandlerFunc {
 			return
 		}
 		a.Store.SetFavorite(u.ID, it.ID, fav)
-		writeJSON(w, 200, a.buildUserData(it, u.ID))
+		writeJSON(w, 200, a.buildUserData(it, a.userState(u, false)))
 	}
 }
 
@@ -1719,7 +1735,7 @@ func (a *API) handleUserData(w http.ResponseWriter, r *http.Request) {
 			a.Store.SetLastPlayed(u.ID, it.ID, *body.LastPlayedDate)
 		}
 	}
-	writeJSON(w, 200, a.buildUserData(it, u.ID))
+	writeJSON(w, 200, a.buildUserData(it, a.userState(u, false)))
 }
 
 // Playback progress -------------------------------------------------------
@@ -1728,13 +1744,14 @@ type playbackReport struct {
 	ItemId                 string `json:"ItemId"`
 	MediaSourceId          string `json:"MediaSourceId"`
 	PlaySessionId          string `json:"PlaySessionId"`
-	PositionTicks          int64  `json:"PositionTicks"`
+	PositionTicks          *int64 `json:"PositionTicks"`
 	IsPaused               bool   `json:"IsPaused"`
 	IsMuted                bool   `json:"IsMuted"`
 	PlayMethod             string `json:"PlayMethod"`
 	RepeatMode             string `json:"RepeatMode"`
 	VolumeLevel            int    `json:"VolumeLevel"`
 	PlaybackStartTimeTicks int64  `json:"PlaybackStartTimeTicks"`
+	Failed                 bool   `json:"Failed"`
 }
 
 func (a *API) handlePlaying(w http.ResponseWriter, r *http.Request) {
@@ -1778,13 +1795,21 @@ func (a *API) handleStopped(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) applyProgress(userID string, rep playbackReport) {
-	if rep.ItemId == "" {
+	// A failed playback must not overwrite the user's saved position or turn
+	// an unwatched item into a watched one.
+	if rep.ItemId == "" || rep.Failed {
+		return
+	}
+	// Older clients omit PositionTicks from a stop report. Keep the saved
+	// position instead of resetting it to zero.
+	if rep.PositionTicks == nil {
 		return
 	}
 	it, ok := a.Catalog.Get(normalizeID(rep.ItemId))
 	if !ok {
 		return
 	}
+	pos := *rep.PositionTicks
 	dur := int64(0)
 	if it.Media != nil {
 		dur = it.Media.DurationTicks
@@ -1792,8 +1817,8 @@ func (a *API) applyProgress(userID string, rep playbackReport) {
 	if dur == 0 {
 		dur = it.RuntimeTicks
 	}
-	played := dur > 0 && rep.PositionTicks > 0 && rep.PositionTicks >= dur*9/10
-	a.Store.SetProgress(userID, it.ID, rep.PositionTicks, played)
+	played := dur > 0 && pos > 0 && pos >= dur*9/10
+	a.Store.SetProgress(userID, it.ID, pos, played)
 }
 
 func (a *API) handleCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -1813,10 +1838,14 @@ func (a *API) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePing(w http.ResponseWriter, r *http.Request) {
-	if queryValues(r).Get("playSessionId") == "" {
+	playSessionID := queryValues(r).Get("playSessionId")
+	if playSessionID == "" {
 		writeError(w, 400, "playSessionId is required")
 		return
 	}
+	// Clients ping while playback is paused to keep the job alive; without
+	// this the idle janitor suspends a transcode the client still owns.
+	a.HLS.Touch(playSessionID)
 	w.WriteHeader(204)
 }
 

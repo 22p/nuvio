@@ -165,10 +165,17 @@ func (s *Scanner) Scan(ctx context.Context, lib *model.Library) ([]*model.Item, 
 
 	for _, root := range lib.Paths {
 		root = filepath.Clean(root)
-		if st, err := os.Stat(root); err != nil || !st.IsDir() {
-			continue
+		// A library whose storage is unavailable (unmounted NAS, revoked
+		// permission, removed disk) must not look like an empty library: the
+		// caller keeps the previously indexed items when a scan fails.
+		st, err := os.Stat(root)
+		if err != nil {
+			return nil, fmt.Errorf("library path %s is not available: %w", root, err)
 		}
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if !st.IsDir() {
+			return nil, fmt.Errorf("library path %s is not a directory", root)
+		}
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}

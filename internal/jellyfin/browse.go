@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"nuvio/internal/catalog"
 	"nuvio/internal/hls"
 	"nuvio/internal/model"
 )
@@ -169,16 +170,11 @@ func (a *API) handleGenres(w http.ResponseWriter, r *http.Request) {
 	start := hls.ParseInt(v.Get("startIndex"), 0)
 	limit := hls.ParseInt(v.Get("limit"), 0)
 	total := len(list)
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
+	start, end := catalog.PageBounds(start, limit, total)
+	uv := a.userState(u, true)
 	items := make([]itemDTO, 0, end-start)
 	for _, g := range list[start:end] {
-		dto := a.buildItem(genreItem(g.name), u.ID, false, "")
+		dto := a.buildItem(genreItem(g.name), uv, false, "")
 		dto.LocationType = "Virtual"
 		items = append(items, dto)
 	}
@@ -243,16 +239,11 @@ func (a *API) handlePersons(w http.ResponseWriter, r *http.Request) {
 	start := hls.ParseInt(v.Get("startIndex"), 0)
 	limit := hls.ParseInt(v.Get("limit"), 0)
 	total := len(list)
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
+	start, end := catalog.PageBounds(start, limit, total)
+	uv := a.userState(u, true)
 	items := make([]itemDTO, 0, end-start)
 	for _, p := range list[start:end] {
-		dto := a.buildItem(personItem(p.name, p.image), u.ID, false, "")
+		dto := a.buildItem(personItem(p.name, p.image), uv, false, "")
 		dto.LocationType = "Virtual"
 		items = append(items, dto)
 	}

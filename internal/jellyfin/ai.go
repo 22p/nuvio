@@ -71,6 +71,7 @@ func (a *API) handleAILists(w http.ResponseWriter, r *http.Request) {
 		Title string    `json:"title"`
 		Items []itemDTO `json:"items"`
 	}
+	uv := a.userState(u, true)
 	out := []list{}
 	for _, saved := range a.Store.Settings().AILists {
 		items := []itemDTO{}
@@ -79,7 +80,7 @@ func (a *API) handleAILists(w http.ResponseWriter, r *http.Request) {
 			if !ok || !canSeeItem(u, it) {
 				continue
 			}
-			items = append(items, a.buildItem(it, u.ID, false, ""))
+			items = append(items, a.buildItem(it, uv, false, ""))
 		}
 		if len(items) >= 2 {
 			out = append(out, list{Title: saved.Title, Items: items})

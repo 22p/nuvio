@@ -108,13 +108,14 @@ func (a *API) handleAISearch(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(ids, func(i, j int) bool { return scores[ids[i]] > scores[ids[j]] })
 
+	uv := a.userState(u, true)
 	items := make([]itemDTO, 0, limit)
 	for _, id := range ids {
 		it, ok := a.Catalog.Get(id)
 		if !ok || !canSeeItem(u, it) {
 			continue
 		}
-		items = append(items, a.buildItem(it, u.ID, false, ""))
+		items = append(items, a.buildItem(it, uv, false, ""))
 		if len(items) == limit {
 			break
 		}

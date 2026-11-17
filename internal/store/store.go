@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -165,8 +166,15 @@ func Open(dir, defaultServerName string) (*Store, error) {
 			return nil, err
 		}
 	} else if err := json.Unmarshal([]byte(rawSettings), &s.settings); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("parse settings: %w", err)
+		// Corrupt settings must not make the server unbootable: keep the bad
+		// blob for post-mortem under another key and start from defaults.
+		log.Printf("Settings are corrupt, falling back to defaults: %v", err)
+		_ = s.metaSet("settings_corrupt", rawSettings)
+		s.settings = model.DefaultServerSettings(defaultServerName)
+		if err := s.saveSettings(); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	if s.settings.ServerName == "" {
 		s.settings.ServerName = defaultServerName
@@ -786,7 +794,10 @@ func (s *Store) Items() ([]*model.Item, error) {
 		}
 		var it model.Item
 		if err := json.Unmarshal([]byte(raw), &it); err != nil {
-			return nil, fmt.Errorf("parse item: %w", err)
+			// One damaged row must not stop the whole catalog (and with it
+			// the server) from loading; the next scan rewrites it.
+			log.Printf("Skipping unreadable catalog row: %v", err)
+			continue
 		}
 		out = append(out, &it)
 	}
@@ -880,6 +891,35 @@ func (s *Store) GetUserData(userID, itemID string) UserData {
 	return ud
 }
 
+// UserItemData returns every playback row for a user in one query. Listing
+// endpoints use it so a page of N items costs one query instead of N.
+func (s *Store) UserItemData(userID string) map[string]UserData {
+	out := map[string]UserData{}
+	rows, err := s.db.Query(`SELECT item_id, position_ticks, played, play_count, last_played, favorite
+		FROM user_items WHERE user_id = ?`, userID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var ud UserData
+		var played, playCount, favorite int
+		var last sql.NullString
+		if rows.Scan(&id, &ud.PositionTicks, &played, &playCount, &last, &favorite) != nil {
+			continue
+		}
+		ud.Played = played == 1
+		ud.PlayCount = playCount
+		ud.Favorite = favorite == 1
+		if last.Valid {
+			ud.LastPlayed, _ = time.Parse(time.RFC3339Nano, last.String)
+		}
+		out[id] = ud
+	}
+	return out
+}
+
 // SetPlayed marks an item watched/unwatched.
 func (s *Store) SetPlayed(userID, itemID string, played bool) {
 	playedInt := 0
@@ -934,14 +974,14 @@ func (s *Store) SetProgress(userID, itemID string, positionTicks int64, played b
 		initialCount = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// A progress report can mark an item watched once it passes the threshold,
+	// but it must never clear an explicit watched flag. Un-watching is a user
+	// decision and only SetPlayed(false) clears it.
 	_, _ = s.db.Exec(`INSERT INTO user_items(user_id, item_id, position_ticks, played, play_count, last_played, favorite)
 		VALUES(?, ?, ?, ?, ?, ?, 0)
 		ON CONFLICT(user_id, item_id) DO UPDATE SET
 			position_ticks = excluded.position_ticks,
-			played = CASE
-				WHEN excluded.played = 1 THEN 1
-				WHEN excluded.position_ticks > 0 THEN 0
-				ELSE user_items.played END,
+			played = CASE WHEN excluded.played = 1 THEN 1 ELSE user_items.played END,
 			play_count = user_items.play_count + CASE WHEN excluded.played = 1 AND user_items.played = 0 THEN 1 ELSE 0 END,
 			last_played = excluded.last_played`,
 		userID, itemID, positionTicks, playedInt, initialCount, now)

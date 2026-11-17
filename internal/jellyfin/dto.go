@@ -10,7 +10,44 @@ import (
 	"time"
 
 	"nuvio/internal/model"
+	"nuvio/internal/store"
 )
+
+// userState resolves per-item playback state for one request. In bulk mode the
+// first lookup loads every row for the user, so listing 20 items costs one
+// query instead of 20 against the single SQLite connection.
+type userState struct {
+	a      *API
+	user   *model.User
+	userID string
+	bulk   bool
+	cache  map[string]store.UserData
+}
+
+func (a *API) userState(u *model.User, bulk bool) *userState {
+	if u == nil {
+		return &userState{a: a}
+	}
+	return &userState{a: a, user: u, userID: u.ID, bulk: bulk}
+}
+
+func (s *userState) get(itemID string) store.UserData {
+	if s == nil || s.userID == "" {
+		return store.UserData{}
+	}
+	if !s.bulk {
+		return s.a.Store.GetUserData(s.userID, itemID)
+	}
+	return s.loadAll()[itemID]
+}
+
+// loadAll returns every playback row for the user, loading them on first use.
+func (s *userState) loadAll() map[string]store.UserData {
+	if s.cache == nil {
+		s.cache = s.a.Store.UserItemData(s.userID)
+	}
+	return s.cache
+}
 
 // User DTO ---------------------------------------------------------------
 
@@ -38,7 +75,6 @@ type userPolicy struct {
 	EnableContentDeletionFromFolders []string `json:"EnableContentDeletionFromFolders"`
 	EnableSyncTranscoding            bool     `json:"EnableSyncTranscoding"`
 	EnableSubtitleManagement         bool     `json:"EnableSubtitleManagement"`
-	EnableSubtitleDownloading        bool     `json:"EnableSubtitleDownloading"`
 	EnableLyricManagement            bool     `json:"EnableLyricManagement"`
 	EnableUserPreferenceAccess       bool     `json:"EnableUserPreferenceAccess"`
 	EnableAllDevices                 bool     `json:"EnableAllDevices"`
@@ -120,7 +156,6 @@ func buildUserDTO(u *model.User, serverID, serverName string) userDTO {
 		EnableContentDeletionFromFolders: []string{},
 		EnableSyncTranscoding:            false,
 		EnableSubtitleManagement:         true,
-		EnableSubtitleDownloading:        true,
 		EnableLyricManagement:            false,
 		EnableUserPreferenceAccess:       true,
 		EnableAllDevices:                 true,
@@ -271,7 +306,6 @@ type mediaSourceDTO struct {
 	Bitrate                    int64            `json:"Bitrate,omitempty"`
 	DefaultAudioStreamIndex    int              `json:"DefaultAudioStreamIndex,omitempty"`
 	DefaultSubtitleStreamIndex int              `json:"DefaultSubtitleStreamIndex"`
-	DirectStreamUrl            string           `json:"DirectStreamUrl,omitempty"`
 	TranscodingUrl             string           `json:"TranscodingUrl,omitempty"`
 	TranscodingSubProtocol     string           `json:"TranscodingSubProtocol"`
 	TranscodingContainer       string           `json:"TranscodingContainer,omitempty"`
@@ -369,7 +403,7 @@ func personID(name string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token string) itemDTO {
+func (a *API) buildItem(it *model.Item, us *userState, includeMedia bool, token string) itemDTO {
 	childIDs := a.Catalog.Children(it.ID)
 	isFolder := it.Type == model.TypeSeries || it.Type == model.TypeSeason
 	dto := itemDTO{
@@ -402,7 +436,7 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 		BackdropImageTags:       []string{},
 		ParentBackdropImageTags: []string{},
 		LocationType:            "FileSystem",
-		UserData:                a.buildUserData(it, userID),
+		UserData:                a.buildUserData(it, us),
 		ExtraType:               it.ExtraType,
 	}
 	if it.TMDBID > 0 || it.IMDBID != "" {
@@ -490,8 +524,8 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 	}
 	if includeMedia && it.Media != nil {
 		var viewer *model.User
-		if userID != "" {
-			viewer, _ = a.Store.FindUser(userID)
+		if us != nil {
+			viewer = us.user
 		}
 		src := a.buildMediaSource(it, token, nil, "", viewer)
 		dto.MediaSources = []mediaSourceDTO{src}
@@ -500,11 +534,11 @@ func (a *API) buildItem(it *model.Item, userID string, includeMedia bool, token 
 	return dto
 }
 
-func (a *API) buildUserData(it *model.Item, userID string) *userItemData {
-	if userID == "" {
+func (a *API) buildUserData(it *model.Item, us *userState) *userItemData {
+	if us == nil || us.userID == "" {
 		return &userItemData{ItemId: it.ID, Key: it.ID}
 	}
-	ud := a.Store.GetUserData(userID, it.ID)
+	ud := us.get(it.ID)
 	out := &userItemData{
 		ItemId:                it.ID,
 		PlaybackPositionTicks: ud.PositionTicks,
@@ -539,7 +573,7 @@ func (a *API) buildUserData(it *model.Item, userID string) *userItemData {
 			}
 			for _, ep := range eps {
 				total++
-				if a.Store.GetUserData(userID, ep.ID).Played {
+				if us.get(ep.ID).Played {
 					played++
 				}
 			}

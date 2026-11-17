@@ -42,7 +42,6 @@ export interface MediaSource {
   SupportsDirectPlay?: boolean
   SupportsDirectStream?: boolean
   SupportsTranscoding?: boolean
-  DirectStreamUrl?: string
   TranscodingUrl?: string
   MediaStreams?: MediaStream[]
 }

@@ -100,11 +100,22 @@ func TestProgressStateMachine(t *testing.T) {
 	if !ud.Played || ud.PositionTicks != 0 || ud.PlayCount != 1 {
 		t.Fatalf("finished state: %+v", ud)
 	}
-	// Re-watching must make it resumable again without losing play count.
+	// A progress report must never clear the explicit watched flag; only
+	// SetPlayed(false) does that.
+	s.SetProgress(u.ID, "m", 1_000_000, false)
+	ud = s.GetUserData(u.ID, "m")
+	if !ud.Played || ud.PositionTicks != 1_000_000 || ud.PlayCount != 1 {
+		t.Fatalf("progress report cleared played: %+v", ud)
+	}
+	if _, ok := s.Resumable(u.ID)["m"]; ok {
+		t.Fatal("played item must not be resumable")
+	}
+	// Un-watching explicitly clears the flag and progress can resume again.
+	s.SetPlayed(u.ID, "m", false)
 	s.SetProgress(u.ID, "m", 1_000_000, false)
 	ud = s.GetUserData(u.ID, "m")
 	if ud.Played || ud.PositionTicks != 1_000_000 || ud.PlayCount != 1 {
-		t.Fatalf("rewatch state: %+v", ud)
+		t.Fatalf("unwatch state: %+v", ud)
 	}
 	if _, ok := s.Resumable(u.ID)["m"]; !ok {
 		t.Fatal("resumable item missing")

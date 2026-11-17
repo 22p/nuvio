@@ -15,11 +15,12 @@ import (
 
 	"nuvio/internal/catalog"
 	"nuvio/internal/demo"
+	"nuvio/internal/hls"
 	"nuvio/internal/model"
 	"nuvio/internal/store"
 )
 
-func newTestAPI(t *testing.T) (*API, http.Handler) {
+func newTestAPI(t testing.TB) (*API, http.Handler) {
 	t.Helper()
 	st, err := store.Open(t.TempDir(), "Test")
 	if err != nil {
@@ -34,7 +35,7 @@ func newTestAPI(t *testing.T) (*API, http.Handler) {
 	return a, mux
 }
 
-func testUser(t *testing.T, a *API) (*model.User, string) {
+func testUser(t testing.TB, a *API) (*model.User, string) {
 	t.Helper()
 	u, err := a.Store.CreateUser("alice", "secret", false)
 	if err != nil {
@@ -1116,6 +1117,158 @@ func TestPlaybackStreamCopyFlags(t *testing.T) {
 	plan, ok := planRemux(it, &playbackRequest{AllowAudioStreamCopy: &no})
 	if !ok || plan.AudioCopy {
 		t.Fatalf("audio stream copy disabled: %+v ok=%v", plan, ok)
+	}
+}
+
+// A progress report may mark an item watched, but it must not clear a flag the
+// user set explicitly with POST /UserPlayedItems.
+func TestProgressReportKeepsExplicitPlayedFlag(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	var id string
+	for _, it := range a.Catalog.All() {
+		if it.Type == model.TypeMovie {
+			id = it.ID
+			break
+		}
+	}
+	if id == "" {
+		t.Fatal("demo catalog has no movie")
+	}
+	a.Store.SetPlayed(u.ID, id, true)
+
+	body := `{"ItemId":"` + id + `","PositionTicks":1000000,"IsPaused":false}`
+	req := httptest.NewRequest(http.MethodPost, "/Sessions/Playing/Progress", strings.NewReader(body))
+	setToken(req, tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ud := a.Store.GetUserData(u.ID, id); !ud.Played {
+		t.Fatal("progress report cleared the explicit played flag")
+	}
+}
+
+// Jellyfin 12's MediaSourceInfo has no DirectStreamUrl; clients build the
+// static stream address from the source id themselves.
+func TestPlaybackInfoOmitsLegacyDirectStreamUrl(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	var id string
+	for _, it := range a.Catalog.All() {
+		if it.Type == model.TypeMovie && it.Media != nil {
+			id = it.ID
+			break
+		}
+	}
+	if id == "" {
+		t.Skip("demo catalog has no playable movie")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/Items/"+id+"/PlaybackInfo?userId="+u.ID, strings.NewReader("{}"))
+	setToken(req, tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "DirectStreamUrl") {
+		t.Fatal("PlaybackInfo still contains the removed DirectStreamUrl field")
+	}
+	if !strings.Contains(rec.Body.String(), "SupportsDirectPlay") {
+		t.Fatal("PlaybackInfo is missing SupportsDirectPlay")
+	}
+}
+
+// A stop report without PositionTicks must keep the saved resume point.
+func TestStoppedWithoutPositionKeepsProgress(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	a.HLS = hls.New(t.TempDir(), func() string { return "" })
+	var id string
+	for _, it := range a.Catalog.All() {
+		if it.Type == model.TypeMovie {
+			id = it.ID
+			break
+		}
+	}
+	if id == "" {
+		t.Fatal("demo catalog has no movie")
+	}
+	a.Store.SetProgress(u.ID, id, 5_000_000, false)
+
+	body := "{\"ItemId\":\"" + id + "\"}"
+	req := httptest.NewRequest(http.MethodPost, "/Sessions/Playing/Stopped", strings.NewReader(body))
+	setToken(req, tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ud := a.Store.GetUserData(u.ID, id); ud.PositionTicks != 5_000_000 {
+		t.Fatalf("stop without PositionTicks cleared progress: %+v", ud)
+	}
+}
+
+// A season id from a library the caller cannot see must not leak episodes
+// through a visible series.
+func TestEpisodesRejectsForeignSeason(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	if err := a.Store.UpdateUserPolicy(u.ID, []string{demo.MovieLibraryID}, true, true); err != nil {
+		t.Fatal(err)
+	}
+	items := append([]*model.Item{}, demo.Items()...)
+	items = append(items, &model.Item{ID: "seriesvisible", Type: model.TypeSeries, Name: "Visible", LibraryID: demo.MovieLibraryID})
+	a.Catalog.Replace(demo.Libraries(), items)
+
+	var seasonID string
+	for _, it := range a.Catalog.All() {
+		if it.Type == model.TypeSeason && it.LibraryID == demo.ShowLibraryID {
+			seasonID = it.ID
+			break
+		}
+	}
+	if seasonID == "" {
+		t.Skip("demo catalog has no season")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/Shows/seriesvisible/Episodes?seasonId="+seasonID+"&userId="+u.ID, nil)
+	setToken(req, tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The ownership check must not reject a season that really belongs to the
+// requested series.
+func TestEpisodesAcceptsOwnSeason(t *testing.T) {
+	a, h := newTestAPI(t)
+	u, tok := testUser(t, a)
+	var seasonID, seriesID string
+	for _, it := range a.Catalog.All() {
+		if it.Type == model.TypeSeason {
+			seasonID, seriesID = it.ID, it.SeriesID
+			break
+		}
+	}
+	if seasonID == "" || seriesID == "" {
+		t.Skip("demo catalog has no season")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/Shows/"+seriesID+"/Episodes?seasonId="+seasonID+"&userId="+u.ID, nil)
+	setToken(req, tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var out queryResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Items) == 0 {
+		t.Fatal("own season returned no episodes")
 	}
 }
 

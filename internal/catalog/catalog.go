@@ -19,28 +19,37 @@ type View struct {
 
 // Catalog is a concurrency-safe index over all scanned items.
 type Catalog struct {
-	mu        sync.RWMutex
-	items     map[string]*model.Item
-	children  map[string][]string
-	views     []*model.Library
-	scanning  bool
-	lastScan  time.Time
-	lastError string
-	scanned   int
+	mu         sync.RWMutex
+	items      map[string]*model.Item
+	children   map[string][]string
+	lowerNames map[string]string
+	views      []*model.Library
+	scanning   bool
+	lastScan   time.Time
+	lastError  string
+	scanned    int
 }
 
 // New creates an empty catalog.
 func New() *Catalog {
-	return &Catalog{items: map[string]*model.Item{}, children: map[string][]string{}}
+	return &Catalog{
+		items:      map[string]*model.Item{},
+		children:   map[string][]string{},
+		lowerNames: map[string]string{},
+	}
 }
 
 // Replace swaps the whole catalog after a scan.
 func (c *Catalog) Replace(views []*model.Library, items []*model.Item) {
 	byID := make(map[string]*model.Item, len(items))
 	children := map[string][]string{}
+	// Precompute the case-folded sort name once per scan; Query then sorts
+	// without allocating on every comparison.
+	lowerNames := make(map[string]string, len(items))
 	for _, it := range items {
 		byID[it.ID] = it
 		children[it.ParentID] = append(children[it.ParentID], it.ID)
+		lowerNames[it.ID] = strings.ToLower(it.SortName)
 	}
 	for parent := range children {
 		ids := children[parent]
@@ -54,12 +63,13 @@ func (c *Catalog) Replace(views []*model.Library, items []*model.Item) {
 					return a.EpisodeNumber < b.EpisodeNumber
 				}
 			}
-			return strings.ToLower(a.SortName) < strings.ToLower(b.SortName)
+			return lowerNames[ids[i]] < lowerNames[ids[j]]
 		})
 	}
 	c.mu.Lock()
 	c.items = byID
 	c.children = children
+	c.lowerNames = lowerNames
 	c.views = views
 	c.scanned = len(items)
 	c.lastScan = time.Now()
@@ -243,22 +253,26 @@ func (c *Catalog) Query(q Query, keep func(*model.Item) bool) ([]*model.Item, in
 		}
 		matched = append(matched, it)
 	}
-	sortItems(matched, q.SortBy, q.Desc)
+	sortItems(matched, q.SortBy, q.Desc, c.lowerNames)
 	total := len(matched)
-	start, end := q.Start, q.Start+q.Limit
-	if start > total {
-		start = total
-	}
-	if q.Limit <= 0 {
-		end = total
-	}
-	if end > total {
-		end = total
-	}
+	start, end := PageBounds(q.Start, q.Limit, total)
+	return matched[start:end], total
+}
+
+// PageBounds maps a client supplied start/limit pair onto [0,total]. Negative
+// starts are treated as zero, a limit of zero or less means "to the end", and
+// the arithmetic avoids start+limit overflowing for extreme query values.
+func PageBounds(start, limit, total int) (int, int) {
 	if start < 0 {
 		start = 0
 	}
-	return matched[start:end], total
+	if start > total {
+		start = total
+	}
+	if limit <= 0 || limit > total-start {
+		return start, total
+	}
+	return start, start + limit
 }
 
 func (c *Catalog) candidatesLocked(q Query) []*model.Item {
@@ -329,26 +343,40 @@ func matchSearch(it *model.Item, term string) bool {
 	return false
 }
 
-func sortItems(items []*model.Item, sortBy string, desc bool) {
-	less := func(i, j int) bool { return strings.ToLower(items[i].SortName) < strings.ToLower(items[j].SortName) }
+func sortItems(items []*model.Item, sortBy string, desc bool, lower map[string]string) {
+	order := func(less func(i, j int) bool) {
+		sort.SliceStable(items, func(i, j int) bool {
+			if desc {
+				return less(j, i)
+			}
+			return less(i, j)
+		})
+	}
 	switch strings.ToLower(sortBy) {
 	case "datecreated", "datelastcontentadded", "premieredate":
-		less = func(i, j int) bool { return items[i].AddedAt.Before(items[j].AddedAt) }
+		order(func(i, j int) bool { return items[i].AddedAt.Before(items[j].AddedAt) })
 	case "communityrating":
-		less = func(i, j int) bool { return items[i].Rating < items[j].Rating }
+		order(func(i, j int) bool { return items[i].Rating < items[j].Rating })
 	case "productionyear":
-		less = func(i, j int) bool { return items[i].Year < items[j].Year }
+		order(func(i, j int) bool { return items[i].Year < items[j].Year })
 	case "runtime":
-		less = func(i, j int) bool { return items[i].RuntimeTicks < items[j].RuntimeTicks }
+		order(func(i, j int) bool { return items[i].RuntimeTicks < items[j].RuntimeTicks })
 	case "random":
-		less = func(i, j int) bool { return items[i].ID < items[j].ID }
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if desc {
-			return less(j, i)
+		order(func(i, j int) bool { return items[i].ID < items[j].ID })
+	default:
+		// Resolve each key once into a positionally aligned slice. Both map
+		// lookups inside the comparator and sorting large structs via
+		// reflect's swapper measured several times slower than this.
+		keys := make([]string, len(items))
+		for i, it := range items {
+			k, ok := lower[it.ID]
+			if !ok {
+				k = strings.ToLower(it.SortName)
+			}
+			keys[i] = k
 		}
-		return less(i, j)
-	})
+		order(func(i, j int) bool { return keys[i] < keys[j] })
+	}
 }
 
 // All returns every item (used by admin statistics).

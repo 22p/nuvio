@@ -69,12 +69,13 @@ Authorization: MediaBrowser Token="<token>"
 - 容器、大小、码率、时长
 - 视频 / 音频 / 字幕流
 - `SupportsDirectPlay`、`SupportsDirectStream`、`SupportsTranscoding`
-- 直连时的 `DirectStreamUrl`
 - 需要转码/转封装时的 `TranscodingUrl`
+
+Jellyfin 12.4 的 `MediaSourceInfo` 没有 `DirectStreamUrl`；直连地址由客户端根据 `Id` 拼接成 `/Videos/{id}/stream?static=true&mediaSourceId=...`。
 
 服务端按客户端提交的 `DeviceProfile` 决定直连、转封装或转码，见 [播放与转码](playback.md)。
 
-`/Videos/{id}/stream` 现在要求 token：`DirectStreamUrl` 已经带上 `ApiKey`，客户端也可以使用 `Authorization`。把裸 URL 交给系统播放器、又不保留 query token 的客户端会收到 401；这是为了提高权限模型而接受的兼容性代价。
+`/Videos/{id}/stream` 要求 token：客户端需要在 URL 里带 `ApiKey`，或改用 `Authorization` 头。把裸 URL 交给系统播放器、又不保留 query token 的客户端会收到 401；这是为了提高权限模型而接受的兼容性代价。
 
 `/Videos/{id}/master.m3u8` 和字幕仍然需要鉴权。
 
@@ -87,7 +88,7 @@ Authorization: MediaBrowser Token="<token>"
 - 条目 `CanDownload = false`
 - 没有 `/Items/{id}/Download` 路由
 
-字幕文件仍然可以下载（`EnableSubtitleDownloading = true`），它们通过标准的字幕流地址提供。
+字幕仍通过标准的字幕流地址提供。Jellyfin 12.4 的用户策略里已经移除 `EnableSubtitleDownloading`，不再用策略位控制字幕下载入口。
 
 如果某个客户端自己忽略这些标志、仍然调用下载接口，会得到 404。
 

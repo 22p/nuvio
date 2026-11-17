@@ -80,11 +80,14 @@ func (a *API) handleImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported image type", http.StatusNotFound)
 		return
 	}
-	// Nuvio stores a single image per type, so any index above zero does not
-	// exist.
-	if hls.ParseInt(r.PathValue("imageIndex"), 0) > 0 {
-		http.Error(w, "image not found", http.StatusNotFound)
-		return
+	// Nuvio stores a single image per type, so only index 0 exists. Negative
+	// and non-numeric indexes must not silently serve the primary image.
+	if raw := r.PathValue("imageIndex"); raw != "" {
+		idx, err := strconv.Atoi(raw)
+		if err != nil || idx != 0 {
+			http.Error(w, "image not found", http.StatusNotFound)
+			return
+		}
 	}
 	etag := `"` + imageTag(it, kind) + `"`
 	if r.Header.Get("If-None-Match") == etag {

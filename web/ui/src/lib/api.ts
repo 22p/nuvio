@@ -288,6 +288,17 @@ export function getPlaybackInfo(itemId: string, userId: string, opts: PlaybackOp
   })
 }
 
+// MediaSourceInfo has no DirectStreamUrl in Jellyfin 12, so clients build the
+// static stream address themselves. The token goes in the query string because
+// a <video> element cannot attach the Authorization header.
+export function directStreamUrl(itemId: string, mediaSourceId?: string): string {
+  const params = new URLSearchParams({ static: 'true' })
+  if (mediaSourceId) params.set('mediaSourceId', mediaSourceId)
+  const token = getToken()
+  if (token) params.set('ApiKey', token)
+  return `/Videos/${itemId}/stream?${params.toString()}`
+}
+
 export interface PlaybackReport {
   ItemId: string
   MediaSourceId?: string
