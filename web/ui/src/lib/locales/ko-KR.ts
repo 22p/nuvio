@@ -132,6 +132,7 @@ export const koKR: Record<string, string> = {
   'Your library is empty': '라이브러리가 비어 있습니다',
   'Font size': '글자 크기',
   'Subtitles': '자막',
+  'Seek': '탐색',
   'Subtitle delay': '자막 지연',
   'Reset': '초기화',
   'Subtitles load separately as WebVTT; video is not re-encoded.': '자막은 WebVTT로 별도 로드되며 영상은 다시 인코딩하지 않습니다.',

@@ -401,7 +401,7 @@ export function DetailPage() {
                 <div className="cast-card" key={`${p.Id || p.Name}-${i}`}>
                   <div className="cast-avatar">
                     <span>{initials(p.Name)}</span>
-                    {p.Id && (
+                    {p.Id && p.PrimaryImageTag && (
                       <img
                         src={imageUrl(p.Id, 'Primary', 185, p.PrimaryImageTag)}
                         alt=""

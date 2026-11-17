@@ -1,5 +1,14 @@
 import { t } from '../lib/i18n'
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Hls from 'hls.js'
 import {
@@ -308,6 +317,7 @@ export function PlayerPage() {
   const [buffering, setBuffering] = useState(false)
   const [needsGesture, setNeedsGesture] = useState(false)
   const [error, setError] = useState('')
+  const [subtitleError, setSubtitleError] = useState('')
   const [ended, setEnded] = useState(false)
   const [nextEpisode, setNextEpisode] = useState<JFItem | null>(null)
   const [countdown, setCountdown] = useState(0)
@@ -494,6 +504,7 @@ export function PlayerPage() {
         const audio = pickAudio(srcMeta?.MediaStreams || [], prefs.audioLang)
         setAudioIndex(audio)
         setSubChoice('auto')
+        setSubtitleError('')
         setEnded(false)
         setNextEpisode(null)
         startedRef.current = false
@@ -927,7 +938,10 @@ export function PlayerPage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
-      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return
+      const tag = el?.tagName || ''
+      if (el?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tag)) return
+      // Space and Enter belong to the focused control; other shortcuts still work.
+      if (/^(BUTTON|A)$/.test(tag) && (e.key === ' ' || e.key === 'Enter')) return
       const video = videoRef.current
       if (!video) return
       const s = stateRef.current
@@ -1132,6 +1146,7 @@ export function PlayerPage() {
     const stream = activeSubtitleStream
     if (!stream || !item) return
     setTranslating(true)
+    setSubtitleError('')
     try {
       const res = await translateSubtitle(item.Id, stream.Index, aiTargetLang)
       const track: MediaStream = {
@@ -1146,7 +1161,7 @@ export function PlayerPage() {
       setExtraSubs((prev) => [...prev.filter((t) => t.Index !== track.Index), track])
       setSubChoice(res.index)
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("Subtitle translation failed"))
+      setSubtitleError(err instanceof Error ? err.message : t("Subtitle translation failed"))
     } finally {
       setTranslating(false)
     }
@@ -1162,6 +1177,30 @@ export function PlayerPage() {
   const seekRatio = (clientX: number, el: HTMLElement): number => {
     const rect = el.getBoundingClientRect()
     return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+  }
+
+  const onTimelineKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 60 : 10
+    let target = currentPosition()
+    switch (e.key) {
+      case 'ArrowRight':
+        target += step
+        break
+      case 'ArrowLeft':
+        target -= step
+        break
+      case 'Home':
+        target = 0
+        break
+      case 'End':
+        target = duration || 0
+        break
+      default:
+        return
+    }
+    e.preventDefault()
+    e.stopPropagation()
+    seek(target)
   }
 
   const onTimelineDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -1366,6 +1405,15 @@ export function PlayerPage() {
         <div className="timeline-wrap">
           <div
             className="timeline"
+            role="slider"
+            aria-label={t("Seek")}
+            aria-orientation="horizontal"
+            aria-valuemin={0}
+            aria-valuemax={Math.max(0, Math.round(duration))}
+            aria-valuenow={Math.max(0, Math.round(displayCurrent))}
+            aria-valuetext={`${formatTime(displayCurrent)} / ${duration ? formatTime(duration) : '--:--'}`}
+            tabIndex={0}
+            onKeyDown={onTimelineKeyDown}
             onPointerDown={onTimelineDown}
             onPointerMove={onTimelineMove}
             onPointerUp={onTimelineUp}
@@ -1424,7 +1472,10 @@ export function PlayerPage() {
           <div className="controls-right">
             <button
               className={`control-button ${activeSubtitle != null ? 'is-active' : ''}`}
-              onClick={() => setMenu(menu === 'subs' ? null : 'subs')}
+              onClick={() => {
+                setSubtitleError('')
+                setMenu(menu === 'subs' ? null : 'subs')
+              }}
               aria-label={t("Subtitles")}
             >
               <IconSubtitles size={21} />
@@ -1518,6 +1569,11 @@ export function PlayerPage() {
               >
                 {translating ? t("Translating…") : t("Translate subtitles with AI")}
               </button>
+            </div>
+          )}
+          {subtitleError && (
+            <div className="form-error" style={{ margin: '10px 11px 0' }}>
+              {subtitleError}
             </div>
           )}
 

@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
 import { zhCN } from './locales/zh-CN'
 import { zhTW } from './locales/zh-TW'
 import { jaJP } from './locales/ja-JP'
@@ -107,12 +107,10 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     [lang],
   )
 
-  // Remount the tree so every rendered string is recomputed for the locale.
-  return (
-    <I18nContext.Provider value={value}>
-      <Fragment key={lang}>{children}</Fragment>
-    </I18nContext.Provider>
-  )
+  // App subscribes through useI18n, so a language change re-renders the
+  // route tree in place. Remounting here used to drop auth state, forms and
+  // playback just to refresh the strings.
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }
 
 export function useI18n(): I18nValue {

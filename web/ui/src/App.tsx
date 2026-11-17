@@ -1,4 +1,4 @@
-import { t } from './lib/i18n'
+import { t, useI18n } from './lib/i18n'
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { useAuth } from './lib/auth'
@@ -20,6 +20,9 @@ const PlayerPage = lazy(() =>
 )
 
 export default function App() {
+  // Subscribe to the locale so the whole route tree re-renders with the new
+  // catalogue; state inside pages is preserved.
+  useI18n()
   const { ready, config, configError, session, refreshConfig } = useAuth()
 
   if (!ready) return <Splash />

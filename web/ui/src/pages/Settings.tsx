@@ -1048,6 +1048,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
             <label className="field">
               <span>TMDb API Key</span>
               <input
+                type="password"
                 value={tmdbApiKey}
                 onChange={(e) => setTmdbApiKey(e.target.value)}
                 placeholder={t("Enter your v3 API key")}

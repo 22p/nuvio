@@ -3160,6 +3160,11 @@ select option:disabled {
   display: flex;
   align-items: center;
 }
+.timeline:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
 .timeline-track {
   position: relative;
   width: 100%;
