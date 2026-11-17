@@ -269,7 +269,6 @@ export const zhTW: Record<string, string> = {
   'Username': '使用者名稱',
   'User created. They can now sign in from a Jellyfin client.': '使用者已建立，可在 Jellyfin 用戶端登入',
   'Movies': '電影',
-  'Picture in picture': '子母畫面',
   'Quality': '畫質',
   'Video': '畫面',
   'Something went wrong': '介面出現了問題',

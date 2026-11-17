@@ -269,7 +269,6 @@ export const zhCN: Record<string, string> = {
   'Username': '用户名',
   'User created. They can now sign in from a Jellyfin client.': '用户已创建，可在 Jellyfin 客户端登录',
   'Movies': '电影',
-  'Picture in picture': '画中画',
   'Quality': '画质',
   'Video': '画面',
   'Something went wrong': '界面出现了问题',

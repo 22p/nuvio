@@ -33,7 +33,6 @@ import {
   IconMute,
   IconNext,
   IconPause,
-  IconPip,
   IconPlay,
   IconSettings,
   IconSubtitles,
@@ -1129,17 +1128,6 @@ export function PlayerPage() {
     return () => document.removeEventListener('fullscreenchange', onFs)
   }, [])
 
-  const togglePip = async () => {
-    const video = videoRef.current
-    if (!video) return
-    try {
-      if (document.pictureInPictureElement) await document.exitPictureInPicture()
-      else await video.requestPictureInPicture()
-    } catch {
-      /* unsupported */
-    }
-  }
-
   const translateActiveSubtitle = async () => {
     const stream = activeSubtitleStream
     if (!stream || !item) return
@@ -1254,6 +1242,7 @@ export function PlayerPage() {
         ref={videoRef}
         className="player-video"
         playsInline
+        disablePictureInPicture
         onClick={(e) => {
           if (e.detail === 1) togglePlay()
         }}
@@ -1469,9 +1458,6 @@ export function PlayerPage() {
               aria-label={t("Playback settings")}
             >
               <IconSettings size={21} />
-            </button>
-            <button className="control-button hide-sm" onClick={togglePip} aria-label={t("Picture in picture")}>
-              <IconPip size={21} />
             </button>
             <button className="control-button" onClick={toggleFullscreen} aria-label={t("Fullscreen")}>
               {fullscreen ? <IconExitFullscreen size={21} /> : <IconFullscreen size={21} />}

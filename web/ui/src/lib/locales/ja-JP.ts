@@ -269,7 +269,6 @@ export const jaJP: Record<string, string> = {
   'Username': 'ユーザー名',
   'User created. They can now sign in from a Jellyfin client.': 'ユーザーを作成しました。Jellyfinクライアントでログインできます。',
   'Movies': '映画',
-  'Picture in picture': 'ピクチャーインピクチャー',
   'Quality': '画質',
   'Video': '画面',
   'Something went wrong': '画面で問題が発生しました',

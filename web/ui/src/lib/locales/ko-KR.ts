@@ -269,7 +269,6 @@ export const koKR: Record<string, string> = {
   'Username': '사용자 이름',
   'User created. They can now sign in from a Jellyfin client.': '사용자가 생성되었습니다. Jellyfin 클라이언트에서 로그인할 수 있습니다.',
   'Movies': '영화',
-  'Picture in picture': '화면 속 화면',
   'Quality': '화질',
   'Video': '화면',
   'Something went wrong': '화면에 문제가 발생했습니다',

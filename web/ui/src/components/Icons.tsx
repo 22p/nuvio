@@ -158,15 +158,6 @@ export function IconExitFullscreen({ size = 22, className }: IconProps) {
   )
 }
 
-export function IconPip({ size = 22, className }: IconProps) {
-  return (
-    <svg {...base(size)} className={className}>
-      <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
-      <rect x="12" y="11" width="7" height="6" rx="1.2" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
 export function IconNext({ size = 22, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
