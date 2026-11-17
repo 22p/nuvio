@@ -139,6 +139,149 @@ CREATE TABLE IF NOT EXISTS display_preferences (
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
 `
 
+// baselineVersion is the schema version produced by the schema constant above.
+// The baseline is frozen: every later schema change must be added as a
+// migration so fresh databases (baseline plus migrations) and upgraded ones
+// (baseline recorded in user_version plus the same migrations) converge on an
+// identical shape.
+const baselineVersion = 1
+
+// migration is one schema upgrade. Versions must increase by exactly one and
+// every statement runs in the same transaction as the user_version bump, so a
+// failed step leaves the database at the previous version.
+type migration struct {
+	version int
+	name    string
+	stmts   []string
+}
+
+// migrations lists upgrades applied after the baseline, oldest first. Add an
+// entry when the schema changes; never edit or reorder an applied one.
+//
+// Example:
+//
+//	var migrations = []migration{
+//		{version: 2, name: "add users.preferred_language", stmts: []string{
+//			"ALTER TABLE users ADD COLUMN preferred_language TEXT NOT NULL DEFAULT ''",
+//		}},
+//	}
+var migrations = []migration{}
+
+// latestVersion returns the schema version this build produces.
+func latestVersion() int {
+	if len(migrations) == 0 {
+		return baselineVersion
+	}
+	return migrations[len(migrations)-1].version
+}
+
+// execQuerier is satisfied by both *sql.DB and *sql.Tx.
+type execQuerier interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func readSchemaVersion(q execQuerier) (int, error) {
+	var v int
+	if err := q.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
+	}
+	return v, nil
+}
+
+func writeSchemaVersion(e execQuerier, v int) error {
+	// PRAGMA does not accept bound parameters; v is an int chosen by this
+	// package, never user input.
+	if _, err := e.Exec(fmt.Sprintf("PRAGMA user_version = %d", v)); err != nil {
+		return fmt.Errorf("set schema version %d: %w", v, err)
+	}
+	return nil
+}
+
+// setupSchema creates the baseline and applies pending migrations. Databases
+// written before user_version existed report 0 and are stamped with
+// baselineVersion after the idempotent baseline has been ensured.
+func setupSchema(db *sql.DB) error {
+	version, err := readSchemaVersion(db)
+	if err != nil {
+		return err
+	}
+	if latest := latestVersion(); version > latest {
+		// Never touch a database created by a newer build: it may already use
+		// columns and tables this binary does not know about.
+		return fmt.Errorf("database schema version %d is newer than %d supported by this build", version, latest)
+	}
+	for _, stmt := range strings.Split(schema, ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("create schema: %w", err)
+		}
+	}
+	if version < baselineVersion {
+		if err := writeSchemaVersion(db, baselineVersion); err != nil {
+			return err
+		}
+		version = baselineVersion
+	}
+	return applyPendingMigrations(db, version, migrations)
+}
+
+// applyPendingMigrations runs every step newer than version in order.
+func applyPendingMigrations(db *sql.DB, version int, steps []migration) error {
+	for _, m := range steps {
+		if m.version <= version {
+			continue
+		}
+		if m.version != version+1 {
+			return fmt.Errorf("schema migration %q expects version %d, found %d", m.name, version+1, m.version)
+		}
+		if err := applyMigration(db, m); err != nil {
+			return err
+		}
+		version = m.version
+	}
+	return nil
+}
+
+// applyMigration runs one step atomically. The version is re-read inside the
+// transaction so a step another process already applied is skipped instead of
+// failing on duplicate DDL.
+func applyMigration(db *sql.DB, m migration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("start migration %q: %w", m.name, err)
+	}
+	current, err := readSchemaVersion(tx)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("migration %q: %w", m.name, err)
+	}
+	if current >= m.version {
+		tx.Rollback()
+		return nil
+	}
+	for _, stmt := range m.stmts {
+		if strings.TrimSpace(stmt) == "" {
+			continue
+		}
+		if _, err := tx.Exec(stmt); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("migration %q: %w", m.name, err)
+		}
+	}
+	if err := writeSchemaVersion(tx, m.version); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("migration %q: %w", m.name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %q: %w", m.name, err)
+	}
+	return nil
+}
+
 // Open opens (or creates) nuvio.db below dir.
 func Open(dir, defaultServerName string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -157,15 +300,9 @@ func Open(dir, defaultServerName string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
-	for _, stmt := range strings.Split(schema, ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
-		}
-		if _, err := db.Exec(stmt); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("create schema: %w", err)
-		}
+	if err := setupSchema(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 	s := &Store{db: db, path: dbPath}
 	s.serverID, _ = s.metaGet("server_id")
