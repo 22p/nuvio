@@ -24,6 +24,7 @@ import type { AdminOverview, DeviceSession } from '../lib/types'
 import type { MetadataCandidate, UnmatchedItem } from '../lib/api'
 import { Spinner } from '../components/Media'
 import { Switch } from '../components/Controls'
+import { TmdbAttribution } from '../components/TmdbAttribution'
 import { languages, t, useI18n, type Lang } from '../lib/i18n'
 import { initials, relativeTime } from '../lib/format'
 import {
@@ -293,9 +294,7 @@ export function SettingsPage() {
                 <strong>{config?.ffmpeg ? t("ffmpeg ready") : t("ffmpeg not installed")}</strong>
               </div>
             </div>
-            <p className="about-note">
-              This product uses the TMDB API but is not endorsed or certified by TMDB.
-              <br />{t("This product uses the TMDb API but is not endorsed or certified by TMDb.")}</p>
+            <TmdbAttribution />
           </section>
         </div>
       </div>
@@ -1040,13 +1039,13 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
           <div className="admin-block-head">
             <h3>{t("Metadata")}</h3>
             <span className={`status-dot ${overview.tmdb ? 'ok' : 'warn'}`}>
-              {overview.tmdb ? t("TMDb configured") : t("TMDb not configured")}
+              {overview.tmdb ? t("TMDB configured") : t("TMDB not configured")}
             </span>
           </div>
-          <p className="setting-hint" style={{ marginBottom: 14 }}>{t("With a TMDb API key, rescanning fills in posters, overviews, ratings and genres. Local artwork takes priority.")}</p>
+          <p className="setting-hint" style={{ marginBottom: 14 }}>{t("With a TMDB API key, rescanning fills in posters, overviews, ratings and genres. Local artwork takes priority.")}</p>
           <div className="form-grid-3">
             <label className="field">
-              <span>TMDb API Key</span>
+              <span>TMDB API Key</span>
               <input
                 type="password"
                 value={tmdbApiKey}
@@ -1276,7 +1275,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
             </div>
           </div>
           <p className="setting-hint" style={{ marginBottom: 12 }}>
-            {t("Items TMDb could not identify. Search for the right entry and pick it; the choice is kept across rescans.")}
+            {t("Items TMDB could not identify. Search for the right entry and pick it; the choice is kept across rescans.")}
           </p>
           {matchNotice && (
             <div className={matchFailed ? 'inline-error' : 'inline-ok'}>{matchNotice}</div>
@@ -1317,7 +1316,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
               </div>
               <div className="form-grid-3">
                 <label className="field">
-                  <span>{t("Search TMDb")}</span>
+                  <span>{t("Search TMDB")}</span>
                   <input
                     value={matchQuery}
                     onChange={(e) => setMatchQuery(e.target.value)}

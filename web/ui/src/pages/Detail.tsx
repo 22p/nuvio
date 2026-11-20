@@ -430,7 +430,7 @@ export function DetailPage() {
                 <Fact label={t("Type")} value={t("Series")} />
                 {item.OfficialRating ? <Fact label={t("Rating")} value={item.OfficialRating} /> : null}
                 {tmdbId ? (
-                  <Fact label="TMDb" value={tmdbId} href={`https://www.themoviedb.org/tv/${tmdbId}`} />
+                  <Fact label="TMDB" value={tmdbId} href={`https://www.themoviedb.org/tv/${tmdbId}`} />
                 ) : null}
                 {imdbId ? (
                   <Fact label="IMDb" value={imdbId} href={`https://www.imdb.com/title/${imdbId}/`} />
@@ -467,7 +467,7 @@ export function DetailPage() {
                 {item.Size ? <Fact label={t("File size")} value={formatSize(item.Size)} /> : null}
                 {item.OfficialRating ? <Fact label={t("Rating")} value={item.OfficialRating} /> : null}
                 {tmdbId ? (
-                  <Fact label="TMDb" value={tmdbId} href={`https://www.themoviedb.org/movie/${tmdbId}`} />
+                  <Fact label="TMDB" value={tmdbId} href={`https://www.themoviedb.org/movie/${tmdbId}`} />
                 ) : null}
                 {imdbId ? (
                   <Fact label="IMDb" value={imdbId} href={`https://www.imdb.com/title/${imdbId}/`} />

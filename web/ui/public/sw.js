@@ -12,6 +12,7 @@ const STATIC = [
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
   '/apple-touch-icon.png',
+  '/tmdb-logo.svg',
 ]
 const STATIC_PATHS = new Set(STATIC)
 

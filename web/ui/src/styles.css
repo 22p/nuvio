@@ -2653,13 +2653,36 @@ select option:disabled {
   font-size: 13.5px;
   font-weight: 550;
 }
-.about-note {
-  margin: 22px 0 0;
+.tmdb-attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 22px;
   padding-top: 18px;
   border-top: 1px solid var(--line);
-  color: var(--dim);
+}
+.tmdb-attribution-logo {
+  flex: none;
+  display: block;
+  line-height: 0;
+}
+.tmdb-attribution-logo img {
+  display: block;
+  width: 184px;
+  height: auto;
+}
+.tmdb-attribution-copy p {
+  margin: 0;
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.65;
+}
+.tmdb-attribution-notice {
+  color: var(--muted);
+}
+.tmdb-attribution-copy .tmdb-attribution-translation {
+  margin-top: 3px;
+  color: var(--dim);
 }
 
 /* -------------------------------------------------------------------- auth */
