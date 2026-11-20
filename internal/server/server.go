@@ -165,7 +165,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/ai/models", s.handleAIModels)
 	mux.HandleFunc("POST /api/admin/ai/search/reindex", s.handleReindexEmbeddings)
 	mux.HandleFunc("POST /api/admin/ai/lists", s.handleAIGenerateLists)
-	mux.HandleFunc("POST /api/admin/metadata/ai", s.handleMetadataAI)
 	mux.HandleFunc("GET /api/admin/metadata/unmatched", s.handleMetadataUnmatched)
 	mux.HandleFunc("GET /api/admin/metadata/search", s.handleMetadataSearch)
 	mux.HandleFunc("POST /api/admin/metadata/match", s.handleMetadataMatch)
@@ -715,163 +714,6 @@ func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"models": models})
 }
 
-// handleMetadataAI asks the assistant to read the messy file names of
-// unmatched items and then resolves the suggested title against TMDb.
-func (s *Server) handleMetadataAI(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
-		return
-	}
-	var body struct {
-		ItemIDs []string `json:"itemIds"`
-		Limit   int      `json:"limit"`
-	}
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
-	if body.Limit <= 0 || body.Limit > 25 {
-		body.Limit = 10
-	}
-	enricher := s.metadataEnricher()
-	if enricher == nil {
-		writeJSON(w, 400, map[string]any{"error": "TMDb API key is not configured"})
-		return
-	}
-	client := s.aiClient()
-	if client == nil {
-		writeJSON(w, 400, map[string]any{"error": "AI is not configured"})
-		return
-	}
-
-	picked := []*model.Item{}
-	if len(body.ItemIDs) > 0 {
-		for _, id := range body.ItemIDs {
-			if it, ok := s.Catalog.Get(normalizeCatalogID(id)); ok && it.TMDBID == 0 {
-				picked = append(picked, it)
-			}
-		}
-	} else {
-		for _, it := range s.Catalog.All() {
-			if it.Demo || it.TMDBID > 0 {
-				continue
-			}
-			if it.Type != model.TypeMovie && it.Type != model.TypeSeries {
-				continue
-			}
-			picked = append(picked, it)
-			if len(picked) >= body.Limit {
-				break
-			}
-		}
-	}
-
-	type result struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		TmdbID int    `json:"tmdbId"`
-	}
-	matched := []result{}
-	failures := []string{}
-	for _, it := range picked {
-		title, year, err := s.suggestTitle(r.Context(), client, it)
-		if err != nil {
-			failures = append(failures, it.Name+": "+err.Error())
-			continue
-		}
-		candidates, err := enricher.Search(r.Context(), title)
-		if err != nil {
-			failures = append(failures, it.Name+": "+err.Error())
-			continue
-		}
-		cand := pickCandidate(candidates, title, year, it.Type)
-		if cand == nil {
-			continue
-		}
-		it.TMDBID = cand.ID
-		it.TMDBVersion = 0
-		it.MetadataLanguage = ""
-		if err := enricher.EnrichOne(r.Context(), it); err != nil {
-			failures = append(failures, it.Name+": "+err.Error())
-			continue
-		}
-		matched = append(matched, result{ID: it.ID, Name: it.Name, TmdbID: it.TMDBID})
-	}
-	if len(matched) > 0 {
-		_ = s.Store.ReplaceItems(s.Catalog.All())
-	}
-	writeJSON(w, 200, map[string]any{"matched": matched, "failed": failures})
-}
-
-func (s *Server) suggestTitle(ctx context.Context, client *ai.Client, it *model.Item) (string, int, error) {
-	kind := "movie"
-	if it.Type == model.TypeSeries {
-		kind = "tv"
-	}
-	user := ""
-	if it.Type == model.TypeSeries {
-		user = "Folder: " + it.Name + "\n"
-	} else if it.Path != "" {
-		user = "File name: " + filepath.Base(it.Path) + "\n"
-		if folder := filepath.Base(filepath.Dir(it.Path)); folder != "" && folder != "." {
-			user += "Folder: " + folder + "\n"
-		}
-	}
-	user += "Library title: " + it.Name + "\nKind: " + kind + "\n"
-	reply, err := client.Chat(ctx,
-		`You identify movies and TV series from file names. Reply with JSON only, shaped as {"title":"English or original title","year":1999}. Use 0 for an unknown year.`,
-		user, true)
-	if err != nil {
-		return "", 0, err
-	}
-	var out struct {
-		Title string `json:"title"`
-		Year  int    `json:"year"`
-	}
-	if err := json.Unmarshal([]byte(stripJSONFence(reply)), &out); err != nil {
-		return "", 0, fmt.Errorf("could not read the suggestion")
-	}
-	if strings.TrimSpace(out.Title) == "" {
-		return "", 0, fmt.Errorf("empty suggestion")
-	}
-	return strings.TrimSpace(out.Title), out.Year, nil
-}
-
-func pickCandidate(candidates []metadata.Candidate, title string, year int, itemType string) *metadata.Candidate {
-	want := strings.ToLower(strings.TrimSpace(title))
-	kind := "movie"
-	if itemType == model.TypeSeries {
-		kind = "tv"
-	}
-	var best *metadata.Candidate
-	bestScore := 0
-	for i := range candidates {
-		c := &candidates[i]
-		if c.Type != kind {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(c.Title))
-		score := 0
-		switch {
-		case name == want:
-			score = 3
-		case strings.Contains(name, want) || strings.Contains(want, name):
-			score = 2
-		}
-		if year > 0 && c.Year > 0 && year == c.Year {
-			score += 2
-		}
-		if score > bestScore {
-			best, bestScore = c, score
-		}
-	}
-	if best == nil && len(candidates) > 0 {
-		for i := range candidates {
-			if candidates[i].Type == kind {
-				best = &candidates[i]
-				break
-			}
-		}
-	}
-	return best
-}
-
 func stripJSONFence(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "```json")
@@ -880,45 +722,28 @@ func stripJSONFence(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func normalizeCatalogID(id string) string {
-	id = strings.TrimSpace(id)
-	return strings.ToLower(strings.ReplaceAll(id, "-", ""))
-}
-
 // aiListPrompt builds the request for themed lists from a sample of the
 // catalog, and returns the prompt plus the ids that may be used.
 func (s *Server) aiListPrompt() (string, []string) {
-	type entry struct {
-		ID      string   `json:"id"`
-		Name    string   `json:"name"`
-		Year    int      `json:"year,omitempty"`
-		Type    string   `json:"type"`
-		Genres  []string `json:"genres,omitempty"`
-		Summary string   `json:"summary,omitempty"`
-	}
-	entries := []entry{}
+	// Compact tuples keep the prompt small: [id, name, year, type, genres].
+	entries := make([][]any, 0, 300)
+	ids := make([]string, 0, 300)
 	for _, it := range s.Catalog.All() {
 		if it.Demo || (it.Type != model.TypeMovie && it.Type != model.TypeSeries) {
 			continue
 		}
-		e := entry{ID: it.ID, Name: it.Name, Year: it.Year, Type: it.Type, Genres: it.Genres}
-		if overview := strings.TrimSpace(it.Overview); overview != "" {
-			if len([]rune(overview)) > 120 {
-				overview = string([]rune(overview)[:120])
-			}
-			e.Summary = overview
+		genres := it.Genres
+		if genres == nil {
+			genres = []string{}
 		}
-		entries = append(entries, e)
-		if len(entries) >= 80 {
+		entries = append(entries, []any{it.ID, it.Name, it.Year, it.Type, genres})
+		ids = append(ids, it.ID)
+		if len(entries) >= 300 {
 			break
 		}
 	}
 	payload, _ := json.Marshal(entries)
-	ids := make([]string, 0, len(entries))
-	for _, e := range entries {
-		ids = append(ids, e.ID)
-	}
-	prompt := "Here is the library as JSON:\n" + string(payload) +
+	prompt := "Here is the library as JSON. Each entry is a compact array in the form [id, name, year, type, genres]:\n" + string(payload) +
 		"\nGroup it into 4 themed lists of 6 to 8 items. Every id must come from the input. " +
 		"Reply with JSON only: {\"lists\":[{\"title\":\"short themed name\",\"ids\":[\"...\"]}]}"
 	return prompt, ids

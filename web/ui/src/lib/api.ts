@@ -389,12 +389,6 @@ export const generateAILists = () =>
     method: 'POST',
   })
 
-export const aiMatchMetadata = (limit = 10) =>
-  api<{ matched: Array<{ id: string; name: string; tmdbId: number }>; failed: string[] }>(
-    '/api/admin/metadata/ai',
-    { method: 'POST', body: JSON.stringify({ limit }) },
-  )
-
 export const getAILists = (userId: string) =>
   api<Array<{ title: string; items: JFItem[] }>>(`/Items/AI/Lists?userId=${userId}`)
 

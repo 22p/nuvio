@@ -6,7 +6,6 @@ import {
   getAdminOverview,
   getScanStatus,
   getSessions,
-  aiMatchMetadata,
   generateAILists,
   getAIModels,
   getUnmatchedMetadata,
@@ -719,27 +718,6 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
     }
   }
 
-  const runAIMatch = async () => {
-    setAIBusy(true)
-    setMatchNotice('')
-    setMatchFailed(false)
-    try {
-      const res = await aiMatchMetadata(10)
-      setMatchNotice(
-        t("Matched {0} items", { 0: res.matched.length }) +
-          (res.failed?.length ? " · " + res.failed.length + " " + t("failed") : ''),
-      )
-      const list = await getUnmatchedMetadata()
-      setUnmatched(list.items)
-      onConfigChange()
-    } catch (err) {
-      setMatchFailed(true)
-      setMatchNotice(err instanceof Error ? err.message : t("AI matching failed"))
-    } finally {
-      setAIBusy(false)
-    }
-  }
-
   const buildLists = async () => {
     setAIBusy(true)
     setAINotice('')
@@ -1082,7 +1060,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
             </span>
           </div>
           <p className="setting-hint" style={{ marginBottom: 12 }}>
-            {t("Used for metadata guesses, subtitle translation and themed lists. Only text is sent to the endpoint you configure; an OpenAI-compatible local server works too.")}
+            {t("Used for subtitle translation and themed lists. Only text is sent to the endpoint you configure; an OpenAI-compatible local server works too.")}
           </p>
           <div className="setting-row">
             <div>
@@ -1267,12 +1245,7 @@ function AdminSection({ onConfigChange }: { onConfigChange: () => Promise<unknow
         <div className="admin-block">
           <div className="admin-block-head">
             <h3>{t("Metadata matches")}</h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="hint-box" style={{ padding: '2px 8px' }}>{unmatched.length}</span>
-              <button className="btn btn-ghost btn-sm" onClick={runAIMatch} disabled={aiBusy}>
-                {t("Identify with AI")}
-              </button>
-            </div>
+            <span className="hint-box" style={{ padding: '2px 8px' }}>{unmatched.length}</span>
           </div>
           <p className="setting-hint" style={{ marginBottom: 12 }}>
             {t("Items TMDB could not identify. Search for the right entry and pick it; the choice is kept across rescans.")}

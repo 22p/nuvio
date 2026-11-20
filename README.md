@@ -12,14 +12,14 @@
 - **播放**：直连优先，其次转封装（`-c copy`），最后 HLS 转码；可选 VAAPI / QSV / Vulkan 硬件加速，失败自动回退软件。
 - **字幕**：自动发现 `.srt` / `.vtt` / `.ass` / `.ssa`，可提取内嵌字幕；网页统一按 WebVTT 渲染，支持样式偏好与 0.1 秒时间轴微调。
 - **账户与存储**：管理员/普通用户、可见媒体库与转码权限、登录设备管理；SQLite（WAL、纯 Go、无 CGO）。
-- **AI（可选）**：兼容 OpenAI 的接口，用于元数据识别、字幕翻译和首页主题片单；默认关闭，只发送文本。
+- **AI（可选）**：兼容 OpenAI 的接口，用于字幕翻译和首页主题片单；默认关闭，只发送文本。
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
 | [媒体目录与显示规则](docs/media-layout.md) | 库类型、目录结构、季集编号、花絮、图片、NFO、网页显示顺序 |
-| [元数据](docs/metadata.md) | 本地 NFO、TMDb 匹配、Provider ID、手动匹配、AI 识别 |
+| [元数据](docs/metadata.md) | 本地 NFO、TMDb 匹配、Provider ID、手动匹配 |
 | [字幕](docs/subtitles.md) | 外挂与内嵌字幕、语言识别、ASS 过滤、AI 翻译 |
 | [播放与转码](docs/playback.md) | 直连 / 转封装 / 转码、硬件加速、缓存 |
 | [AI](docs/ai.md) | 兼容 OpenAI 的接口与三项 AI 功能 |
