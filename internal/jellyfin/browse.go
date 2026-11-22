@@ -1,8 +1,6 @@
 package jellyfin
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -16,8 +14,7 @@ import (
 // Catalog derived endpoints ------------------------------------------------
 
 func genreID(name string) string {
-	sum := md5.Sum([]byte("genre:" + strings.ToLower(strings.TrimSpace(name))))
-	return hex.EncodeToString(sum[:])
+	return catalog.GenreKey(name)
 }
 
 func genreItem(name string) *model.Item {
@@ -51,12 +48,8 @@ func (a *API) virtualItem(id string) (*model.Item, bool) {
 	if p, ok := a.Catalog.Person(id); ok {
 		return personItem(p.Name, p.ImageURL), true
 	}
-	for _, it := range a.Catalog.All() {
-		for _, g := range it.Genres {
-			if genreID(g) == id {
-				return genreItem(g), true
-			}
-		}
+	if name, ok := a.Catalog.Genre(id); ok {
+		return genreItem(name), true
 	}
 	return nil, false
 }

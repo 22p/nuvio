@@ -5,6 +5,7 @@ package art
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/sha256"
 	"encoding/binary"
 	"image"
@@ -12,11 +13,68 @@ import (
 	"image/jpeg"
 	"math"
 	"sync"
-	"sync/atomic"
 )
 
-var cache sync.Map // key -> []byte
-var cacheCount atomic.Int64
+// Rendered placeholders are cached by byte budget instead of a hard entry
+// count: a single 600x900 JPEG is around 100 KB, and flushing the whole cache
+// once a few hundred distinct items existed meant the next page re-rendered
+// everything (one render is ~100 ms).
+const cacheLimit = 64 << 20
+
+var (
+	cacheMu    sync.Mutex
+	cacheLRU   = list.New() // front is most recently used
+	cacheIndex = map[string]*list.Element{}
+	cacheBytes int
+	inFlight   = map[string]*renderJob{}
+)
+
+type cacheEntry struct {
+	key  string
+	data []byte
+}
+
+type renderJob struct {
+	done chan struct{}
+	data []byte
+}
+
+func cacheGet(key string) ([]byte, bool) {
+	cacheMu.Lock()
+	if el, ok := cacheIndex[key]; ok {
+		cacheLRU.MoveToFront(el)
+		data := el.Value.(*cacheEntry).data
+		cacheMu.Unlock()
+		return data, true
+	}
+	cacheMu.Unlock()
+	return nil, false
+}
+
+func cachePut(key string, data []byte) {
+	if len(data) > cacheLimit {
+		return
+	}
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if el, ok := cacheIndex[key]; ok {
+		cacheLRU.MoveToFront(el)
+		return
+	}
+	el := cacheLRU.PushFront(&cacheEntry{key: key, data: data})
+	cacheIndex[key] = el
+	cacheBytes += len(data)
+	for cacheBytes > cacheLimit {
+		back := cacheLRU.Back()
+		if back == nil {
+			break
+		}
+		ent := back.Value.(*cacheEntry)
+		cacheLRU.Remove(back)
+		delete(cacheIndex, ent.key)
+		cacheBytes -= len(ent.data)
+	}
+}
 
 type palette struct {
 	hue    float64
@@ -38,7 +96,8 @@ func paletteFor(h [32]byte) palette {
 	return p
 }
 
-// Render returns a PNG of the requested size. Results are cached in memory.
+// Render returns a JPEG of the requested size. Results are cached in memory
+// and concurrent requests for the same seed share one render.
 func Render(seed string, width, height int) []byte {
 	if width <= 0 {
 		width = 600
@@ -47,16 +106,32 @@ func Render(seed string, width, height int) []byte {
 		height = 900
 	}
 	key := seed + "/" + itoa(width) + "x" + itoa(height)
-	if v, ok := cache.Load(key); ok {
-		return v.([]byte)
+	if data, ok := cacheGet(key); ok {
+		return data
 	}
-	if cacheCount.Load() > 240 {
-		cache.Range(func(k, _ any) bool {
-			cache.Delete(k)
-			return true
-		})
-		cacheCount.Store(0)
+
+	cacheMu.Lock()
+	if job, ok := inFlight[key]; ok {
+		cacheMu.Unlock()
+		<-job.done
+		return job.data
 	}
+	job := &renderJob{done: make(chan struct{})}
+	inFlight[key] = job
+	cacheMu.Unlock()
+
+	data := renderImage(seed, width, height)
+	cachePut(key, data)
+
+	cacheMu.Lock()
+	delete(inFlight, key)
+	job.data = data
+	cacheMu.Unlock()
+	close(job.done)
+	return data
+}
+
+func renderImage(seed string, width, height int) []byte {
 	h := sha256.Sum256([]byte(seed))
 	p := paletteFor(h)
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -130,11 +205,7 @@ func Render(seed string, width, height int) []byte {
 
 	var buf bytes.Buffer
 	_ = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 86})
-	out := buf.Bytes()
-	if _, loaded := cache.LoadOrStore(key, out); !loaded {
-		cacheCount.Add(1)
-	}
-	return out
+	return buf.Bytes()
 }
 
 func randSource(h [32]byte) func() uint32 {

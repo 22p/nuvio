@@ -2,8 +2,10 @@
 package catalog
 
 import (
+	"cmp"
 	"crypto/md5"
 	"encoding/hex"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ type Catalog struct {
 	items      map[string]*model.Item
 	children   map[string][]string
 	lowerNames map[string]string
+	genres     map[string]string
 	persons    map[string]model.Person
 	views      []*model.Library
 	scanning   bool
@@ -39,6 +42,7 @@ func New() *Catalog {
 		items:      map[string]*model.Item{},
 		children:   map[string][]string{},
 		lowerNames: map[string]string{},
+		genres:     map[string]string{},
 		persons:    map[string]model.Person{},
 	}
 }
@@ -54,10 +58,18 @@ func (c *Catalog) Replace(views []*model.Library, items []*model.Item) {
 	// Index them here so a detail page with two dozen cast members does not
 	// rescan the whole catalog for every avatar request.
 	persons := make(map[string]model.Person)
+	// Genres are addressed by a hashed id too; index the id back to its name
+	// so genre detail and artwork requests do not scan every item.
+	genres := make(map[string]string)
 	for _, it := range items {
 		byID[it.ID] = it
 		children[it.ParentID] = append(children[it.ParentID], it.ID)
 		lowerNames[it.ID] = strings.ToLower(it.SortName)
+		for _, g := range it.Genres {
+			if name := strings.TrimSpace(g); name != "" {
+				genres[GenreKey(name)] = name
+			}
+		}
 		for _, p := range it.People {
 			if strings.TrimSpace(p.Name) == "" {
 				continue
@@ -87,6 +99,7 @@ func (c *Catalog) Replace(views []*model.Library, items []*model.Item) {
 	c.items = byID
 	c.children = children
 	c.lowerNames = lowerNames
+	c.genres = genres
 	c.persons = persons
 	c.views = views
 	c.scanned = len(items)
@@ -109,6 +122,20 @@ func (c *Catalog) Person(id string) (model.Person, bool) {
 	p, ok := c.persons[id]
 	c.mu.RUnlock()
 	return p, ok
+}
+
+// GenreKey is the stable id exposed for a genre.
+func GenreKey(name string) string {
+	sum := md5.Sum([]byte("genre:" + strings.ToLower(strings.TrimSpace(name))))
+	return hex.EncodeToString(sum[:])
+}
+
+// Genre returns the display name for a genre id.
+func (c *Catalog) Genre(id string) (string, bool) {
+	c.mu.RLock()
+	name, ok := c.genres[id]
+	c.mu.RUnlock()
+	return name, ok
 }
 
 // SetLastScan restores the persisted scan timestamp after loading the catalog.
@@ -230,13 +257,11 @@ func (c *Catalog) Query(q Query, keep func(*model.Item) bool) ([]*model.Item, in
 	for _, t := range q.ExcludeTypes {
 		excludeSet[t] = true
 	}
-	matched := make([]*model.Item, 0, len(candidates))
-	seen := map[string]bool{}
+	// Reuse the candidate backing array for filtering: at most one write per
+	// read, so no second full-size slice is needed.
+	matched := candidates[:0]
+	term := strings.ToLower(q.Search)
 	for _, it := range candidates {
-		if seen[it.ID] {
-			continue
-		}
-		seen[it.ID] = true
 		if len(typeSet) > 0 && !typeSet[it.Type] {
 			continue
 		}
@@ -249,7 +274,7 @@ func (c *Catalog) Query(q Query, keep func(*model.Item) bool) ([]*model.Item, in
 				continue
 			}
 		}
-		if q.Search != "" && !matchSearch(it, q.Search) {
+		if term != "" && !matchSearch(it, term) {
 			continue
 		}
 		if len(q.Genres) > 0 {
@@ -286,10 +311,123 @@ func (c *Catalog) Query(q Query, keep func(*model.Item) bool) ([]*model.Item, in
 		}
 		matched = append(matched, it)
 	}
-	sortItems(matched, q.SortBy, q.Desc, c.lowerNames)
 	total := len(matched)
 	start, end := PageBounds(q.Start, q.Limit, total)
-	return matched[start:end], total
+	if start == end {
+		return []*model.Item{}, total
+	}
+	return c.sortedPage(matched, q.SortBy, q.Desc, start, end), total
+}
+
+// topK returns the indices of the k best items under ord, in order. A binary
+// heap over plain ints keeps the worst kept candidate at the root, so each
+// remaining item costs O(log k) comparisons with no interface boxing.
+func topK(n, k int, ord func(i, j int) int) []int {
+	idx := make([]int, 0, k)
+	for i := 0; i < n; i++ {
+		if len(idx) < k {
+			idx = append(idx, i)
+			siftUp(idx, len(idx)-1, ord)
+			continue
+		}
+		if ord(i, idx[0]) < 0 {
+			idx[0] = i
+			siftDown(idx, 0, ord)
+		}
+	}
+	slices.SortFunc(idx, ord)
+	return idx
+}
+
+// siftUp restores the "root is worst" invariant after appending an item.
+func siftUp(idx []int, j int, ord func(i, j int) int) {
+	for j > 0 {
+		p := (j - 1) / 2
+		if ord(idx[p], idx[j]) >= 0 {
+			return
+		}
+		idx[p], idx[j] = idx[j], idx[p]
+		j = p
+	}
+}
+
+// siftDown restores the "root is worst" invariant after replacing the root.
+func siftDown(idx []int, i int, ord func(i, j int) int) {
+	n := len(idx)
+	for {
+		left := 2*i + 1
+		if left >= n {
+			return
+		}
+		worst := left
+		if right := left + 1; right < n && ord(idx[left], idx[right]) < 0 {
+			worst = right
+		}
+		if ord(idx[i], idx[worst]) >= 0 {
+			return
+		}
+		idx[i], idx[worst] = idx[worst], idx[i]
+		i = worst
+	}
+}
+
+// sortedPage returns items[start:end] in the requested order. A bounded page
+// selects only the top `end` items with a heap (O(n log end)); the full sort is
+// reserved for unbounded requests. Either way keys are resolved once and each
+// comparison calls the key comparator once, not twice.
+func (c *Catalog) sortedPage(items []*model.Item, sortBy string, desc bool, start, end int) []*model.Item {
+	var byKey func(i, j int) int
+	switch strings.ToLower(sortBy) {
+	case "datecreated", "datelastcontentadded", "premieredate":
+		byKey = func(i, j int) int { return items[i].AddedAt.Compare(items[j].AddedAt) }
+	case "communityrating":
+		byKey = func(i, j int) int { return cmp.Compare(items[i].Rating, items[j].Rating) }
+	case "productionyear":
+		byKey = func(i, j int) int { return cmp.Compare(items[i].Year, items[j].Year) }
+	case "runtime":
+		byKey = func(i, j int) int { return cmp.Compare(items[i].RuntimeTicks, items[j].RuntimeTicks) }
+	case "random":
+		byKey = func(i, j int) int { return strings.Compare(items[i].ID, items[j].ID) }
+	default:
+		keys := make([]string, len(items))
+		for i, it := range items {
+			if k, ok := c.lowerNames[it.ID]; ok {
+				keys[i] = k
+			} else {
+				keys[i] = strings.ToLower(it.SortName)
+			}
+		}
+		byKey = func(i, j int) int { return strings.Compare(keys[i], keys[j]) }
+	}
+	// Total order: key first, then ID so the heap and full-sort paths agree
+	// even when many items share a sort key (e.g. "Season 1" or identical
+	// episode titles). Without this, paging could skip or repeat tied items.
+	ord := func(i, j int) int {
+		if n := byKey(i, j); n != 0 {
+			return n
+		}
+		return strings.Compare(items[i].ID, items[j].ID)
+	}
+	if desc {
+		asc := ord
+		ord = func(i, j int) int { return asc(j, i) }
+	}
+
+	var order []int
+	if end < len(items) {
+		order = topK(len(items), end, ord)
+	} else {
+		order = make([]int, len(items))
+		for i := range order {
+			order[i] = i
+		}
+		slices.SortFunc(order, ord)
+	}
+	out := make([]*model.Item, end-start)
+	for i, idx := range order[start:end] {
+		out[i] = items[idx]
+	}
+	return out
 }
 
 // PageBounds maps a client supplied start/limit pair onto [0,total]. Negative
@@ -310,8 +448,15 @@ func PageBounds(start, limit, total int) (int, int) {
 
 func (c *Catalog) candidatesLocked(q Query) []*model.Item {
 	if len(q.IDs) > 0 {
+		// Client supplied ids are the only source that can repeat, so dedup
+		// here instead of charging every browse request for a map.
 		out := make([]*model.Item, 0, len(q.IDs))
+		seen := make(map[string]bool, len(q.IDs))
 		for _, id := range q.IDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
 			if it, ok := c.items[id]; ok {
 				out = append(out, it)
 			}
@@ -365,8 +510,9 @@ func mapItems(byID map[string]*model.Item, ids []string) []*model.Item {
 	return out
 }
 
+// matchSearch expects term to be lower cased by the caller so a browse query
+// does not lowercase it once per item.
 func matchSearch(it *model.Item, term string) bool {
-	term = strings.ToLower(term)
 	if strings.Contains(strings.ToLower(it.Name), term) {
 		return true
 	}
@@ -374,42 +520,6 @@ func matchSearch(it *model.Item, term string) bool {
 		return true
 	}
 	return false
-}
-
-func sortItems(items []*model.Item, sortBy string, desc bool, lower map[string]string) {
-	order := func(less func(i, j int) bool) {
-		sort.SliceStable(items, func(i, j int) bool {
-			if desc {
-				return less(j, i)
-			}
-			return less(i, j)
-		})
-	}
-	switch strings.ToLower(sortBy) {
-	case "datecreated", "datelastcontentadded", "premieredate":
-		order(func(i, j int) bool { return items[i].AddedAt.Before(items[j].AddedAt) })
-	case "communityrating":
-		order(func(i, j int) bool { return items[i].Rating < items[j].Rating })
-	case "productionyear":
-		order(func(i, j int) bool { return items[i].Year < items[j].Year })
-	case "runtime":
-		order(func(i, j int) bool { return items[i].RuntimeTicks < items[j].RuntimeTicks })
-	case "random":
-		order(func(i, j int) bool { return items[i].ID < items[j].ID })
-	default:
-		// Resolve each key once into a positionally aligned slice. Both map
-		// lookups inside the comparator and sorting large structs via
-		// reflect's swapper measured several times slower than this.
-		keys := make([]string, len(items))
-		for i, it := range items {
-			k, ok := lower[it.ID]
-			if !ok {
-				k = strings.ToLower(it.SortName)
-			}
-			keys[i] = k
-		}
-		order(func(i, j int) bool { return keys[i] < keys[j] })
-	}
 }
 
 // All returns every item (used by admin statistics).

@@ -885,16 +885,20 @@ func intList(s string) []int {
 	return out
 }
 
-func boolParam(r *http.Request, name string) (bool, bool) {
-	v := queryValues(r).Get(name)
-	if v == "" {
+func boolValue(v queryParams, name string) (bool, bool) {
+	raw := v.Get(name)
+	if raw == "" {
 		return false, false
 	}
-	b, err := strconv.ParseBool(v)
+	b, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, false
 	}
 	return b, true
+}
+
+func boolParam(r *http.Request, name string) (bool, bool) {
+	return boolValue(queryValues(r), name)
 }
 
 type itemQueryOptions struct {
@@ -936,8 +940,8 @@ func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, itemQueryOptions)
 	if len(q.Years) == 0 {
 		q.Years = intList(v.Get("year"))
 	}
-	q.Recursive, _ = boolParam(r, "recursive")
-	if f, ok := boolParam(r, "isFolder"); ok {
+	q.Recursive, _ = boolValue(v, "recursive")
+	if f, ok := boolValue(v, "isFolder"); ok {
 		q.IsFolder = &f
 	}
 	if q.Search != "" {
@@ -956,19 +960,19 @@ func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, itemQueryOptions)
 		images:     true,
 		totalCount: true,
 	}
-	if b, ok := boolParam(r, "isFavorite"); ok {
+	if b, ok := boolValue(v, "isFavorite"); ok {
 		opts.isFavorite = &b
 	}
-	if b, ok := boolParam(r, "isPlayed"); ok {
+	if b, ok := boolValue(v, "isPlayed"); ok {
 		opts.isPlayed = &b
 	}
-	if b, ok := boolParam(r, "enableUserData"); ok {
+	if b, ok := boolValue(v, "enableUserData"); ok {
 		opts.userData = b
 	}
-	if b, ok := boolParam(r, "enableImages"); ok {
+	if b, ok := boolValue(v, "enableImages"); ok {
 		opts.images = b
 	}
-	if b, ok := boolParam(r, "enableTotalRecordCount"); ok {
+	if b, ok := boolValue(v, "enableTotalRecordCount"); ok {
 		opts.totalCount = b
 	}
 	if ids := normalizeIDs(splitList(v.Get("excludeItemIds"))); len(ids) > 0 {
@@ -980,34 +984,65 @@ func (a *API) parseItemsQuery(r *http.Request) (catalog.Query, itemQueryOptions)
 	return q, opts
 }
 
-func matchesGenreIDs(it *model.Item, ids []string) bool {
-	want := make(map[string]bool, len(ids))
+// genreNamesFor resolves genre ids to display names once per request so the
+// per-item filter does not hash every genre of every candidate.
+func (a *API) genreNamesFor(ids []string) []string {
+	out := make([]string, 0, len(ids))
 	for _, id := range ids {
-		want[strings.ToLower(id)] = true
+		if name, ok := a.Catalog.Genre(strings.ToLower(id)); ok {
+			out = append(out, name)
+		}
 	}
+	return out
+}
+
+// personNamesFor resolves person ids to display names once per request.
+func (a *API) personNamesFor(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if p, ok := a.Catalog.Person(strings.ToLower(id)); ok {
+			out = append(out, p.Name)
+		}
+	}
+	return out
+}
+
+func lowerList(list []string) []string {
+	if len(list) == 0 {
+		return list
+	}
+	out := make([]string, len(list))
+	for i, v := range list {
+		out[i] = strings.ToLower(v)
+	}
+	return out
+}
+
+func matchesGenreNames(it *model.Item, names []string) bool {
 	for _, g := range it.Genres {
-		if want[strings.ToLower(genreID(g))] {
-			return true
+		g = strings.TrimSpace(g)
+		for _, want := range names {
+			if strings.EqualFold(g, want) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func matchesPersonIDs(it *model.Item, ids []string) bool {
-	want := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		want[strings.ToLower(id)] = true
-	}
+func matchesPersonNames(it *model.Item, names []string) bool {
 	for _, p := range it.People {
-		if want[strings.ToLower(personID(p.Name))] {
-			return true
+		name := strings.TrimSpace(p.Name)
+		for _, want := range names {
+			if strings.EqualFold(name, want) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
 func matchesPersonName(it *model.Item, name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
 	for _, p := range it.People {
 		if strings.Contains(strings.ToLower(p.Name), name) {
 			return true
@@ -1016,9 +1051,10 @@ func matchesPersonName(it *model.Item, name string) bool {
 	return false
 }
 
+// mediaTypeMatches expects lowered media types.
 func mediaTypeMatches(it *model.Item, mediaTypes []string) bool {
 	for _, mt := range mediaTypes {
-		switch strings.ToLower(mt) {
+		switch mt {
 		case "video":
 			if it.Type == model.TypeMovie || it.Type == model.TypeEpisode {
 				return true
@@ -1063,6 +1099,12 @@ func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
 			favIDs[id] = true
 		}
 	}
+	// Resolve the filters once: keep runs for every candidate, so building
+	// maps or hashing ids inside it would allocate per item.
+	mediaTypes := lowerList(opts.mediaTypes)
+	genreNames := a.genreNamesFor(opts.genreIDs)
+	personNames := a.personNamesFor(opts.personIDs)
+	personNeedle := strings.ToLower(strings.TrimSpace(opts.person))
 	keep := func(it *model.Item) bool {
 		if !canSeeItem(u, it) {
 			return false
@@ -1076,16 +1118,16 @@ func (a *API) handleItems(w http.ResponseWriter, r *http.Request) {
 		if opts.isPlayed != nil && playedIDs[it.ID] != *opts.isPlayed {
 			return false
 		}
-		if len(opts.mediaTypes) > 0 && !mediaTypeMatches(it, opts.mediaTypes) {
+		if len(mediaTypes) > 0 && !mediaTypeMatches(it, mediaTypes) {
 			return false
 		}
-		if len(opts.genreIDs) > 0 && !matchesGenreIDs(it, opts.genreIDs) {
+		if len(opts.genreIDs) > 0 && !matchesGenreNames(it, genreNames) {
 			return false
 		}
-		if len(opts.personIDs) > 0 && !matchesPersonIDs(it, opts.personIDs) {
+		if len(opts.personIDs) > 0 && !matchesPersonNames(it, personNames) {
 			return false
 		}
-		if opts.person != "" && !matchesPersonName(it, opts.person) {
+		if personNeedle != "" && !matchesPersonName(it, personNeedle) {
 			return false
 		}
 		for _, f := range opts.filters {
@@ -1194,7 +1236,7 @@ func (a *API) handleResume(w http.ResponseWriter, r *http.Request) {
 	parent := normalizeID(v.Get("parentId"))
 	types := splitList(v.Get("includeItemTypes"))
 	excludeTypes := splitList(v.Get("excludeItemTypes"))
-	mediaTypes := splitList(v.Get("mediaTypes"))
+	mediaTypes := lowerList(splitList(v.Get("mediaTypes")))
 	search := strings.ToLower(v.Get("searchTerm"))
 	resume := a.Store.Resumable(u.ID)
 	list := make([]*model.Item, 0, len(resume))
@@ -1520,6 +1562,26 @@ func (a *API) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, queryResult{Items: filtered[start:end], TotalRecordCount: total, StartIndex: start})
 }
 
+// seriesEpisodes resolves a series' episodes through the child index. The
+// recursive catalog query does the same thing but scans every item for each
+// series, which is the difference between O(episodes) and O(catalog) per show.
+func (a *API) seriesEpisodes(seriesID string) []*model.Item {
+	var eps []*model.Item
+	for _, child := range a.Catalog.Children(seriesID) {
+		switch child.Type {
+		case model.TypeSeason:
+			for _, ep := range a.Catalog.Children(child.ID) {
+				if ep.Type == model.TypeEpisode {
+					eps = append(eps, ep)
+				}
+			}
+		case model.TypeEpisode:
+			eps = append(eps, child)
+		}
+	}
+	return eps
+}
+
 func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 	u, ok := a.resolveUser(w, r, requestUserID(r, r.PathValue("userId")))
 	if !ok {
@@ -1546,9 +1608,12 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// One user-data query covers every episode; checking it per episode used
+	// to cost thousands of serialized lookups on the single SQLite connection.
+	uv := a.userState(u, true)
 	var out []*model.Item
 	for _, series := range seriesList {
-		eps, _ := a.Catalog.Query(catalog.Query{ParentID: series.ID, Recursive: true, Types: []string{model.TypeEpisode}}, nil)
+		eps := a.seriesEpisodes(series.ID)
 		sort.SliceStable(eps, func(i, j int) bool {
 			if eps[i].SeasonNumber != eps[j].SeasonNumber {
 				return eps[i].SeasonNumber < eps[j].SeasonNumber
@@ -1557,7 +1622,7 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 		})
 		last := -1
 		for i, ep := range eps {
-			ud := a.Store.GetUserData(u.ID, ep.ID)
+			ud := uv.get(ep.ID)
 			if ud.Played {
 				last = i
 			}
@@ -1577,7 +1642,6 @@ func (a *API) handleNextUp(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(out, func(i, j int) bool { return out[i].AddedAt.After(out[j].AddedAt) })
 	total := len(out)
 	start, end := catalog.PageBounds(start, limit, total)
-	uv := a.userState(u, true)
 	items := make([]itemDTO, 0, end-start)
 	for _, it := range out[start:end] {
 		items = append(items, a.buildItem(it, uv, false, ""))

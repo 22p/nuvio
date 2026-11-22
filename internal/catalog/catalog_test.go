@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -94,5 +95,70 @@ func TestPersonIndexPrefersPortraitAndDropsRemovedPeople(t *testing.T) {
 	}
 	if _, ok := c.Person(PersonKey("Grace")); !ok {
 		t.Fatal("person from the new scan is missing")
+	}
+}
+
+// TestQueryTopNMatchesFullSort checks the heap-based page selection against
+// the unbounded full-sort path across every sort key, direction and offset.
+func TestQueryTopNMatchesFullSort(t *testing.T) {
+	c := New()
+	lib := &model.Library{ID: "lib1", Name: "Movies", Type: model.LibraryMovies}
+	now := time.Now()
+	items := make([]*model.Item, 0, 24)
+	for i := 0; i < 24; i++ {
+		items = append(items, &model.Item{
+			ID:           string(rune('a' + i)),
+			Name:         fmt.Sprintf("Title %02d", i%7),
+			SortName:     fmt.Sprintf("Title %02d", i%7), // ties are intentional
+			Type:         model.TypeMovie,
+			LibraryID:    lib.ID,
+			ParentID:     lib.ID,
+			Year:         1990 + i%9,
+			Rating:       float64(i % 6),
+			RuntimeTicks: int64(i%5) * 60 * 10_000_000,
+			AddedAt:      now.Add(-time.Duration(i) * time.Hour),
+		})
+	}
+	c.Replace([]*model.Library{lib}, items)
+
+	for _, sortBy := range []string{"", "SortName", "datecreated", "communityrating", "productionyear", "runtime", "random"} {
+		for _, desc := range []bool{false, true} {
+			full, total := c.Query(Query{SortBy: sortBy, Desc: desc}, nil)
+			if total != len(items) || len(full) != len(items) {
+				t.Fatalf("full sort %s desc=%v: %d/%d", sortBy, desc, len(full), total)
+			}
+			for _, start := range []int{0, 1, 3, 20} {
+				for _, limit := range []int{1, 2, 5} {
+					page, n := c.Query(Query{SortBy: sortBy, Desc: desc, Start: start, Limit: limit}, nil)
+					if n != total {
+						t.Fatalf("sort=%s desc=%v start=%d: total=%d want %d", sortBy, desc, start, n, total)
+					}
+					lo, hi := PageBounds(start, limit, total)
+					want := full[lo:hi]
+					if len(page) != len(want) {
+						t.Fatalf("sort=%s desc=%v start=%d limit=%d: got %d items", sortBy, desc, start, limit, len(page))
+					}
+					for i := range page {
+						if page[i].ID != want[i].ID {
+							t.Fatalf("sort=%s desc=%v start=%d limit=%d item %d: got %s want %s", sortBy, desc, start, limit, i, page[i].ID, want[i].ID)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Client supplied ids are the only source of duplicates and used to be
+// deduplicated for every query; keep that dedup confined to this path.
+func TestQueryDeduplicatesIDs(t *testing.T) {
+	c := New()
+	c.Replace(nil, testItems())
+	page, total := c.Query(Query{IDs: []string{"m1", "m1", "m2"}}, nil)
+	if total != 2 || len(page) != 2 {
+		t.Fatalf("got %d/%d, want 2/2", len(page), total)
+	}
+	if page[0].ID != "m1" || page[1].ID != "m2" {
+		t.Fatalf("unexpected order: %s, %s", page[0].ID, page[1].ID)
 	}
 }

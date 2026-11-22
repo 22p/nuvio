@@ -403,7 +403,6 @@ func personID(name string) string {
 }
 
 func (a *API) buildItem(it *model.Item, us *userState, includeMedia bool, token string) itemDTO {
-	childIDs := a.Catalog.Children(it.ID)
 	isFolder := it.Type == model.TypeSeries || it.Type == model.TypeSeason
 	dto := itemDTO{
 		Name:                    it.Name,
@@ -514,8 +513,11 @@ func (a *API) buildItem(it *model.Item, us *userState, includeMedia bool, token 
 		}
 	}
 	if it.Type == model.TypeSeries || it.Type == model.TypeSeason {
-		dto.ChildCount = len(childIDs)
-		dto.RecursiveItemCount = len(childIDs)
+		// Only folders need the child index; asking for it on every movie
+		// costs a catalog lock and an allocation per DTO.
+		count := len(a.Catalog.Children(it.ID))
+		dto.ChildCount = count
+		dto.RecursiveItemCount = count
 	}
 	if it.SeasonNumber > 0 || it.Type == model.TypeSeason {
 		v := it.SeasonNumber
