@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useEffect, useRef, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { createContext, useContext } from 'react'
 import { getScanStatus, getViews } from '../lib/api'
 import { initials } from '../lib/format'

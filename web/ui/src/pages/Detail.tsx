@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import {
   getEpisodes,
   getItem,

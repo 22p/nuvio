@@ -1,5 +1,5 @@
 import { t } from '../lib/i18n'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { useViews, useViewsLoading } from '../components/Layout'
 import { EmptyState } from '../components/Media'
 import { IconChevronRight, IconGrid, IconLayers, IconPlus } from '../components/Icons'

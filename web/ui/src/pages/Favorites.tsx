@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { getItems } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import type { JFItem } from '../lib/types'

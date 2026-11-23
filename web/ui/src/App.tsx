@@ -1,6 +1,6 @@
 import { t, useI18n } from './lib/i18n'
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router'
 import { useAuth } from './lib/auth'
 import { AppShell, Logo } from './components/Layout'
 import { HomePage } from './pages/Home'

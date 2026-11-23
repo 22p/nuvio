@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router'
 import { imageUrl } from '../lib/api'
 import {
   episodeCode,

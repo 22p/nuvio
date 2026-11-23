@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useState, type FormEvent } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router'
 import { useAuth } from '../lib/auth'
 import { AuthLayout } from './Setup'
 import { IconCheck, IconLayers } from '../components/Icons'

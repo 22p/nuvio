@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router'
 import { useAuth } from '../lib/auth'
 import { Logo } from '../components/Layout'
 import { LangSwitch } from '../components/LangSwitch'

@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n'
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router'
 import { createUser, deleteUser, getAdminOverview, updateUser } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import type { AdminOverview, AdminUser, LibraryInfo } from '../lib/types'
