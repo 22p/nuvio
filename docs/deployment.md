@@ -189,11 +189,30 @@ server {
 
 证书可以用 certbot 申请，或换成自己的证书路径。`Range` 和 `If-Range` 由 Nginx 默认转发，不要给 `/Videos/` 配置 `proxy_cache`。
 
+### 日志脱敏
+
+HLS 分片和字幕会在 query 里带 `ApiKey`，和 Jellyfin 一样，这是 query-string token 的固有限制。直连 `/Videos/{id}/stream` 不需要 token；反向代理如果记录完整 URL，HLS 的长期 token 会反复写进 access log。不要记录完整 query，或者按下面的方式脱敏：
+
+```nginx
+# 以下两段放在 http 块，不要放进 server 块
+map $request $secretfilter {
+    ~*^(?<p>.*[\?&]ApiKey=)([^&]*)(?<s>.*)$  "${p}***$s";
+    ~*^(?<p>.*[\?&]api_key=)([^&]*)(?<s>.*)$ "${p}***$s";
+    default                                   $request;
+}
+
+log_format stripsecrets '$remote_addr [$time_local] "$secretfilter" $status';
+access_log /var/log/nginx/access.log stripsecrets;
+```
+
+Caddy 的 access log 默认包含完整 `request.uri`，同样需要在 `log` 的 `format filter` 里去掉 query，或者关闭 access log。日志文件本身也要限制读取权限。
+
 ### 代理要求
 
 - 保留 `Authorization` 头；不要用自己的登录页或 `auth_basic` 替换它，否则第三方客户端无法登录
 - `/Videos/{id}/stream` 支持 Range，代理必须原样转发 `Range` 并返回 `206 Partial Content`
-- 不要剥离 URL 中的 `ApiKey`；直连流现在需要 token
+- 不要剥离 URL 中的 `ApiKey`；HLS 播放列表、分片和字幕依赖它（直连 `/Videos/{id}/stream` 不需要）
+- 直连 `/Videos/{id}/stream` 和 Jellyfin 一样不校验 token，item id 即凭证；公网暴露时请用网络层限制，或接受“知道 item id 就能下载”的风险
 - 关闭响应缓冲；直连播放是长连接，读超时至少按单部影片时长设置
 - 把真实客户端 IP 写入 `X-Forwarded-For` 或 `X-Real-IP`，登录限流才能按客户端区分。Nuvio 只在直连对端是回环或私有地址时信任这两个头；如果反向代理在另一台公网机器上，它们会被忽略。多个代理串联时只信任最外层代理写入的值
 - 不要缓存 `/sw.js` 和 `/manifest.webmanifest`；`/assets/` 是带哈希的静态文件，可以长期缓存

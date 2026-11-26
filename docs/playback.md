@@ -27,7 +27,7 @@
 /Videos/{id}/stream?static=true&mediaSourceId=...
 ```
 
-这个地址支持 HTTP Range，但必须携带有效的 `ApiKey` 查询参数或 `Authorization` 头。Jellyfin 12.4 的 `MediaSourceInfo` 不再返回 `DirectStreamUrl`，客户端需要按上面的格式自行拼接（内置网页会带上 `ApiKey`）。把裸 URL 交给不支持附加请求头的播放器，直连会返回 401。
+这个地址支持 HTTP Range，和 Jellyfin 一样**不校验 token**：`ApiKey` 和 `Authorization` 都可有可无，item id 是唯一凭证。Jellyfin 12.4 的 `MediaSourceInfo` 不返回 `DirectStreamUrl`，客户端按上面的格式自行拼接。任何知道 item id 的人都能直连下载，公网暴露时请评估这个风险；HLS 仍然需要鉴权。
 
 ## 转封装
 
@@ -78,6 +78,12 @@ Hardware acceleration: vulkan (0) encode h264, hevc, av1 / decode h264, hevc, av
 ```
 
 硬件初始化失败、或某个文件无法硬解时，自动回退软件编码。Vulkan 使用物理设备索引（`vk:0`），不是渲染节点路径；编码器支持取决于 FFmpeg 构建和驱动。
+
+## HLS 鉴权
+
+`master.m3u8`、`main.m3u8`、`init.mp4` 和每个分片都需要有效 token（`?ApiKey=` 或 `Authorization: MediaBrowser`）。ffmpeg 生成的分片是相对路径，服务端在返回 `main.m3u8` 时会给 `#EXT-X-MAP` 和每个分片追加 `?ApiKey=`，客户端照常跟随相对地址即可；自己重拼分片地址并丢掉 query 的客户端会收到 `401`。
+
+分片响应使用 `Cache-Control: private`，不会进入共享代理或 CDN 缓存。token 会出现在分片 URL 里，反向代理的日志脱敏见[部署](deployment.md#日志脱敏)。
 
 ## HLS 会话与缓存
 

@@ -75,9 +75,9 @@ Jellyfin 12.4 的 `MediaSourceInfo` 没有 `DirectStreamUrl`；直连地址由�
 
 服务端按客户端提交的 `DeviceProfile` 决定直连、转封装或转码，见 [播放与转码](playback.md)。
 
-`/Videos/{id}/stream` 要求 token：客户端需要在 URL 里带 `ApiKey`，或改用 `Authorization` 头。把裸 URL 交给系统播放器、又不保留 query token 的客户端会收到 401；这是为了提高权限模型而接受的兼容性代价。
+`/Videos/{id}/stream` 和 `stream.{container}` 和 Jellyfin 一样是匿名的：不需要 `ApiKey`，也不校验 `Authorization`，客户端可以把裸 URL 交给系统播放器。item id 是唯一凭证，知道 id 就能下载；HLS（master/main/init/分片）仍然需要 token。
 
-`/Videos/{id}/master.m3u8` 和字幕仍然需要鉴权。
+`/Videos/{id}/master.m3u8`、`main.m3u8`、`init.mp4`、HLS 分片和字幕都需要鉴权。HLS 的分片地址由服务端在播放列表里写入 `ApiKey`，客户端必须保留相对 URL 的 query；自己重拼分片地址并丢掉 query 的客户端会收到 401。
 
 ## 下载与离线
 

@@ -529,12 +529,10 @@ func TestMediaBrowserParamAfterMultibyte(t *testing.T) {
 	}
 }
 
-// Direct streaming now requires a token. Part of the client compatibility
-// cost is that clients which hand the URL to a player without carrying the
-// query token fail instead of streaming anonymously.
-func TestDirectStreamRequiresToken(t *testing.T) {
-	a, h := newTestAPI(t)
-	_, tok := testUser(t, a)
+// Direct play is anonymous, matching Jellyfin's VideosController: the item id
+// is the only capability and the token is not consulted. HLS stays protected.
+func TestDirectStreamIsAnonymous(t *testing.T) {
+	_, h := newTestAPI(t)
 	movie := demo.Items()[0]
 
 	for _, path := range []string{
@@ -543,26 +541,21 @@ func TestDirectStreamRequiresToken(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
-		if rec.Code != 401 {
-			t.Fatalf("anonymous %s = %d, want 401", path, rec.Code)
+		if rec.Code != 200 {
+			t.Fatalf("anonymous %s = %d, want 200", path, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "video/") {
+			t.Fatalf("anonymous %s content type = %q", path, ct)
 		}
 	}
 
+	// An invalid token is ignored on this route, as it is in Jellyfin.
 	req := httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true", nil)
 	setToken(req, "definitely-not-a-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 403 {
-		t.Fatalf("invalid token stream = %d, want 403", rec.Code)
-	}
-
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/Videos/"+movie.ID+"/stream?static=true&ApiKey="+tok, nil))
 	if rec.Code != 200 {
-		t.Fatalf("authorized stream = %d: %s", rec.Code, rec.Body.String())
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "video/") {
-		t.Fatalf("authorized stream content type = %q", ct)
+		t.Fatalf("invalid token stream = %d, want 200", rec.Code)
 	}
 
 	// HLS stays protected, matching the reference server.

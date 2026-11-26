@@ -664,12 +664,11 @@ func (a *API) handleStreamFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.requireUser(w, r)
-	if !ok {
-		return
-	}
+	// Jellyfin's VideosController has no [Authorize]: direct play is anonymous
+	// and the item id is the capability. The HLS routes are authenticated
+	// separately, as in Jellyfin's dynamic HLS controller.
 	it, ok := a.Catalog.Get(normalizeID(r.PathValue("itemId")))
-	if !ok || !canSeeItem(u, it) {
+	if !ok {
 		writeError(w, 404, "Item does not exist")
 		return
 	}
@@ -838,6 +837,9 @@ func (a *API) handleMaster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireUser(w, r); !ok {
+		return
+	}
 	itemID := normalizeID(r.PathValue("itemId"))
 	sid := r.PathValue("sessionId")
 	file := r.PathValue("file")
@@ -880,7 +882,7 @@ func (a *API) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write(data)
+		_, _ = w.Write(addPlaylistToken(data, a.tokenFromRequest(r)))
 		return
 	}
 	if index := hls.SegmentIndex(file); index >= 0 {
@@ -917,8 +919,39 @@ func serveSessionFile(w http.ResponseWriter, r *http.Request, name, path string)
 	defer f.Close()
 	st, _ := f.Stat()
 	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Cache-Control", "public, max-age=600")
+	w.Header().Set("Cache-Control", "private, max-age=600")
 	http.ServeContent(w, r, name, st.ModTime(), f)
+}
+
+// addPlaylistToken appends the access token to every relative media URI. ffmpeg
+// writes bare segment names and a bare init URI, so the token has to be added
+// when the playlist is served; players then request the media playlist, the
+// init file and every segment with the same ApiKey, matching Jellyfin's
+// authenticated HLS routes.
+func addPlaylistToken(data []byte, token string) []byte {
+	if token == "" {
+		return data
+	}
+	query := "?ApiKey=" + url.QueryEscape(token)
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#EXTINF") || strings.HasPrefix(trimmed, "#EXT-X-ENDLIST") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, `#EXT-X-MAP:URI="`) {
+			rest := strings.TrimPrefix(trimmed, `#EXT-X-MAP:URI="`)
+			if end := strings.IndexByte(rest, '"'); end >= 0 {
+				lines[i] = `#EXT-X-MAP:URI="` + rest[:end] + query + rest[end:]
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		lines[i] = line + query
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 func (a *API) handleSubtitle(w http.ResponseWriter, r *http.Request) {
